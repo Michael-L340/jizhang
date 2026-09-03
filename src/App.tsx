@@ -26,8 +26,13 @@ function UpdateBanner() {
   })
   if (!needRefresh[0]) return null
   return (
-    <button type="button" className="w-full bg-brand text-white text-sm py-2 text-center" onClick={() => void updateServiceWorker(true)}>
-      有新版本，点此更新
+    <button
+      type="button"
+      className="w-full bg-brand text-white text-sm py-3 px-4 flex items-center justify-center gap-2 safe-top"
+      onClick={() => void updateServiceWorker(true)}
+    >
+      <span>有新版本</span>
+      <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs">点此更新</span>
     </button>
   )
 }
@@ -54,18 +59,18 @@ function Root() {
     return <div className="app-shell items-center justify-center text-muted text-sm">加载中…</div>
   }
   return (
-    <>
+    <div className="app-shell">
       <UpdateBanner />
       {auth === 'out' ? <Login /> : <Outlet />}
       <Toast />
-    </>
+    </div>
   )
 }
 
 /** 带底部 Tab 的外壳 */
 function Shell() {
   return (
-    <div className="app-shell safe-top">
+    <div className="flex-1 min-h-0 flex flex-col safe-top">
       <main className="app-main pb-2">
         <Outlet />
       </main>

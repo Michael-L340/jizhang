@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { buildCsv, buildJson, parseImport, shareOrDownload } from '../lib/csv'
 import { fmtIsoZh, today } from '../lib/date'
 import { friendlyError } from '../lib/api'
+import { checkForUpdate, hardReload } from '../lib/sw'
 import { useStore } from '../lib/store'
 import type { CatKind, Category } from '../types'
 
@@ -158,6 +159,23 @@ export function Settings() {
       </Section>
 
       <Section title="账号">
+        <Row
+          label="检查更新"
+          action={busy === 'upd' ? '检查中…' : '检查'}
+          onClick={async () => {
+            setBusy('upd')
+            const r = await checkForUpdate()
+            setBusy('')
+            s.showToast(r === 'unsupported' ? '此浏览器不支持自动更新' : '已检查：若有新版本，顶部会出现更新条')
+          }}
+        />
+        <Row
+          label="强制刷新（拿最新版本）"
+          action="刷新"
+          onClick={async () => {
+            if (window.confirm('清空程序缓存并重新加载？账本数据和登录状态不受影响。')) await hardReload()
+          }}
+        />
         <Row
           label="退出登录"
           action="退出"

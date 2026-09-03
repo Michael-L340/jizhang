@@ -240,7 +240,7 @@ export function Entry() {
   const accountOpts = accounts.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> }))
 
   return (
-    <div className="app-shell safe-top">
+    <div className="flex-1 min-h-0 flex flex-col safe-top">
       <div className="flex items-center justify-between px-2 h-12">
         <button type="button" className="px-3 py-2 text-brand" onClick={() => nav(-1)}>
           {editing ? '返回' : '取消'}
