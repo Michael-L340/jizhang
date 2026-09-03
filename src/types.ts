@@ -19,6 +19,8 @@ export interface Category {
   icon: string | null
   sort: number
   is_archived: boolean
+  /** 含义说明，如「通勤、水电、房租」 */
+  note: string | null
 }
 
 /** 金额单位：分（整数）。只有 adjust 类型允许为负或为 0。 */

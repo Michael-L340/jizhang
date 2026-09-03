@@ -1,47 +1,69 @@
-// 四个账户的图标。按名称匹配；改了账户名也能靠关键词命中，都不命中就用通用钱包图标。
+// 账户图标。品牌标志路径来源：
+//   微信 / 支付宝 —— simple-icons（图标路径以 CC0 发布）
+//   中国银行 / 招商银行 —— icongo/bank-logos（MIT），只取其中红色主标记，舍弃右侧中文字样
+// 商标归各品牌所有，此处仅用于个人记账中标识自己的账户。
 interface Props {
   name: string
   size?: number
 }
 
-interface Style {
+interface Brand {
   bg: string
-  fg: string
+  viewBox: string
   path: string
-  round?: boolean
+  round: boolean
+  /** 标记相对图标的占比 */
+  scale?: number
 }
 
-const BANK_PATH = 'M3 9.5L12 4l9 5.5M5 10v8m4-8v8m6-8v8m4-8v8M3 20h18'
-const WALLET_PATH = 'M3 8a2 2 0 012-2h12a2 2 0 012 2M3 8v10a2 2 0 002 2h14a2 2 0 002-2v-3M3 8h16a2 2 0 012 2v3M17 13.5h.01'
-const ALIPAY_PATH = 'M4 15c2.6-1.2 6.4-2.2 9.2-1 2.3 1 4 2.6 5.1 4M7 6h10M12 4v7M6.5 11h11'
-const WECHAT_PATH = 'M9 4C5.1 4 2 6.6 2 9.8c0 1.8 1 3.4 2.6 4.5L4 17l2.6-1.3c.8.2 1.6.3 2.4.3M22 15c0-2.8-2.7-5-6-5s-6 2.2-6 5 2.7 5 6 5c.7 0 1.4-.1 2-.3L21 21l-.6-2c1-.8 1.6-1.9 1.6-3z'
+const WECHAT: Brand = { bg: '#07C160', round: true, scale: 0.6, viewBox: '0 0 24 24', path: 'M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z' }
+const ALIPAY: Brand = { bg: '#1677FF', round: true, scale: 0.58, viewBox: '0 0 24 24', path: 'M19.695 15.07c3.426 1.158 4.203 1.22 4.203 1.22V3.846c0-2.124-1.705-3.845-3.81-3.845H3.914C1.808.001.102 1.722.102 3.846v16.31c0 2.123 1.706 3.845 3.813 3.845h16.173c2.105 0 3.81-1.722 3.81-3.845v-.157s-6.19-2.602-9.315-4.119c-2.096 2.602-4.8 4.181-7.607 4.181-4.75 0-6.361-4.19-4.112-6.949.49-.602 1.324-1.175 2.617-1.497 2.025-.502 5.247.313 8.266 1.317a16.796 16.796 0 0 0 1.341-3.302H5.781v-.952h4.799V6.975H4.77v-.953h5.81V3.591s0-.409.411-.409h2.347v2.84h5.744v.951h-5.744v1.704h4.69a19.453 19.453 0 0 1-1.986 5.06c1.424.52 2.702 1.011 3.654 1.333m-13.81-2.032c-.596.06-1.71.325-2.321.869-1.83 1.608-.735 4.55 2.968 4.55 2.151 0 4.301-1.388 5.99-3.61-2.403-1.182-4.438-2.028-6.637-1.809' }
+const BOC: Brand = { bg: '#B81C22', round: false, scale: 0.62, viewBox: '0.00 367.60 288.80 288.70', path: 'M144.4 367.6c79.7 0 144.4 64.6 144.4 144.3s-64.6 144.4-144.4 144.4S0 591.7 0 512c0-79.7 64.6-144.4 144.4-144.4zM31.6 512c0 56.2 41.4 103.8 97 111.7v-53h-24.8c-16.2 0-29.3-13.1-29.3-29.3v-58.7c0-16.2 13.1-29.3 29.3-29.3h24.8v-53c-55.7 7.8-97 55.4-97 111.6z m128.5-111.7v53H185c16.2 0 29.3 13.2 29.3 29.3v58.6c0 16.2-13.1 29.3-29.3 29.4h-24.9v53c61.7-8.7 104.6-65.8 95.9-127.5-7-49.7-46.1-88.8-95.9-95.8z m18.1 84.6h-67.7c-2.4 0-4.4 1.9-4.5 4.3v45.3c0 2.4 1.9 4.4 4.3 4.5h67.9c2.4 0 4.4-1.9 4.5-4.3v-45.3c0-2.4-2-4.5-4.5-4.5z' }
+const CMB: Brand = { bg: '#E50113', round: false, scale: 0.6, viewBox: '0.00 389.00 246.00 245.90', path: 'M119.8 389l-3.1 0.3-6.2 0.3-6.2 0.8-3.1 0.6-3.1 0.6-2.8 0.6-3.1 0.8-5.7 1.7-5.7 1.7-5.7 2.3-5.4 2.5-5.2 2.8-2.6 1.4-2.5 1.4-2.6 1.7-2.5 1.4-4.8 3.7-2.3 1.7-2.5 1.7-4.2 4-4.2 4.2-2.3 2-2 2.3-2 2-2 2.3-3.4 4.8-3.7 4.8-3.1 5.1-1.4 2.6-1.4 2.3-2.8 5.4-2.5 5.4-2 5.7-2 5.7-1.7 5.5-1.4 5.9-1.1 6.2-0.9 6.2-0.3 6.2L0 512v3.1l0.3 3.1 0.3 6.5 0.9 5.9 0.6 3.1 0.6 3.1 0.6 2.8 0.8 3.1 1.7 5.7 2 5.9 2 5.4 2.5 5.7 2.8 5.1 1.4 2.8 1.4 2.5 1.7 2.5 1.4 2.3 3.7 4.8 1.7 2.5 1.7 2.3 4 4.5 4.2 4.2 2 2 2.3 2 2 2 2.3 2 4.8 3.7 4.8 3.4 5.1 3.1 2.5 1.4 2.6 1.7 5.4 2.5 5.4 2.5 5.7 2.3 5.7 2 5.7 1.4 5.9 1.4 6.2 1.1 6.2 0.9 6.2 0.6h11.3l4.8-0.3 4.8-0.6 2.5-0.3 2.3-0.3 4.8-0.8 4.5-1.1 4.8-1.1 4.5-1.4 4.3-1.7 4.5-1.7 4.2-1.7 4.3-2 4.2-2.3 4-2.3 4-2.5 3.7-2.6 3.7-2.8 3.7-2.8 3.4-3.1 3.4-3.1 3.4-3.4 3.1-3.1 3.1-3.7 2.8-3.7 2.6-3.7 2.8-3.7 2.3-4 2.5-4.2 2-4 2-4.2 2-4.2 1.7-4.5h-17.2l2.6 5.9-26.6 38.7H52L23.5 563l62.8-162 35.5 85 33.9-85.7 32.5 76h52.6l-1.7-4.5-1.7-4.8-1.7-4.5-2.3-4.2-2-4.5-2.6-4.2-2.5-4-2.5-4-3.1-4-1.4-2-1.4-2-3.1-3.7-3.4-3.4-3.4-3.4-3.7-3.4-3.7-3.1-3.7-2.8-4-2.8-4-2.8-4.2-2.5-4.2-2.3-4.2-2.3-4.5-2-4.5-2-2.3-0.8-2.3-0.9-4.7-1.3-4.8-1.4-4.8-1.1-5.1-0.8-4.8-0.9-5.1-0.3-5.4-0.6h-8.2z m-7 172.7h68.1l-34.8-84.2-33.3 84.2z m-69.8 0h68.1l-34.8-84.2L43 561.7z m148.1-78.6l2.3 5.1h50.3l-1.1-5.1h-51.5z m5.1 11.9l2 5.1h47.2l-0.6-5.1h-48.6z m5.1 11.9l2 5.1H246v-5.1h-44.7z m4.8 11.8l2.3 5.1h37l0.6-5.1h-39.9z m5 11.9l2.3 5.1h30.2l0.9-5.1h-33.4z m5.1 11.9l2.3 4.8h22.3l1.4-4.8h-26z' }
 
-function styleOf(name: string): Style {
+// 通用兜底：银行卡 / 钱包
+const GENERIC_BANK: Brand = {
+  bg: '#3f5c8c',
+  round: false,
+  scale: 0.56,
+  viewBox: '0 0 24 24',
+  path: 'M2.5 9.6 12 4l9.5 5.6v1.4H2.5V9.6ZM5 13h2v5H5v-5Zm4 0h2v5H9v-5Zm4 0h2v5h-2v-5Zm4 0h2v5h-2v-5ZM2.5 19.4h19V21h-19v-1.6Z',
+}
+const GENERIC_WALLET: Brand = {
+  bg: '#7a808c',
+  round: true,
+  scale: 0.56,
+  viewBox: '0 0 24 24',
+  path: 'M4 6h13a2 2 0 0 1 2 2v1h-2.5a3 3 0 0 0 0 6H21v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm12.5 5H22v2h-5.5a1 1 0 0 1 0-2Z',
+}
+
+function brandOf(name: string): Brand {
   const n = name.trim()
-  if (n.includes('微信')) return { bg: '#07c160', fg: '#fff', path: WECHAT_PATH, round: true }
-  if (n.includes('支付宝')) return { bg: '#1677ff', fg: '#fff', path: ALIPAY_PATH, round: true }
-  if (n.includes('招商')) return { bg: '#c7000b', fg: '#fff', path: BANK_PATH }
-  if (n.includes('中国银行') || n.includes('中行')) return { bg: '#b01c2e', fg: '#fff', path: BANK_PATH }
-  if (n.includes('工商') || n.includes('工行')) return { bg: '#c8102e', fg: '#fff', path: BANK_PATH }
-  if (n.includes('建设') || n.includes('建行')) return { bg: '#004a95', fg: '#fff', path: BANK_PATH }
-  if (n.includes('农业') || n.includes('农行')) return { bg: '#009944', fg: '#fff', path: BANK_PATH }
-  if (n.includes('交通') || n.includes('交行')) return { bg: '#005bac', fg: '#fff', path: BANK_PATH }
-  if (n.includes('邮储') || n.includes('邮政')) return { bg: '#00703c', fg: '#fff', path: BANK_PATH }
-  if (n.includes('银行') || n.includes('卡')) return { bg: '#3f5c8c', fg: '#fff', path: BANK_PATH }
-  if (n.includes('现金')) return { bg: '#f5a524', fg: '#fff', path: WALLET_PATH, round: true }
-  return { bg: '#7a808c', fg: '#fff', path: WALLET_PATH, round: true }
+  if (n.includes('微信')) return WECHAT
+  if (n.includes('支付宝')) return ALIPAY
+  if (n.includes('招商') || n.includes('招行')) return CMB
+  if (n.includes('中国银行') || n.includes('中行')) return BOC
+  if (n.includes('工商') || n.includes('工行')) return { ...GENERIC_BANK, bg: '#c8102e' }
+  if (n.includes('建设') || n.includes('建行')) return { ...GENERIC_BANK, bg: '#004a95' }
+  if (n.includes('农业') || n.includes('农行')) return { ...GENERIC_BANK, bg: '#009944' }
+  if (n.includes('交通') || n.includes('交行')) return { ...GENERIC_BANK, bg: '#005bac' }
+  if (n.includes('邮储') || n.includes('邮政')) return { ...GENERIC_BANK, bg: '#00703c' }
+  if (n.includes('银行') || n.includes('卡') || n.includes('信用')) return GENERIC_BANK
+  if (n.includes('现金')) return { ...GENERIC_WALLET, bg: '#f5a524' }
+  return GENERIC_WALLET
 }
 
 export function AccountIcon({ name, size = 40 }: Props) {
-  const s = styleOf(name)
+  const b = brandOf(name)
+  const inner = size * (b.scale ?? 0.58)
   return (
     <span
       className="inline-flex items-center justify-center shrink-0"
-      style={{ width: size, height: size, background: s.bg, borderRadius: s.round ? '50%' : size * 0.28 }}
+      style={{ width: size, height: size, background: b.bg, borderRadius: b.round ? '50%' : size * 0.26 }}
       aria-hidden
     >
-      <svg width={size * 0.56} height={size * 0.56} viewBox="0 0 24 24" fill="none" stroke={s.fg} strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round">
-        <path d={s.path} />
+      <svg width={inner} height={inner} viewBox={b.viewBox} fill="#fff" xmlns="http://www.w3.org/2000/svg">
+        <path d={b.path} />
       </svg>
     </span>
   )
@@ -49,5 +71,5 @@ export function AccountIcon({ name, size = 40 }: Props) {
 
 /** 账户主题色，给图表和圆点用 */
 export function accountColor(name: string): string {
-  return styleOf(name).bg
+  return brandOf(name).bg
 }

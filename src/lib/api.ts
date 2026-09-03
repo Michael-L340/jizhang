@@ -18,7 +18,7 @@ interface TxRow {
 
 const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,created_at'
 const ACC_COLS = 'id,name,kind,sort,is_archived'
-const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived'
+const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived,note'
 
 function rowToTx(r: TxRow): Transaction {
   return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null }
@@ -102,7 +102,7 @@ export async function addCategory(input: { kind: CatKind; parent_id: string | nu
   return data as Category
 }
 
-export async function updateCategory(id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived'>>): Promise<void> {
+export async function updateCategory(id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note'>>): Promise<void> {
   const { error } = await supabase.from('categories').update(patch).eq('id', id)
   if (error) throw error
 }

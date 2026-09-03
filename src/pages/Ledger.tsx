@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChipGroup } from '../components/ChipGroup'
+import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
 import { TxRow } from '../components/TxRow'
 import { groupByDay, inMonth, monthSummary } from '../lib/compute'
-import { fmtDateRel, fmtDateZh, fmtMonthZh, monthOf, shiftMonth, today } from '../lib/date'
+import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -50,6 +51,7 @@ export function Ledger() {
     })
   }, [txs, ym, type, accountId, parentId, catMap])
 
+  const monthsWithData = useMemo(() => new Set(txs.map((t) => monthOf(t.date))), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const filtered = type !== 'all' || accountId !== 'all' || parentId !== 'all'
@@ -57,17 +59,7 @@ export function Ledger() {
   return (
     <div className="pb-6">
       <div className="sticky top-0 z-10 bg-bg px-4 pt-3 pb-2">
-        <div className="flex items-center justify-between">
-          <button type="button" className="w-10 h-10 text-xl" onClick={() => setYm(shiftMonth(ym, -1))} aria-label="上个月">
-            ‹
-          </button>
-          <button type="button" className="text-lg font-bold" onClick={() => setYm(monthOf(today()))}>
-            {fmtMonthZh(ym)}
-          </button>
-          <button type="button" className="w-10 h-10 text-xl" onClick={() => setYm(shiftMonth(ym, 1))} aria-label="下个月">
-            ›
-          </button>
-        </div>
+        <MonthPicker value={ym} onChange={setYm} monthsWithData={monthsWithData} />
         <div className="flex items-center justify-between text-xs text-muted px-1">
           <span className="num">
             支出 <span className="text-expense">{fmtYuan(sum.expense)}</span> · 收入 <span className="text-income">{fmtYuan(sum.income)}</span>

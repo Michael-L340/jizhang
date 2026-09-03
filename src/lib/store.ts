@@ -55,7 +55,7 @@ export interface State extends Snapshot {
   removeTx: (id: string) => Promise<boolean>
 
   addCategory: (kind: CatKind, parentId: string | null, name: string) => Promise<Category | null>
-  updateCategory: (id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived'>>) => Promise<boolean>
+  updateCategory: (id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note'>>) => Promise<boolean>
   updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived'>>) => Promise<boolean>
   importSnapshot: (snap: Snapshot) => Promise<void>
 

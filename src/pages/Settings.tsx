@@ -106,11 +106,23 @@ export function Settings() {
           .filter((c) => c.kind === 'expense')
           .map((p) => (
             <div key={p.id} className="py-2 border-b border-line last:border-0">
-              <div className="flex items-center justify-between">
-                <span className="font-medium">
-                  {p.icon} {p.name}
+              <div className="flex items-start justify-between gap-2">
+                <span className="min-w-0">
+                  <span className="block font-medium">
+                    {p.icon} {p.name}
+                  </span>
+                  <button
+                    type="button"
+                    className={`block text-left text-xs ${p.note ? 'text-muted' : 'text-brand'}`}
+                    onClick={async () => {
+                      const note = window.prompt(`「${p.name}」的含义说明`, p.note ?? '')
+                      if (note !== null && note.trim() !== (p.note ?? '')) await s.updateCategory(p.id, { note: note.trim() || null })
+                    }}
+                  >
+                    {p.note || '＋ 添加含义说明'}
+                  </button>
                 </span>
-                <span className="flex gap-3 text-xs text-brand">
+                <span className="flex gap-3 text-xs text-brand shrink-0 pt-0.5">
                   <button type="button" onClick={() => rename(p)}>
                     改名
                   </button>

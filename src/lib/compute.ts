@@ -131,6 +131,47 @@ export function dailyCumulative(txs: Transaction[], ym: string, ref: string = to
   return out
 }
 
+/** 某月每天的累计支出，按一级分类分组；只返回本月有金额的分类 */
+export function dailyCumulativeByCategory(
+  txs: Transaction[],
+  cats: Category[],
+  ym: string,
+  type: 'expense' | 'income' = 'expense',
+  ref: string = today(),
+): { id: string; name: string; total: number; data: (number | null)[] }[] {
+  const byId = new Map(cats.map((c) => [c.id, c]))
+  const { start, end } = monthRange(ym)
+  const perCat = new Map<string, { name: string; sort: number; perDay: Map<string, number>; total: number }>()
+  for (const t of txs) {
+    if (t.type !== type || !inMonth(t, ym) || !t.category_id) continue
+    const c = byId.get(t.category_id)
+    if (!c) continue
+    const root = c.parent_id ? byId.get(c.parent_id) ?? c : c
+    let e = perCat.get(root.id)
+    if (!e) {
+      e = { name: root.name, sort: root.sort, perDay: new Map(), total: 0 }
+      perCat.set(root.id, e)
+    }
+    e.perDay.set(t.date, (e.perDay.get(t.date) ?? 0) + t.amount)
+    e.total += t.amount
+  }
+  const out: { id: string; name: string; total: number; data: (number | null)[] }[] = []
+  for (const [id, e] of perCat) {
+    const data: (number | null)[] = []
+    let cum = 0
+    for (let d = start; d <= end; d = addDays(d, 1)) {
+      if (d > ref) {
+        data.push(null)
+        continue
+      }
+      cum += e.perDay.get(d) ?? 0
+      data.push(cum)
+    }
+    out.push({ id, name: e.name, total: e.total, data })
+  }
+  return out.sort((a, b) => b.total - a.total)
+}
+
 /** 最近 n 个月的收入/支出序列（含空月） */
 export function monthlySeries(txs: Transaction[], endYm: string, n = 12): { ym: string; income: number; expense: number }[] {
   const months = lastMonths(n, endYm)

@@ -10,12 +10,12 @@ const accounts: Account[] = [
   { id: 'wx', name: '微信', kind: 'wallet', sort: 4, is_archived: false },
 ]
 const cats: Category[] = [
-  { id: 'food', kind: 'expense', parent_id: null, name: '日常餐饮', icon: '🍚', sort: 1, is_archived: false },
-  { id: 'lunch', kind: 'expense', parent_id: 'food', name: '午餐', icon: null, sort: 2, is_archived: false },
-  { id: 'dinner', kind: 'expense', parent_id: 'food', name: '晚餐', icon: null, sort: 3, is_archived: false },
-  { id: 'fun', kind: 'expense', parent_id: null, name: '娱乐消费', icon: '🎮', sort: 2, is_archived: false },
-  { id: 'game', kind: 'expense', parent_id: 'fun', name: '游戏充值', icon: null, sort: 1, is_archived: false },
-  { id: 'salary', kind: 'income', parent_id: null, name: '工资/实习', icon: null, sort: 1, is_archived: false },
+  { id: 'food', kind: 'expense', parent_id: null, name: '日常餐饮', icon: '🍚', sort: 1, is_archived: false, note: null },
+  { id: 'lunch', kind: 'expense', parent_id: 'food', name: '午餐', icon: null, sort: 2, is_archived: false, note: null },
+  { id: 'dinner', kind: 'expense', parent_id: 'food', name: '晚餐', icon: null, sort: 3, is_archived: false, note: null },
+  { id: 'fun', kind: 'expense', parent_id: null, name: '娱乐消费', icon: '🎮', sort: 2, is_archived: false, note: null },
+  { id: 'game', kind: 'expense', parent_id: 'fun', name: '游戏充值', icon: null, sort: 1, is_archived: false, note: null },
+  { id: 'salary', kind: 'income', parent_id: null, name: '工资/实习', icon: null, sort: 1, is_archived: false, note: null },
 ]
 
 let seq = 0
