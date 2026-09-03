@@ -131,45 +131,58 @@ export function dailyCumulative(txs: Transaction[], ym: string, ref: string = to
   return out
 }
 
-/** 某月每天的累计支出，按一级分类分组；只返回本月有金额的分类 */
-export function dailyCumulativeByCategory(
+/** 一段月份区间内，按一级分类汇总每月总额；只返回区间内有金额的分类 */
+export function monthlyByCategory(
   txs: Transaction[],
   cats: Category[],
-  ym: string,
+  months: string[],
   type: 'expense' | 'income' = 'expense',
-  ref: string = today(),
-): { id: string; name: string; total: number; data: (number | null)[] }[] {
+): { id: string; name: string; total: number; data: number[] }[] {
   const byId = new Map(cats.map((c) => [c.id, c]))
-  const { start, end } = monthRange(ym)
-  const perCat = new Map<string, { name: string; sort: number; perDay: Map<string, number>; total: number }>()
+  const idx = new Map(months.map((m, i) => [m, i]))
+  const acc = new Map<string, { name: string; sort: number; data: number[]; total: number }>()
   for (const t of txs) {
-    if (t.type !== type || !inMonth(t, ym) || !t.category_id) continue
+    if (t.type !== type || !t.category_id) continue
+    const at = idx.get(monthOf(t.date))
+    if (at === undefined) continue
     const c = byId.get(t.category_id)
     if (!c) continue
     const root = c.parent_id ? byId.get(c.parent_id) ?? c : c
-    let e = perCat.get(root.id)
+    let e = acc.get(root.id)
     if (!e) {
-      e = { name: root.name, sort: root.sort, perDay: new Map(), total: 0 }
-      perCat.set(root.id, e)
+      e = { name: root.name, sort: root.sort, data: new Array(months.length).fill(0), total: 0 }
+      acc.set(root.id, e)
     }
-    e.perDay.set(t.date, (e.perDay.get(t.date) ?? 0) + t.amount)
+    e.data[at] += t.amount
     e.total += t.amount
   }
-  const out: { id: string; name: string; total: number; data: (number | null)[] }[] = []
-  for (const [id, e] of perCat) {
-    const data: (number | null)[] = []
-    let cum = 0
-    for (let d = start; d <= end; d = addDays(d, 1)) {
-      if (d > ref) {
-        data.push(null)
-        continue
-      }
-      cum += e.perDay.get(d) ?? 0
-      data.push(cum)
+  return [...acc.entries()]
+    .map(([id, e]) => ({ id, name: e.name, total: e.total, data: e.data }))
+    .sort((a, b) => b.total - a.total)
+}
+
+/** 每个月的收入/支出合计，供月份选择器显示 */
+export function monthTotals(txs: Transaction[]): Map<string, { expense: number; income: number }> {
+  const m = new Map<string, { expense: number; income: number }>()
+  for (const t of txs) {
+    if (!isFlow(t)) continue
+    const ym = monthOf(t.date)
+    let e = m.get(ym)
+    if (!e) {
+      e = { expense: 0, income: 0 }
+      m.set(ym, e)
     }
-    out.push({ id, name: e.name, total: e.total, data })
+    if (t.type === 'expense') e.expense += t.amount
+    else e.income += t.amount
   }
-  return out.sort((a, b) => b.total - a.total)
+  return m
+}
+
+/** 有收支记录的月份，升序 */
+export function monthsWithFlow(txs: Transaction[]): string[] {
+  const set = new Set<string>()
+  for (const t of txs) if (isFlow(t)) set.add(monthOf(t.date))
+  return [...set].sort()
 }
 
 /** 最近 n 个月的收入/支出序列（含空月） */

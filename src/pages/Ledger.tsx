@@ -4,7 +4,7 @@ import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
 import { TxRow } from '../components/TxRow'
-import { groupByDay, inMonth, monthSummary } from '../lib/compute'
+import { groupByDay, inMonth, monthSummary, monthTotals } from '../lib/compute'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
@@ -51,7 +51,7 @@ export function Ledger() {
     })
   }, [txs, ym, type, accountId, parentId, catMap])
 
-  const monthsWithData = useMemo(() => new Set(txs.map((t) => monthOf(t.date))), [txs])
+  const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const filtered = type !== 'all' || accountId !== 'all' || parentId !== 'all'
@@ -59,7 +59,7 @@ export function Ledger() {
   return (
     <div className="pb-6">
       <div className="sticky top-0 z-10 bg-bg px-4 pt-3 pb-2">
-        <MonthPicker value={ym} onChange={setYm} monthsWithData={monthsWithData} />
+        <MonthPicker value={ym} onChange={setYm} totals={totalsByMonth} />
         <div className="flex items-center justify-between text-xs text-muted px-1">
           <span className="num">
             支出 <span className="text-expense">{fmtYuan(sum.expense)}</span> · 收入 <span className="text-income">{fmtYuan(sum.income)}</span>

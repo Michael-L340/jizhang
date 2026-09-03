@@ -2,8 +2,8 @@ import { lazy, Suspense, useMemo, useState } from 'react'
 import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
-import { adjustTotal, balanceHistory, byCategory, dailyCumulative, dailyCumulativeByCategory, monthSummary, monthlySeries } from '../lib/compute'
-import { daysInMonth, fmtMonthZh, monthOf, shiftMonth, today } from '../lib/date'
+import { adjustTotal, balanceHistory, byCategory, monthSummary, monthTotals, monthlyByCategory, monthlySeries, monthsWithFlow } from '../lib/compute'
+import { monthOf, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { categoryColor, childColors } from '../lib/palette'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -79,59 +79,75 @@ export function Stats() {
     [series12],
   )
 
-  const cum = useMemo(() => dailyCumulative(txs, ym), [txs, ym])
-  const prevYm = shiftMonth(ym, -1)
-  const cumPrev = useMemo(() => dailyCumulative(txs, prevYm, `${prevYm}-31`), [txs, prevYm])
-  const byCat = useMemo(() => dailyCumulativeByCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
+  // 趋势图的月份区间：从有数据的第一个月起，最多 12 个月，止于当前选中月
+  const trendMonths = useMemo(() => {
+    const withData = monthsWithFlow(txs)
+    const earliest = withData.find((m) => m <= ym) ? withData[0] : ym
+    const lowerBound = shiftMonth(ym, -11)
+    let start = earliest > lowerBound ? earliest : lowerBound
+    if (start > ym) start = ym
+    const out: string[] = []
+    for (let m = start; m <= ym; m = shiftMonth(m, 1)) out.push(m)
+    return out.length ? out : [ym]
+  }, [txs, ym])
 
-  const lineOption = useMemo(() => {
-    const days = Math.max(daysInMonth(ym), daysInMonth(prevYm))
+  const trendTotal = useMemo(
+    () => trendMonths.map((m) => monthSummary(txs, m).expense),
+    [txs, trendMonths],
+  )
+  const trendByCat = useMemo(() => monthlyByCategory(txs, cats, trendMonths, 'expense'), [txs, cats, trendMonths])
+  const fewPoints = trendMonths.length <= 3
+
+  const trendOption = useMemo(() => {
     const base = {
       tooltip: { trigger: 'axis', valueFormatter: yuan, confine: true, order: 'valueDesc' },
-      grid: { left: 4, right: 12, top: 34, bottom: 0, containLabel: true },
+      grid: { left: 4, right: 14, top: 34, bottom: 0, containLabel: true },
       xAxis: {
         type: 'category',
-        data: Array.from({ length: days }, (_, i) => String(i + 1)),
-        boundaryGap: false,
+        data: trendMonths.map((m) => `${+m.slice(5)}月`),
+        boundaryGap: fewPoints,
         axisTick: { show: false },
         axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10, color: '#7a808c', interval: 4 },
+        axisLabel: { fontSize: 10, color: '#7a808c', interval: 0 },
       },
       yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f1f4' } }, axisLabel: { fontSize: 10, color: '#7a808c', formatter: axisMoney } },
     }
     if (lineMode === 'total') {
       return {
         ...base,
-        color: ['#2f6fed', '#c9ccd3'],
-        legend: { data: [fmtMonthZh(ym), fmtMonthZh(prevYm)], top: 0, itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+        color: ['#2f6fed'],
+        legend: { show: false },
+        grid: { ...base.grid, top: 16 },
         series: [
           {
-            name: fmtMonthZh(ym),
+            name: '支出',
             type: 'line',
             smooth: true,
-            showSymbol: false,
-            data: cum.map((v) => (v === null ? null : v / 100)),
-            areaStyle: { opacity: 0.1 },
+            showSymbol: true,
+            symbolSize: 7,
             lineStyle: { width: 2.5 },
+            areaStyle: { opacity: 0.1 },
+            label: { show: fewPoints, position: 'top', fontSize: 10, color: '#7a808c', formatter: (p: { value: number }) => yuan(p.value) },
+            data: trendTotal.map((v) => v / 100),
           },
-          { name: fmtMonthZh(prevYm), type: 'line', smooth: true, showSymbol: false, lineStyle: { type: 'dashed', width: 1.5 }, data: cumPrev.map((v) => (v === null ? null : v / 100)) },
         ],
       }
     }
     return {
       ...base,
-      color: byCat.map((c, i) => categoryColor(c.name, i)),
-      legend: { data: byCat.map((c) => c.name), top: 0, type: 'scroll', itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
-      series: byCat.map((c) => ({
+      color: trendByCat.map((c, i) => categoryColor(c.name, i)),
+      legend: { data: trendByCat.map((c) => c.name), top: 0, type: 'scroll', itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+      series: trendByCat.map((c) => ({
         name: c.name,
         type: 'line',
         smooth: true,
-        showSymbol: false,
+        showSymbol: true,
+        symbolSize: 6,
         lineStyle: { width: 2 },
-        data: c.data.map((v) => (v === null ? null : v / 100)),
+        data: c.data.map((v) => v / 100),
       })),
     }
-  }, [lineMode, cum, cumPrev, byCat, ym, prevYm])
+  }, [lineMode, trendMonths, trendTotal, trendByCat, fewPoints])
 
   const hist = useMemo(() => balanceHistory(txs, accounts, 90), [txs, accounts])
   const balOption = useMemo(
@@ -159,12 +175,12 @@ export function Stats() {
 
   const adjMonth = adjustTotal(txs, ym)
   const adjAll = adjustTotal(txs)
-  const monthsWithData = useMemo(() => new Set(txs.map((t) => monthOf(t.date))), [txs])
+  const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const roots = useMemo(() => cats.filter((c) => !c.parent_id && c.kind === 'expense' && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
 
   return (
     <div className="px-4 pb-6">
-      <MonthPicker value={ym} onChange={setYm} monthsWithData={monthsWithData} />
+      <MonthPicker value={ym} onChange={setYm} totals={totalsByMonth} />
 
       {/* 分类占比 */}
       <div className="card p-4 mb-3">
@@ -234,12 +250,13 @@ export function Stats() {
         )}
       </div>
 
-      {/* 每日累计 */}
+      {/* 支出趋势 */}
       <div className="card p-4 mb-3">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-sm text-muted">
-            每日累计支出 <span className="num text-ink font-semibold ml-1">{fmtYuan(sum.expense, { symbol: true })}</span>
-          </span>
+        <div className="flex items-center justify-between mb-2">
+          <div>
+            <div className="text-sm text-muted">支出趋势</div>
+            <div className="num text-lg font-semibold leading-tight">{fmtYuan(sum.expense, { symbol: true })}</div>
+          </div>
           <div className="inline-flex rounded-full bg-bg p-0.5">
             {(['total', 'category'] as const).map((m) => (
               <button
@@ -253,14 +270,17 @@ export function Stats() {
             ))}
           </div>
         </div>
-        {lineMode === 'category' && byCat.length === 0 ? (
-          <div className="text-sm text-muted py-12 text-center">本月没有支出</div>
+        {lineMode === 'category' && trendByCat.length === 0 ? (
+          <div className="text-sm text-muted py-12 text-center">这段时间没有支出</div>
         ) : (
           <Suspense fallback={<div style={{ height: 230 }} />}>
-            <Chart option={lineOption} height={230} />
+            <Chart option={trendOption} height={230} />
           </Suspense>
         )}
-        <div className="text-[11px] text-muted mt-1">{lineMode === 'total' ? '实线本月，虚线上月，用于对比花钱速度' : '每条线是一个用途的当月累计，斜率越陡花得越快'}</div>
+        <div className="text-[11px] text-muted mt-1">
+          每个点是该月支出总额{lineMode === 'category' ? '，按用途分开' : ''}。
+          {ym === monthOf(today()) ? '本月还没结束，显示的是目前的总计。' : ''}
+        </div>
       </div>
 
       <div className="card p-4 mb-3">
