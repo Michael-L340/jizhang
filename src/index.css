@@ -30,7 +30,10 @@ button, a { touch-action: manipulation; }
 input, textarea, select { font-size: 16px; }
 input[type="date"] { -webkit-appearance: none; appearance: none; background: transparent; }
 
-.app-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+.app-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; width: 100%; max-width: 430px; margin: 0 auto; background: var(--color-bg); }
+#root { display: flex; justify-content: center; }
+/* 宽屏（电脑）下收成一条手机宽度的栏，两侧留灰底 */
+@media (min-width: 480px) { body { background: #e8eaee; } .app-shell { box-shadow: 0 0 0 1px var(--color-line); } }
 @supports not (height: 100dvh) { .app-shell { height: -webkit-fill-available; } }
 .app-main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
 .safe-top { padding-top: env(safe-area-inset-top); }
