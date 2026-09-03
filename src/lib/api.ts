@@ -9,7 +9,7 @@ interface TxRow {
   date: string
   type: TxType
   amount: number | string
-  account_id: string
+  account_id: string | null
   to_account_id: string | null
   category_id: string | null
   note: string | null
@@ -21,7 +21,7 @@ const ACC_COLS = 'id,name,kind,sort,is_archived'
 const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived'
 
 function rowToTx(r: TxRow): Transaction {
-  return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null }
+  return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null }
 }
 
 function txToRow(t: Transaction): TxRow {

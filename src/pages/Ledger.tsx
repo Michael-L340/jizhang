@@ -38,7 +38,8 @@ export function Ledger() {
     return txs.filter((t) => {
       if (!inMonth(t, ym)) return false
       if (type !== 'all' && t.type !== (type as TxType)) return false
-      if (accountId !== 'all' && t.account_id !== accountId && t.to_account_id !== accountId) return false
+      if (accountId === 'none' && t.account_id) return false
+      if (accountId !== 'all' && accountId !== 'none' && t.account_id !== accountId && t.to_account_id !== accountId) return false
       if (parentId !== 'all') {
         if (!t.category_id) return false
         const c = catMap.get(t.category_id)
@@ -106,7 +107,7 @@ export function Ledger() {
         <div className="text-xs text-muted mb-2">类型</div>
         <ChipGroup options={TYPE_OPTS} value={type} onChange={setType} className="mb-4" />
         <div className="text-xs text-muted mb-2">账户</div>
-        <ChipGroup options={[{ id: 'all', label: '全部' }, ...accounts.map((a) => ({ id: a.id, label: a.name }))]} value={accountId} onChange={setAccountId} className="mb-4" />
+        <ChipGroup options={[{ id: 'all', label: '全部' }, ...accounts.map((a) => ({ id: a.id, label: a.name })), { id: 'none', label: '未指定' }]} value={accountId} onChange={setAccountId} className="mb-4" />
         <div className="text-xs text-muted mb-2">分类</div>
         <ChipGroup options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: c.name, icon: c.icon }))]} value={parentId} onChange={setParentId} className="mb-4" />
         <div className="flex gap-2">

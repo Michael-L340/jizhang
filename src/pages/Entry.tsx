@@ -1,6 +1,7 @@
 // 记一笔（新增 / 编辑同一页）。目标：普通一笔 = 输金额 → 点大类 → 保存。
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { Keypad } from '../components/Keypad'
 import { recentChildOrder } from '../lib/compute'
@@ -12,6 +13,7 @@ import { useActiveAccounts, useStore } from '../lib/store'
 import type { Transaction, TxType } from '../types'
 
 const MEM_KEY = 'jz_entry_memory_v1'
+const NO_ACCOUNT = '__none__'
 
 interface Memory {
   type: 'expense' | 'income' | 'transfer'
@@ -60,7 +62,8 @@ export function Entry() {
   const [parentId, setParentId] = useState<string | null>(mem.parentId)
   const [childId, setChildId] = useState<string | null>(mem.parentId ? mem.childByParent[mem.parentId] ?? null : null)
   const [incomeCatId, setIncomeCatId] = useState<string | null>(mem.incomeCatId)
-  const [accountId, setAccountId] = useState<string | null>(mem.accountId)
+  const [accountId, setAccountId] = useState<string | null>(mem.accountId === NO_ACCOUNT ? null : mem.accountId)
+  const [accountTouched, setAccountTouched] = useState(mem.accountId === NO_ACCOUNT)
   const [fromId, setFromId] = useState<string | null>(mem.fromId)
   const [toId, setToId] = useState<string | null>(mem.toId)
   const [date, setDate] = useState(today())
@@ -86,6 +89,7 @@ export function Entry() {
       setToId(editing.to_account_id)
     } else {
       setAccountId(editing.account_id)
+      setAccountTouched(true)
     }
     if (editing.category_id) {
       const c = cats.find((x) => x.id === editing.category_id)
@@ -103,10 +107,10 @@ export function Entry() {
 
   // 默认值兜底：账户 / 大类 / 二级 没有记忆时取第一个
   useEffect(() => {
-    if (!accountId && accounts.length) setAccountId(accounts[0].id)
+    if (!accountId && !accountTouched && accounts.length) setAccountId(accounts[0].id)
     if (!fromId && accounts.length) setFromId(accounts[0].id)
     if (!toId && accounts.length > 1) setToId(accounts[1].id)
-  }, [accounts, accountId, fromId, toId])
+  }, [accounts, accountId, accountTouched, fromId, toId])
   useEffect(() => {
     if (!parentId && parents.length) setParentId(parents[0].id)
   }, [parents, parentId])
@@ -153,7 +157,6 @@ export function Entry() {
     if (type === 'income' && !incomeCatId) return '请选择收入分类'
     if (type === 'transfer' && (!fromId || !toId)) return '请选择账户'
     if (type === 'transfer' && fromId === toId) return '转出和转入账户不能相同'
-    if (type !== 'transfer' && !accountId) return '请选择账户'
     return null
   }
 
@@ -173,7 +176,7 @@ export function Entry() {
       date,
       type,
       amount: type === 'adjust' ? cents : Math.abs(cents),
-      account_id: (type === 'transfer' ? fromId : accountId) as string,
+      account_id: type === 'transfer' ? (fromId as string) : accountId,
       to_account_id: type === 'transfer' ? toId : null,
       category_id: type === 'expense' ? childId ?? parentId : type === 'income' ? incomeCatId : null,
       note: note.trim() || null,
@@ -186,7 +189,7 @@ export function Entry() {
     if (type !== 'adjust') {
       const m: Memory = {
         type,
-        accountId,
+        accountId: accountId ?? NO_ACCOUNT,
         parentId,
         childByParent: { ...mem.childByParent, ...(parentId && childId ? { [parentId]: childId } : {}) },
         incomeCatId,
@@ -208,7 +211,7 @@ export function Entry() {
         : type === 'income'
           ? incomeCats.find((c) => c.id === incomeCatId)?.name ?? ''
           : '转账'
-    const accName = accounts.find((a) => a.id === (type === 'transfer' ? fromId : accountId))?.name ?? ''
+    const accName = accounts.find((a) => a.id === (type === 'transfer' ? fromId : accountId))?.name ?? '未指定账户'
     showToast(`已记 ¥${fmtYuan(Math.abs(cents))} · ${catName} · ${accName}`, () => void removeTx(tx.id))
     setAmount('')
     setNote('')
@@ -232,7 +235,7 @@ export function Entry() {
     ...(editing?.type === 'adjust' ? [{ id: 'adjust' as TxType, label: '校准' }] : []),
   ]
   const amountColor = type === 'expense' ? 'text-expense' : type === 'income' ? 'text-income' : type === 'transfer' ? 'text-transfer' : 'text-adjust'
-  const accountOpts = accounts.map((a) => ({ id: a.id, label: a.name }))
+  const accountOpts = accounts.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> }))
 
   return (
     <div className="app-shell safe-top">
@@ -326,7 +329,14 @@ export function Entry() {
         ) : (
           <div className="mb-3">
             <div className="text-xs text-muted mb-1">账户</div>
-            <ChipGroup options={accountOpts} value={accountId} onChange={setAccountId} />
+            <ChipGroup
+              options={[...accountOpts, { id: NO_ACCOUNT, label: '不指定' }]}
+              value={accountId ?? NO_ACCOUNT}
+              onChange={(id) => {
+                setAccountTouched(true)
+                setAccountId(id === NO_ACCOUNT ? null : id)
+              }}
+            />
           </div>
         )}
 

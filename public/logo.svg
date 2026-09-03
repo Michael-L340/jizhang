@@ -1,4 +1,25 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <rect width="512" height="512" rx="112" fill="#2f6fed"/>
-  <text x="256" y="336" font-family="-apple-system, PingFang SC, Helvetica, Arial, sans-serif" font-size="280" font-weight="700" fill="#fff" text-anchor="middle">¥</text>
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#3d8bff"/>
+      <stop offset="1" stop-color="#1f4fd8"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="118" fill="url(#g)"/>
+  <!-- 账本 -->
+  <rect x="126" y="112" width="260" height="288" rx="26" fill="#fff"/>
+  <rect x="126" y="112" width="46" height="288" rx="26" fill="#dbe7ff"/>
+  <circle cx="149" cy="176" r="9" fill="#9fb9ee"/>
+  <circle cx="149" cy="256" r="9" fill="#9fb9ee"/>
+  <circle cx="149" cy="336" r="9" fill="#9fb9ee"/>
+  <!-- 金额条 -->
+  <rect x="206" y="164" width="140" height="20" rx="10" fill="#c9d9f7"/>
+  <rect x="206" y="206" width="96" height="20" rx="10" fill="#e0e9fb"/>
+  <!-- ¥ -->
+  <g fill="none" stroke="#1f4fd8" stroke-width="24" stroke-linecap="round">
+    <path d="M232 264 L276 312 L320 264"/>
+    <path d="M276 312 L276 366"/>
+    <path d="M240 322 H312"/>
+    <path d="M240 348 H312"/>
+  </g>
 </svg>

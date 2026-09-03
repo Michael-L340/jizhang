@@ -1,4 +1,5 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
+import { accountColor } from '../components/AccountIcon'
 import { adjustTotal, balanceHistory, byCategory, dailyCumulative, monthSummary, monthlySeries } from '../lib/compute'
 import { daysInMonth, fmtMonthZh, monthOf, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
@@ -78,7 +79,7 @@ export function Stats() {
   const hist = useMemo(() => balanceHistory(txs, accounts, 90), [txs, accounts])
   const balOption = useMemo(
     () => ({
-      color: ['#16181d', ...COLORS],
+      color: ['#16181d', ...accounts.map((a) => accountColor(a.name))],
       tooltip: { trigger: 'axis', valueFormatter: yuan },
       legend: { data: ['合计', ...accounts.map((a) => a.name)], top: 0, type: 'scroll' },
       grid: { left: 8, right: 12, top: 30, bottom: 0, containLabel: true },

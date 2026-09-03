@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
+import { AccountIcon } from '../components/AccountIcon'
 import { Sheet } from '../components/Sheet'
 import { balances, lastCheck, totalOf } from '../lib/compute'
 import { fmtIsoZh, nowIso, today } from '../lib/date'
@@ -69,7 +70,7 @@ export function Accounts() {
           const lc = lastCheck(txs, a.id)
           return (
             <button key={a.id} type="button" className="card p-4 text-left flex items-center gap-3" onClick={() => open(a)}>
-              <span className="w-10 h-10 rounded-full bg-bg flex items-center justify-center text-xl">{a.kind === 'bank' ? '🏦' : '📱'}</span>
+              <AccountIcon name={a.name} />
               <span className="flex-1 min-w-0">
                 <span className="block font-medium">{a.name}</span>
                 <span className="block text-xs text-muted">{lc ? `上次核对 ${fmtIsoZh(lc)}` : '从未核对，点此输入实际余额'}</span>

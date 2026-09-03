@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { AccountIcon } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, monthSummary, sortTxs, totalOf } from '../lib/compute'
 import { fmtMonthZh, monthOf, today } from '../lib/date'
@@ -83,9 +84,12 @@ export function Home() {
         </div>
         <div className="grid grid-cols-2 gap-2">
           {accounts.map((a) => (
-            <Link key={a.id} to="/accounts" className="rounded-xl bg-bg px-3 py-2.5">
-              <div className="text-xs text-muted">{a.name}</div>
-              <div className={`num font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</div>
+            <Link key={a.id} to="/accounts" className="rounded-xl bg-bg px-3 py-2.5 flex items-center gap-2">
+              <AccountIcon name={a.name} size={28} />
+              <span className="min-w-0">
+                <span className="block text-xs text-muted truncate">{a.name}</span>
+                <span className={`block num font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
+              </span>
             </Link>
           ))}
         </div>

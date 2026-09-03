@@ -25,7 +25,7 @@ export function buildCsv(snap: Snapshot): string {
         fmtYuan(t.amount).replace(/,/g, ''),
         esc(parent?.name),
         esc(child?.name),
-        esc(acc.get(t.account_id)),
+        esc(t.account_id ? acc.get(t.account_id) : ''),
         esc(t.to_account_id ? acc.get(t.to_account_id) : ''),
         esc(t.note),
         t.id,

@@ -16,6 +16,8 @@ export function balances(txs: Transaction[], accounts: Account[]): Record<string
   const out: Record<string, number> = {}
   for (const a of accounts) out[a.id] = 0
   for (const t of txs) {
+    // 未指定账户的流水计入收支统计，但不影响任何账户余额
+    if (!t.account_id) continue
     switch (t.type) {
       case 'income':
         out[t.account_id] = (out[t.account_id] ?? 0) + t.amount

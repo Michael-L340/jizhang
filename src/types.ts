@@ -27,7 +27,8 @@ export interface Transaction {
   date: string // YYYY-MM-DD，北京时间自然日
   type: TxType
   amount: number
-  account_id: string
+  /** 可为空：expense/income 允许不指定账户（不影响任何账户余额）；transfer/adjust 必填 */
+  account_id: string | null
   to_account_id: string | null // 仅 transfer
   category_id: string | null // 仅 expense / income
   note: string | null

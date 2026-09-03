@@ -1,4 +1,5 @@
 import type { Account, Category, Transaction } from '../types'
+import { AccountIcon } from './AccountIcon'
 import { fmtYuan } from '../lib/money'
 
 interface Props {
@@ -10,7 +11,7 @@ interface Props {
 }
 
 export function describeTx(tx: Transaction, accounts: Map<string, Account>, categories: Map<string, Category>) {
-  const acc = accounts.get(tx.account_id)?.name ?? '未知账户'
+  const acc = tx.account_id ? accounts.get(tx.account_id)?.name ?? '未知账户' : '未指定账户'
   if (tx.type === 'transfer') {
     const to = tx.to_account_id ? accounts.get(tx.to_account_id)?.name ?? '未知账户' : '?'
     return { icon: '🔁', title: '转账', sub: `${acc} → ${to}` }
@@ -43,7 +44,11 @@ export function TxRow({ tx, accounts, categories, onClick, showDate }: Props) {
   const muted = tx.type === 'adjust' && tx.amount === 0
   return (
     <button type="button" onClick={onClick} className={`w-full flex items-center gap-3 px-4 py-3 text-left active:bg-bg ${muted ? 'opacity-60' : ''}`}>
-      <span className="w-10 h-10 rounded-full bg-bg flex items-center justify-center text-xl shrink-0">{d.icon}</span>
+      {tx.type === 'transfer' || tx.type === 'adjust' ? (
+        <AccountIcon name={accounts.get(tx.account_id ?? '')?.name ?? ''} />
+      ) : (
+        <span className="w-10 h-10 rounded-full bg-bg flex items-center justify-center text-xl shrink-0">{d.icon}</span>
+      )}
       <span className="flex-1 min-w-0">
         <span className="block truncate text-[15px]">{d.title}</span>
         <span className="block truncate text-xs text-muted">

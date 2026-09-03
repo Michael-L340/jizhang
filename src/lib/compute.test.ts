@@ -19,7 +19,7 @@ const cats: Category[] = [
 ]
 
 let seq = 0
-function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount' | 'account_id'>): Transaction {
+function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount'> & { account_id: string | null }): Transaction {
   seq++
   return {
     id: `t${seq}`,
@@ -87,6 +87,17 @@ describe('balances', () => {
     expect(b.wx).toBe(300000 - 2800 - 1200)
     expect(b.boc).toBe(50000)
     expect(totalOf(b)).toBe(1000000 + 296000 + 50000)
+  })
+
+  it('ignores transactions without an account', () => {
+    const txs = [
+      tx({ type: 'adjust', amount: 100000, account_id: 'boc' }),
+      tx({ type: 'expense', amount: 87150, account_id: null, category_id: 'lunch' }),
+    ]
+    const b = balances(txs, accounts)
+    expect(b.boc).toBe(100000)
+    expect(totalOf(b)).toBe(100000)
+    expect(monthSummary(txs, '2026-09').expense).toBe(87150)
   })
 
   it('user example: 中国银行 1000 → real 1500 makes +500 adjust, total 2000 → 2500', () => {
