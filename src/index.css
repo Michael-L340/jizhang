@@ -1,0 +1,48 @@
+@import "tailwindcss";
+
+@theme {
+  --color-bg: #f6f7f9;
+  --color-card: #ffffff;
+  --color-ink: #16181d;
+  --color-muted: #7a808c;
+  --color-line: #e6e8ec;
+  --color-brand: #2f6fed;
+  --color-brand-soft: #e8f0ff;
+  --color-expense: #e5484d;
+  --color-income: #1f9d55;
+  --color-transfer: #7c5cff;
+  --color-adjust: #b8860b;
+}
+
+html, body, #root { height: 100%; }
+html { color-scheme: light; }
+body {
+  margin: 0;
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Helvetica Neue", "Microsoft YaHei", sans-serif;
+  overscroll-behavior-y: none;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-font-smoothing: antialiased;
+}
+button, a { touch-action: manipulation; }
+/* iOS：字号低于 16px 的输入框聚焦时会把整页放大 */
+input, textarea, select { font-size: 16px; }
+input[type="date"] { -webkit-appearance: none; appearance: none; background: transparent; }
+
+.app-shell { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+@supports not (height: 100dvh) { .app-shell { height: -webkit-fill-available; } }
+.app-main { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain; -webkit-overflow-scrolling: touch; }
+.safe-top { padding-top: env(safe-area-inset-top); }
+.safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+
+.num { font-variant-numeric: tabular-nums; }
+.card { background: var(--color-card); border-radius: 16px; box-shadow: 0 1px 2px rgba(16,24,40,.04); }
+.chip { border-radius: 999px; padding: 8px 14px; font-size: 14px; line-height: 1; border: 1px solid var(--color-line); background: #fff; color: var(--color-ink); white-space: nowrap; }
+.chip.on { background: var(--color-brand); border-color: var(--color-brand); color: #fff; }
+.key { font-size: 24px; height: 56px; border-radius: 12px; background: #fff; border: 1px solid var(--color-line); }
+.key:active { background: #eef1f5; }
+
+.expand { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .18s ease; }
+.expand.open { grid-template-rows: 1fr; }
+.expand > div { overflow: hidden; }

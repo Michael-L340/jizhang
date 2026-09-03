@@ -1,0 +1,36 @@
+{
+  "name": "jizhang",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host",
+    "build": "vite build",
+    "preview": "vite preview --host",
+    "check": "tsc -b",
+    "test": "vitest run",
+    "deploy": "npm run check && npm run test && VITE_BASE=/jizhang/ vite build && gh-pages -d dist -m \"deploy $(date +%F_%H%M)\""
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.114.0",
+    "echarts": "^6.1.0",
+    "react": "^19.2.8",
+    "react-dom": "^19.2.8",
+    "react-router-dom": "^7.18.3",
+    "zustand": "^5.0.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^24.13.3",
+    "@types/react": "^19.2.18",
+    "@types/react-dom": "^19.2.4",
+    "@vite-pwa/assets-generator": "^1.0.0",
+    "@vitejs/plugin-react": "^6.1.0",
+    "gh-pages": "^6.0.0",
+    "tailwindcss": "^4.3.3",
+    "typescript": "~6.0.2",
+    "vite": "^8.2.2",
+    "vite-plugin-pwa": "^1.3.0",
+    "vitest": "^4.0.0"
+  }
+}
