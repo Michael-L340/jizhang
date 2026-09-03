@@ -47,6 +47,8 @@ export function friendlyError(e: unknown): string {
   if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) return '网络不通，请稍后再试'
   if (code === '23505' || /duplicate key/i.test(msg)) return '已有同名分类'
   if (code === '23514' || /violates check constraint/i.test(msg)) return '数据不合法（类型与字段不匹配）'
+  if (/New password should be different/i.test(msg)) return '新密码不能和旧密码相同'
+  if (/Password should be at least/i.test(msg)) return '密码太短，至少 6 位'
   if (/JWT|session|refresh_token|401/i.test(msg)) return '登录已过期，请重新登录'
   return msg || '未知错误'
 }
@@ -138,6 +140,12 @@ export async function importAll(snap: Snapshot): Promise<void> {
 
 export async function signIn(email: string, password: string): Promise<void> {
   const { error } = await supabase.auth.signInWithPassword({ email, password })
+  if (error) throw error
+}
+
+/** 修改当前登录账号的密码 */
+export async function changePassword(newPassword: string): Promise<void> {
+  const { error } = await supabase.auth.updateUser({ password: newPassword })
   if (error) throw error
 }
 

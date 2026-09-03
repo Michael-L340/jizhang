@@ -1,8 +1,9 @@
 import { useMemo, useRef, useState } from 'react'
+import { Sheet } from '../components/Sheet'
 import { useNavigate } from 'react-router-dom'
 import { buildCsv, buildJson, parseImport, shareOrDownload } from '../lib/csv'
 import { fmtIsoZh, today } from '../lib/date'
-import { friendlyError } from '../lib/api'
+import { changePassword, friendlyError } from '../lib/api'
 import { checkForUpdate, hardReload } from '../lib/sw'
 import { useStore } from '../lib/store'
 import type { CatKind, Category } from '../types'
@@ -13,6 +14,28 @@ export function Settings() {
   const [busy, setBusy] = useState('')
   const [showArchived, setShowArchived] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const [pwOpen, setPwOpen] = useState(false)
+  const [pw1, setPw1] = useState('')
+  const [pw2, setPw2] = useState('')
+  const [pwErr, setPwErr] = useState('')
+
+  async function submitPassword() {
+    setPwErr('')
+    if (pw1.length < 6) return setPwErr('密码至少 6 位')
+    if (pw1 !== pw2) return setPwErr('两次输入不一致')
+    setBusy('pw')
+    try {
+      await changePassword(pw1)
+      setPwOpen(false)
+      setPw1('')
+      setPw2('')
+      s.showToast('密码已修改，请记牢')
+    } catch (e) {
+      setPwErr(friendlyError(e))
+    } finally {
+      setBusy('')
+    }
+  }
 
   const roots = useMemo(() => s.categories.filter((c) => !c.parent_id).sort((a, b) => a.sort - b.sort), [s.categories])
   const childrenOf = (id: string) => s.categories.filter((c) => c.parent_id === id && (showArchived || !c.is_archived)).sort((a, b) => a.sort - b.sort)
@@ -176,6 +199,7 @@ export function Settings() {
             if (window.confirm('清空程序缓存并重新加载？账本数据和登录状态不受影响。')) await hardReload()
           }}
         />
+        <Row label="修改密码" action="修改" onClick={() => setPwOpen(true)} />
         <Row
           label="退出登录"
           action="退出"
@@ -189,6 +213,31 @@ export function Settings() {
         />
         <div className="text-xs text-muted py-2">版本 {__APP_VERSION__}</div>
       </Section>
+
+      <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">
+        <input
+          className="w-full rounded-xl bg-bg px-4 py-3 mb-2"
+          type="password"
+          autoComplete="new-password"
+          placeholder="新密码（至少 6 位）"
+          value={pw1}
+          onChange={(e) => setPw1(e.target.value)}
+        />
+        <input
+          className="w-full rounded-xl bg-bg px-4 py-3 mb-2"
+          type="password"
+          autoComplete="new-password"
+          placeholder="再输一次"
+          value={pw2}
+          onChange={(e) => setPw2(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && submitPassword()}
+        />
+        {pwErr ? <div className="text-sm text-expense mb-2">{pwErr}</div> : null}
+        <div className="text-xs text-muted mb-3">改完之后其他设备上已登录的状态不受影响，下次重新登录才需要新密码。</div>
+        <button type="button" disabled={busy === 'pw'} className="w-full rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-40" onClick={submitPassword}>
+          {busy === 'pw' ? '提交中…' : '确认修改'}
+        </button>
+      </Sheet>
     </div>
   )
 }
