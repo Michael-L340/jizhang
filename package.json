@@ -9,7 +9,7 @@
     "preview": "vite preview --host",
     "check": "tsc -b",
     "test": "vitest run",
-    "deploy": "npm run check && npm run test && VITE_BASE=/jizhang/ vite build && gh-pages -d dist -m \"deploy $(date +%F_%H%M)\""
+    "deploy": "npm run check && npm run test && VITE_BASE=/jizhang/ vite build && touch dist/.nojekyll && gh-pages -d dist --dotfiles -m \"deploy\""
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.114.0",
