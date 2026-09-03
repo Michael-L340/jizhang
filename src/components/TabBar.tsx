@@ -15,7 +15,7 @@ export function TabBar() {
         {tabs.map((t) =>
           t.to === '/add' ? (
             <NavLink key={t.to} to={t.to} className="flex items-center justify-center" aria-label="记一笔">
-              <span className="w-12 h-12 -mt-5 rounded-full bg-brand text-white flex items-center justify-center shadow-lg">
+              <span className="w-[46px] h-[46px] -mt-2 rounded-full bg-brand text-white flex items-center justify-center shadow-md ring-4 ring-card">
                 <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
                   <path d={t.icon} />
                 </svg>

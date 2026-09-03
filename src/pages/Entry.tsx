@@ -3,9 +3,10 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
+import { DatePicker } from '../components/DatePicker'
 import { Keypad } from '../components/Keypad'
 import { recentChildOrder } from '../lib/compute'
-import { addDays, fmtDateRel, nowIso, today } from '../lib/date'
+import { fmtDateRel, nowIso, today } from '../lib/date'
 import { loadLocal, saveLocal, useOnline } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { fmtYuan, parseYuan } from '../lib/money'
@@ -69,6 +70,7 @@ export function Entry() {
   const [date, setDate] = useState(today())
   const [note, setNote] = useState('')
   const [more, setMore] = useState(false)
+  const [dateOpen, setDateOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -341,27 +343,19 @@ export function Entry() {
         )}
 
         <div className="flex items-center gap-2 text-sm mb-2">
-          <button type="button" className="chip" onClick={() => setMore(!more)}>
-            📅 {fmtDateRel(date)}
+          <button type="button" className={`chip ${date !== today() ? 'on' : ''}`} onClick={() => setDateOpen(true)}>
+            {fmtDateRel(date)}
           </button>
-          <button type="button" className={`chip flex-1 text-left truncate ${note ? '' : 'text-muted'}`} onClick={() => setMore(true)}>
-            📝 {note || '备注'}
+          <button type="button" className={`chip flex-1 text-left truncate ${note ? '' : 'text-muted'}`} onClick={() => setMore(!more)}>
+            {note || '备注（可不填）'}
           </button>
         </div>
         <div className={`expand ${more ? 'open' : ''}`}>
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <button type="button" className={`chip ${date === today() ? 'on' : ''}`} onClick={() => setDate(today())}>
-                今天
-              </button>
-              <button type="button" className={`chip ${date === addDays(today(), -1) ? 'on' : ''}`} onClick={() => setDate(addDays(today(), -1))}>
-                昨天
-              </button>
-              <input type="date" className="chip flex-1" value={date} max={today()} onChange={(e) => e.target.value && setDate(e.target.value)} />
-            </div>
             <input className="w-full rounded-xl bg-card border border-line px-3 py-2 mb-3" placeholder="备注（可不填）" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
+        <DatePicker open={dateOpen} value={date} onPick={setDate} onClose={() => setDateOpen(false)} />
       </div>
 
       <Keypad onInput={(k) => setAmount((a) => nextAmount(a, k))} onSave={save} saveLabel={editing ? '更新' : '保存'} disabled={busy || !online} />

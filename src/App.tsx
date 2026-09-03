@@ -66,7 +66,7 @@ function Root() {
 function Shell() {
   return (
     <div className="app-shell safe-top">
-      <main className="app-main">
+      <main className="app-main pb-2">
         <Outlet />
       </main>
       <TabBar />
