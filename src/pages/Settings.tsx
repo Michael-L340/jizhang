@@ -6,7 +6,7 @@ import { changePassword, friendlyError } from '../lib/api'
 import { buildCsv, buildJson, parseImport, shareOrDownload } from '../lib/csv'
 import { fmtIsoZh, today } from '../lib/date'
 import { checkForUpdate, hardReload } from '../lib/sw'
-import { useStore } from '../lib/store'
+import { CACHE_LIMIT_BYTES, useStore } from '../lib/store'
 
 export function Settings() {
   const nav = useNavigate()
@@ -21,6 +21,9 @@ export function Settings() {
   const updateAccount = useStore((st) => st.updateAccount)
   const importSnapshot = useStore((st) => st.importSnapshot)
   const showToast = useStore((st) => st.showToast)
+  const syncFailed = useStore((st) => st.syncFailed)
+  const cacheBytes = useStore((st) => st.cacheBytes)
+  const cacheDegraded = useStore((st) => st.cacheDegraded)
   const snapshot = useMemo(() => ({ accounts, categories, transactions }), [accounts, categories, transactions])
   const [busy, setBusy] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
@@ -132,7 +135,34 @@ export function Settings() {
       </Section>
 
       <Section title="数据">
-        <Row label={lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'} action={syncing ? '同步中…' : '立即同步'} onClick={() => void refresh()} />
+        <Row
+          label={`${lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}${syncFailed ? ' · 最近一次失败' : ''}`}
+          action={syncing ? '同步中…' : '立即同步'}
+          onClick={() => void refresh()}
+          danger={syncFailed}
+        />
+        <div className="py-3 border-b border-line last:border-0">
+          <div className="flex items-center justify-between text-sm">
+            <span>本机缓存</span>
+            <span className="num text-muted">
+              {fmtBytes(cacheBytes)} / {fmtBytes(CACHE_LIMIT_BYTES)}
+            </span>
+          </div>
+          <div className="mt-2 h-1.5 rounded-full bg-bg overflow-hidden">
+            <div
+              className="h-full rounded-full"
+              style={{
+                width: `${Math.min(100, Math.round((cacheBytes / CACHE_LIMIT_BYTES) * 100))}%`,
+                background: cacheDegraded ? 'var(--color-expense)' : cacheBytes / CACHE_LIMIT_BYTES > 0.7 ? 'var(--color-adjust)' : 'var(--color-brand)',
+              }}
+            />
+          </div>
+          <div className={`text-xs mt-1.5 ${cacheDegraded ? 'text-expense' : 'text-muted'}`}>
+            {cacheDegraded
+              ? '缓存已满，离线时看到的可能是旧数据。云端数据不受影响，请告诉我处理。'
+              : `${transactions.length} 条记录。缓存是为了打开快和离线可看，写满后会提示。`}
+          </div>
+        </div>
         <Row label="导出 CSV（Excel 可打开）" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
         <Row label="导出 JSON 完整备份" action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
         <Row label="从 JSON 备份导入 / 恢复" action={busy === 'import' ? '…' : '选择文件'} onClick={() => fileRef.current?.click()} />
@@ -191,13 +221,24 @@ export function Settings() {
           onKeyDown={(e) => e.key === 'Enter' && submitPassword()}
         />
         {pwErr ? <div className="text-sm text-expense mb-2">{pwErr}</div> : null}
-        <div className="text-xs text-muted mb-3">改完之后其他设备上已登录的状态不受影响，下次重新登录才需要新密码。</div>
+        <div className="text-xs text-muted mb-3">
+          改完之后其他设备上已登录的状态不受影响，下次重新登录才需要新密码。
+          <br />
+          如果已经配了自动备份，改完请告诉我同步更新备份用的密码，否则备份第二天起会失败。
+        </div>
         <button type="button" disabled={busy === 'pw'} className="w-full rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-40" onClick={submitPassword}>
           {busy === 'pw' ? '提交中…' : '确认修改'}
         </button>
       </Sheet>
     </div>
   )
+}
+
+function fmtBytes(n: number): string {
+  if (n <= 0) return '0'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${(n / 1024 / 1024).toFixed(2)} MB`
 }
 
 function Section(props: { title: string; children: React.ReactNode }) {

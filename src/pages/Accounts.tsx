@@ -14,6 +14,7 @@ export function Accounts() {
   const addTx = useStore((s) => s.addTx)
   const showToast = useStore((s) => s.showToast)
   const lastSync = useStore((s) => s.lastSync)
+  const syncFailed = useStore((s) => s.syncFailed)
   const accounts = useActiveAccounts()
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
   // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页
@@ -72,7 +73,10 @@ export function Accounts() {
       <div className="card p-4 mb-3">
         <div className="text-xs text-muted">总余额</div>
         <div className={`num text-3xl font-bold ${totalOf(bal) < 0 ? 'text-expense' : ''}`}>{fmtYuan(totalOf(bal), { symbol: true })}</div>
-        <div className="text-xs text-muted mt-1">{lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}</div>
+        <div className={`text-xs mt-1 ${syncFailed ? 'text-adjust' : 'text-muted'}`}>
+          {lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}
+          {syncFailed ? ' · 最近一次同步失败' : ''}
+        </div>
       </div>
 
       <div className="flex flex-col gap-2">

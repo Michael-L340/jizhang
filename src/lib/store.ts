@@ -4,6 +4,7 @@ import { create } from 'zustand'
 import type { Account, CatKind, Category, Snapshot, Transaction } from '../types'
 import * as api from './api'
 import { nowIso } from './date'
+import { applyPending, DELETED, type Pending } from './pending'
 
 const CACHE_KEY = 'jz_cache_v1'
 
@@ -23,14 +24,20 @@ function readCache(): Cache | null {
   }
 }
 
-function writeCache(s: Snapshot) {
-  try {
-    const c: Cache = { ...s, at: nowIso() }
-    localStorage.setItem(CACHE_KEY, JSON.stringify(c))
-  } catch {
-    /* 存储满或被禁用时忽略 */
-  }
+/**
+ * 写缓存。只写三张表，不要把整个 store 展开进来（否则 auth/syncing/toast 也会被写）。
+ * 返回写入的字符数；浏览器按 UTF-16 计配额，字节数 = 字符数 × 2。
+ * 抛错交给调用方处理，不再静默吞掉。
+ */
+function writeCache(s: Snapshot): number {
+  const c: Cache = { accounts: s.accounts, categories: s.categories, transactions: s.transactions, at: nowIso() }
+  const json = JSON.stringify(c)
+  localStorage.setItem(CACHE_KEY, json)
+  return CACHE_KEY.length + json.length
 }
+
+/** localStorage 的大致上限（5 MiB，按 UTF-16 字节算） */
+export const CACHE_LIMIT_BYTES = 5 * 1024 * 1024
 
 export interface Toast {
   id: number
@@ -44,10 +51,18 @@ export interface State extends Snapshot {
   loaded: boolean
   syncing: boolean
   lastSync: string | null
+  /** 上次同步是否失败（首次加载成功后失败不再静默） */
+  syncFailed: boolean
   toast: Toast | null
+  /** 本机缓存占用字节数（UTF-16），0 表示还没写过 */
+  cacheBytes: number
+  /** 缓存写不进去了（配额满或被禁用），离线看到的数据可能是旧的 */
+  cacheDegraded: boolean
 
   init: () => Promise<void>
   refresh: () => Promise<void>
+  /** 去抖写入本机缓存，从当前 state 现读，不接受外部快照 */
+  persist: () => void
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
 
@@ -64,6 +79,18 @@ export interface State extends Snapshot {
   hideToast: () => void
 }
 
+// ── 在途写入的补丁表 ──────────────────────────────────────────
+// 一次写请求飞在路上时，refresh() 拉回的快照里还没有它。直接 set 会把它冲掉，
+// 用户看到「刚记的那笔消失了」而实际上云端已经存了，很容易重记一遍。
+// 所以 refresh 落地前先把在途补丁叠回去。
+const pendingTx: Pending<Transaction> = new Map()
+const pendingCat: Pending<Category> = new Map()
+
+// ── 缓存写入去抖 ────────────────────────────────────────────
+// 每次增删改都同步 JSON.stringify 全量流水，数据多了会让「保存」明显卡顿，
+// 而撤销路径还会连着触发两次。尾部去抖 500ms。
+let persistTimer: ReturnType<typeof setTimeout> | null = null
+
 let toastSeq = 0
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let unsubAuth: (() => void) | null = null
@@ -76,11 +103,21 @@ export const useStore = create<State>((set, get) => ({
   loaded: false,
   syncing: false,
   lastSync: null,
+  syncFailed: false,
   toast: null,
+  cacheBytes: 0,
+  cacheDegraded: false,
 
   async init() {
     const cache = readCache()
-    if (cache) set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, lastSync: cache.at })
+    if (cache) {
+      set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, lastSync: cache.at })
+      try {
+        set({ cacheBytes: (CACHE_KEY.length + (localStorage.getItem(CACHE_KEY)?.length ?? 0)) * 2 })
+      } catch {
+        /* 读不到就当没有 */
+      }
+    }
     const signedIn = await api.hasSession()
     set({ auth: signedIn ? 'in' : 'out' })
     unsubAuth?.()
@@ -97,13 +134,39 @@ export const useStore = create<State>((set, get) => ({
     set({ syncing: true })
     try {
       const snap = await api.fetchAll()
-      set({ ...snap, loaded: true, lastSync: nowIso() })
-      writeCache(snap)
+      // 把还在飞的写入叠回去，否则刚记的那笔会被这份快照冲掉
+      const merged: Snapshot = {
+        accounts: snap.accounts,
+        categories: applyPending(snap.categories, pendingCat),
+        transactions: applyPending(snap.transactions, pendingTx),
+      }
+      set({ ...merged, loaded: true, lastSync: nowIso(), syncFailed: false })
+      get().persist()
     } catch (e) {
+      // 首次加载成功之后失败也要留痕，否则断网/登录过期/项目休眠全都无声
+      set({ syncFailed: true })
       if (!get().loaded) get().showToast(`同步失败：${api.friendlyError(e)}`)
     } finally {
       set({ syncing: false })
     }
+  },
+
+  persist() {
+    if (persistTimer) clearTimeout(persistTimer)
+    persistTimer = setTimeout(() => {
+      persistTimer = null
+      const { accounts, categories, transactions } = get()
+      try {
+        const bytes = writeCache({ accounts, categories, transactions }) * 2
+        set({ cacheBytes: bytes, cacheDegraded: false })
+      } catch {
+        // 配额满或被禁用。云端数据不受影响，但离线看到的会是旧的，必须让用户知道
+        if (!get().cacheDegraded) {
+          set({ cacheDegraded: true })
+          get().showToast('本机缓存已满，离线时看到的可能是旧数据')
+        }
+      }
+    }, 500)
   },
 
   async signIn(email, password) {
@@ -114,59 +177,75 @@ export const useStore = create<State>((set, get) => ({
 
   async signOut() {
     await api.signOut()
+    // 先取消在途的去抖写入，否则它会落在 removeItem 之后，缓存又被写回来
+    if (persistTimer) {
+      clearTimeout(persistTimer)
+      persistTimer = null
+    }
+    pendingTx.clear()
+    pendingCat.clear()
     try {
       localStorage.removeItem(CACHE_KEY)
     } catch {
       /* ignore */
     }
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false })
   },
 
   async addTx(t) {
-    const prev = get().transactions
-    const next = [t, ...prev]
-    set({ transactions: next })
-    writeCache({ ...get(), transactions: next })
+    pendingTx.set(t.id, t)
+    // 函数式 set + 按 id 打补丁：整数组快照回滚会把并发操作的结果一起抹掉
+    set((s) => ({ transactions: [t, ...s.transactions] }))
+    get().persist()
     try {
       await api.insertTx(t)
       return true
     } catch (e) {
-      set({ transactions: prev })
-      writeCache({ ...get(), transactions: prev })
+      set((s) => ({ transactions: s.transactions.filter((x) => x.id !== t.id) }))
+      get().persist()
       get().showToast(`保存失败：${api.friendlyError(e)}`)
       return false
+    } finally {
+      pendingTx.delete(t.id)
     }
   },
 
   async editTx(t) {
-    const prev = get().transactions
-    const next = prev.map((x) => (x.id === t.id ? t : x))
-    set({ transactions: next })
-    writeCache({ ...get(), transactions: next })
+    const before = get().transactions.find((x) => x.id === t.id)
+    pendingTx.set(t.id, t)
+    set((s) => ({ transactions: s.transactions.map((x) => (x.id === t.id ? t : x)) }))
+    get().persist()
     try {
       await api.updateTx(t)
       return true
     } catch (e) {
-      set({ transactions: prev })
-      writeCache({ ...get(), transactions: prev })
+      // 用 map 换回旧值而不是插回去：这条可能已被并发删除，插回去会让它复活
+      if (before) set((s) => ({ transactions: s.transactions.map((x) => (x.id === t.id ? before : x)) }))
+      get().persist()
       get().showToast(`修改失败：${api.friendlyError(e)}`)
       return false
+    } finally {
+      pendingTx.delete(t.id)
     }
   },
 
   async removeTx(id) {
-    const prev = get().transactions
-    const next = prev.filter((x) => x.id !== id)
-    set({ transactions: next })
-    writeCache({ ...get(), transactions: next })
+    const row = get().transactions.find((x) => x.id === id)
+    pendingTx.set(id, DELETED)
+    set((s) => ({ transactions: s.transactions.filter((x) => x.id !== id) }))
+    get().persist()
     try {
       await api.deleteTx(id)
       return true
     } catch (e) {
-      set({ transactions: prev })
-      writeCache({ ...get(), transactions: prev })
+      // 位置无所谓：列表都靠 groupByDay/sortTxs 重排。但要幂等，
+      // 万一 refresh 已经把它拉回来了，不能插成两条
+      if (row) set((s) => (s.transactions.some((x) => x.id === id) ? s : { transactions: [row, ...s.transactions] }))
+      get().persist()
       get().showToast(`删除失败：${api.friendlyError(e)}`)
       return false
+    } finally {
+      pendingTx.delete(id)
     }
   },
 
@@ -182,9 +261,11 @@ export const useStore = create<State>((set, get) => ({
     const sort = siblings.reduce((m, c) => Math.max(m, c.sort), 0) + 1
     try {
       const created = await api.addCategory({ kind, parent_id: parentId, name: trimmed, sort })
-      const categories = [...get().categories, created]
-      set({ categories })
-      writeCache({ ...get(), categories })
+      // 登记为在途：紧接着的一次 refresh 可能还拉不到它，会把它冲掉
+      pendingCat.set(created.id, created)
+      set((st) => ({ categories: [...st.categories, created] }))
+      get().persist()
+      setTimeout(() => pendingCat.delete(created.id), 10_000)
       return created
     } catch (e) {
       get().showToast(`新增分类失败：${api.friendlyError(e)}`)
@@ -193,30 +274,32 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async updateCategory(id, patch) {
-    const prev = get().categories
-    const next = prev.map((c) => (c.id === id ? { ...c, ...patch } : c))
-    set({ categories: next })
+    const before = get().categories.find((c) => c.id === id)
+    const after = before ? { ...before, ...patch } : undefined
+    if (after) pendingCat.set(id, after)
+    set((s) => ({ categories: s.categories.map((c) => (c.id === id ? { ...c, ...patch } : c)) }))
     try {
       await api.updateCategory(id, patch)
-      writeCache({ ...get(), categories: next })
+      get().persist()
       return true
     } catch (e) {
-      set({ categories: prev })
+      if (before) set((s) => ({ categories: s.categories.map((c) => (c.id === id ? before : c)) }))
       get().showToast(`修改分类失败：${api.friendlyError(e)}`)
       return false
+    } finally {
+      pendingCat.delete(id)
     }
   },
 
   async updateAccount(id, patch) {
-    const prev = get().accounts
-    const next = prev.map((a) => (a.id === id ? { ...a, ...patch } : a))
-    set({ accounts: next })
+    const before = get().accounts.find((a) => a.id === id)
+    set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? { ...a, ...patch } : a)) }))
     try {
       await api.updateAccount(id, patch)
-      writeCache({ ...get(), accounts: next })
+      get().persist()
       return true
     } catch (e) {
-      set({ accounts: prev })
+      if (before) set((s) => ({ accounts: s.accounts.map((a) => (a.id === id ? before : a)) }))
       get().showToast(`修改账户失败：${api.friendlyError(e)}`)
       return false
     }
