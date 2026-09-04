@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { categoryColor, childColors, hexToHsl } from './palette'
+import { categoryColor, childColors, childShade, hexToHsl } from './palette'
 
 /** 两个颜色在 RGB 空间的距离。粗糙但够用：肉眼能分辨大约要 40 以上 */
 function dist(a: string, b: string): number {
@@ -67,5 +67,28 @@ describe('二级分类配色', () => {
   it('没匹配到名字的按顺序取备用色，且会循环不会越界', () => {
     expect(categoryColor('新分类', 0)).toBe('#2f6fed')
     expect(categoryColor('新分类', 9)).toBe(categoryColor('新分类', 0))
+  })
+})
+
+describe('流水行里二级分类的底色', () => {
+  it('同一个二级分类的底色永远不变（按 sort 取，不随出现顺序变）', () => {
+    expect(childShade('#f5a524', 3)).toBe(childShade('#f5a524', 3))
+  })
+
+  it('同一大类下相邻的两个二级底色不同，连着几行才不会糊成一片', () => {
+    const shades = [1, 2, 3, 4, 5, 6].map((s) => childShade('#f5a524', s))
+    expect(new Set(shades).size).toBe(6)
+  })
+
+  it('仍然是父色那个色系，一眼还能看出属于哪个大类', () => {
+    const [h0] = hexToHsl('#2f6fed')
+    for (const s of [1, 2, 3, 4, 5, 6]) {
+      const [h] = hexToHsl(childShade('#2f6fed', s))
+      expect(Math.min(Math.abs(h - h0), 360 - Math.abs(h - h0))).toBeLessThanOrEqual(25)
+    }
+  })
+
+  it('sort 超出范围或为 0 也不会崩', () => {
+    for (const s of [0, 7, 99, -3]) expect(childShade('#f5a524', s)).toMatch(/^#[0-9a-f]{6}$/)
   })
 })

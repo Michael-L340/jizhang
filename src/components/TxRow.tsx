@@ -1,6 +1,7 @@
 import type { Account, Category, Transaction } from '../types'
 import { AccountIcon } from './AccountIcon'
-import { categoryColor } from '../lib/palette'
+import { categoryColor, childShade } from '../lib/palette'
+import { guessIcon } from '../lib/icons'
 import { fmtYuan } from '../lib/money'
 
 interface Props {
@@ -23,11 +24,16 @@ export function describeTx(tx: Transaction, accounts: Map<string, Account>, cate
   const c = tx.category_id ? categories.get(tx.category_id) : undefined
   const parent = c?.parent_id ? categories.get(c.parent_id) : c
   const title = c ? (c.parent_id ? `${parent?.name ?? ''} · ${c.name}` : c.name) : '未分类'
+  // 图标优先用二级自己的，其次按二级的名字猜，最后才退回一级的。
+  // 只用一级的话，「日常开支 · 午餐 / 早餐 / 通勤交通」连着几行长得一模一样。
+  const own = c?.parent_id ? c.icon ?? guessIcon(c.name) : null
+  const rootColor = parent ? categoryColor(parent.name) : '#7a808c'
   return {
-    icon: parent?.icon ?? (tx.type === 'income' ? '💰' : '🧾'),
+    icon: own ?? parent?.icon ?? guessIcon(parent?.name ?? '') ?? (tx.type === 'income' ? '💰' : '🧾'),
     title,
     sub: acc,
-    tint: parent ? categoryColor(parent.name) : '#7a808c',
+    // 底色仍来自一级分类，一眼还能看出属于哪个大类；二级之间用同色系的深浅区分
+    tint: c?.parent_id ? childShade(rootColor, c.sort) : rootColor,
   }
 }
 

@@ -2,22 +2,10 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sheet } from '../components/Sheet'
+import { guessIcon, ICON_GROUPS } from '../lib/icons'
 import { categoryColor } from '../lib/palette'
 import { useStore } from '../lib/store'
 import type { CatKind, Category } from '../types'
-
-const ICONS = [
-  // 吃喝
-  '🧾', '🍚', '🍜', '🍽️', '☕', '🥤', '🍎', '🛒',
-  // 娱乐
-  '🎮', '🎬', '🎧', '🎤', '🎯', '🏀', '✈️', '🎫',
-  // 居住出行
-  '🏠', '💡', '💧', '🚇', '🚌', '🚗', '📶', '🧺',
-  // 购买
-  '🛍️', '👕', '👟', '👜', '📱', '💻', '🎁', '📦',
-  // 其他
-  '💊', '📚', '✂️', '🐾', '⚡', '🔧', '💰', '🏷️',
-]
 
 export function Categories() {
   const nav = useNavigate()
@@ -169,7 +157,7 @@ export function Categories() {
                             style={{ padding: '5px 12px' }}
                             onClick={() => setEditCat(c)}
                           >
-                            {c.name}
+                            {c.icon ?? guessIcon(c.name) ?? ''} {c.name}
                           </button>
                         ))}
                         <button type="button" className="chip border-dashed text-muted" style={{ padding: '5px 12px' }} onClick={() => addChild(p.id)}>
@@ -203,7 +191,7 @@ export function Categories() {
       </div>
 
       <div className="text-xs text-muted leading-relaxed px-1">
-        点图标可以换 emoji，点分类名展开二级。分类只能归档不能删除，历史记录永远不会变成孤儿。改名和移动都会追溯影响已有记录的统计归属。
+        点图标可以换 emoji，点分类名展开二级。二级分类没设图标时会按名字自动选一个，也可以点进去换。分类只能归档不能删除，历史记录永远不会变成孤儿。改名和移动都会追溯影响已有记录的统计归属。
       </div>
 
       {/* 单个分类的操作 */}
@@ -265,6 +253,13 @@ export function Categories() {
                 setEditCat(null)
               }}
             />
+            <Action
+              label="换图标"
+              onClick={() => {
+                setIconFor(editCat)
+                setEditCat(null)
+              }}
+            />
             {editCat.parent_id ? <Action label="移动到其他大类" onClick={() => setMoving(true)} /> : null}
             <Action
               label={editCat.is_archived ? '取消归档' : '归档（不再出现在记账页）'}
@@ -290,21 +285,38 @@ export function Categories() {
 
       {/* 换图标 */}
       <Sheet open={Boolean(iconFor)} onClose={() => setIconFor(null)} title={iconFor ? `${iconFor.name} 的图标` : ''}>
-        <div className="grid grid-cols-8 gap-1.5">
-          {ICONS.map((e) => (
-            <button
-              key={e}
-              type="button"
-              className={`h-11 rounded-xl text-xl ${iconFor?.icon === e ? 'bg-brand-soft ring-2 ring-brand' : 'bg-bg'}`}
-              onClick={async () => {
-                if (iconFor) await updateCategory(iconFor.id, { icon: e })
-                setIconFor(null)
-              }}
-            >
-              {e}
-            </button>
-          ))}
-        </div>
+        {iconFor?.parent_id ? (
+          <button
+            type="button"
+            className={`w-full mb-2 py-2.5 rounded-xl text-sm ${iconFor.icon ? 'bg-bg' : 'bg-brand-soft ring-2 ring-brand'}`}
+            onClick={async () => {
+              if (iconFor.icon) await updateCategory(iconFor.id, { icon: null })
+              setIconFor(null)
+            }}
+          >
+            按名字自动选（现在是 {guessIcon(iconFor.name) ?? '跟随大类'}）
+          </button>
+        ) : null}
+        {ICON_GROUPS.map((g) => (
+          <div key={g.name} className="mb-3">
+            <div className="text-xs text-muted mb-1.5">{g.name}</div>
+            <div className="grid grid-cols-8 gap-1.5">
+              {g.icons.map((e) => (
+                <button
+                  key={e}
+                  type="button"
+                  className={`h-11 rounded-xl text-xl ${iconFor?.icon === e ? 'bg-brand-soft ring-2 ring-brand' : 'bg-bg'}`}
+                  onClick={async () => {
+                    if (iconFor) await updateCategory(iconFor.id, { icon: e })
+                    setIconFor(null)
+                  }}
+                >
+                  {e}
+                </button>
+              ))}
+            </div>
+          </div>
+        ))}
       </Sheet>
     </div>
   )

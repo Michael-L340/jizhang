@@ -99,3 +99,15 @@ export function childColors(parentColor: string, n: number): string[] {
   }
   return out
 }
+
+/**
+ * 二级分类在流水行里的底色：同色系里一个稳定的深浅。
+ *
+ * 底色仍然来自一级分类的颜色，所以一眼还能看出属于哪个大类；
+ * 但同一大类下的不同二级会落在不同的深浅上，连着几行不会糊成一片。
+ * 按 sort 取而不是按出现顺序，保证同一个二级分类的底色永远不变。
+ */
+export function childShade(parentColor: string, sort: number): string {
+  const ramp = childColors(parentColor, 6)
+  return ramp[(((sort - 1) % 6) + 6) % 6]
+}
