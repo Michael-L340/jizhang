@@ -105,7 +105,7 @@ async function seed(db: PGlite): Promise<void> {
   await mk('2026-09-03', 'income', 1300000, boc, salary)
   await mk('2026-09-03', 'transfer', 30000, boc, null, wx)
   await mk('2026-09-03', 'adjust', -1084, wx, null, null, '余额校准')
-  await mk('2026-09-04', 'adjust', 214874, boc, null, null, '初始余额')
+  await mk('2026-09-04', 'adjust', 214874, boc, null, null, '余额校准')
 }
 
 const byId = (rows: Row[]) => [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))

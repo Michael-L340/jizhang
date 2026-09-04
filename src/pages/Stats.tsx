@@ -4,8 +4,8 @@ import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
-import { adjustTotal, balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, isVerifiedAdjust, monthTotals, OPENING_NOTE, openingAdjustIds, seriesByCategory, seriesTotals, withVerified, withoutVerified, type Unit } from '../lib/compute'
-import { addDays, fmtDateRel, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
+import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
+import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { categoryColor, childColors } from '../lib/palette'
 import { usePersistedState } from '../lib/hooks'
@@ -19,7 +19,6 @@ export function Stats() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
-  const editTx = useStore((s) => s.editTx)
   const nav = useNavigate()
   const [ym, setYm] = useState(monthOf(today()))
   const [kind, setKind] = usePersistedState<'expense' | 'income'>('jz_stats_pieKind', 'expense')
@@ -31,8 +30,6 @@ export function Stats() {
   const [trendKind, setTrendKind] = usePersistedState<'expense' | 'income'>('jz_stats_trendKind', 'expense')
   const [balMode, setBalMode] = usePersistedState<'total' | 'account'>('jz_stats_balMode', 'total')
   const [help, setHelp] = useState(false)
-  const [adjOpen, setAdjOpen] = useState(false)
-  const [adjBusy, setAdjBusy] = useState(false)
 
   const agg = useMemo(() => byCategory(txs, cats, ym, kind), [txs, cats, ym, kind])
   const rootColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
@@ -246,21 +243,6 @@ export function Stats() {
     }
   }, [bal, accounts, keys, labels, fewPoints, unit, balMode])
 
-  const adjMonth = useMemo(() => adjustTotal(txs, ym), [txs, ym])
-  const adjAll = useMemo(() => adjustTotal(txs), [txs])
-  // 「未记录差额」的明细：每一笔校准是算作漏记、还是本金/已核实
-  const adjRows = useMemo(() => {
-    const opening = openingAdjustIds(txs)
-    return txs
-      .filter((t) => t.type === 'adjust' && t.amount !== 0)
-      .sort((a, b) => (a.date === b.date ? (a.created_at < b.created_at ? 1 : -1) : a.date < b.date ? 1 : -1))
-      .map((t) => ({
-        tx: t,
-        opening: opening.has(t.id) || t.note === OPENING_NOTE,
-        verified: isVerifiedAdjust(t),
-      }))
-  }, [txs])
-  const countable = adjRows.filter((r) => !r.opening && !r.verified)
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const roots = useMemo(() => cats.filter((c) => !c.parent_id && c.kind === 'expense' && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
 
@@ -439,77 +421,7 @@ export function Stats() {
         <div className="text-[11px] text-muted mt-1">每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录；点一下可以看当时的流水。</div>
       </div>
 
-      <button type="button" className="card p-4 mb-3 text-sm w-full text-left" onClick={() => setAdjOpen(true)}>
-        <div className="flex justify-between py-1">
-          <span className="text-muted">本月未记录差额</span>
-          <span className={`num ${adjMonth < 0 ? 'text-expense' : adjMonth > 0 ? 'text-income' : ''}`}>{fmtYuan(adjMonth, { sign: true })}</span>
-        </div>
-        <div className="flex justify-between py-1">
-          <span className="text-muted">累计未记录差额</span>
-          <span className={`num ${adjAll < 0 ? 'text-expense' : adjAll > 0 ? 'text-income' : ''}`}>{fmtYuan(adjAll, { sign: true })}</span>
-        </div>
-        <div className="text-xs text-muted mt-1 flex items-center justify-between gap-2">
-          <span>来自余额校准，不含开户时录入的初始余额：负数说明有支出没记，正数说明有收入没记。</span>
-          <span className="text-brand shrink-0">明细 ›</span>
-        </div>
-      </button>
-
       <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />
-
-      <Sheet open={adjOpen} onClose={() => setAdjOpen(false)} title="未记录差额明细">
-        <div className="text-xs text-muted leading-relaxed mb-3">
-          每次在账户页输入实际余额，差额都会记一条「余额校准」。开户时录的第一笔是本金，已经自动排除。
-          剩下的默认算作「有账没记」；如果你核对过、确认那笔差额有正当来源（比如利息、手续费、别人转的钱），
-          可以标成「已核实」，它就不再计入这个数字，但记录本身还在流水里，随时能取消。
-        </div>
-        {countable.length > 1 ? (
-          <button
-            type="button"
-            disabled={adjBusy}
-            className="w-full mb-3 py-2.5 rounded-xl bg-bg text-sm disabled:opacity-40"
-            onClick={async () => {
-              setAdjBusy(true)
-              for (const r of countable) await editTx({ ...r.tx, note: withVerified(r.tx.note) })
-              setAdjBusy(false)
-            }}
-          >
-            {adjBusy ? '处理中…' : `把这 ${countable.length} 笔全部标为已核实`}
-          </button>
-        ) : null}
-        <div className="flex flex-col">
-          {adjRows.length === 0 ? <div className="text-sm text-muted py-8 text-center">还没有任何余额校准</div> : null}
-          {adjRows.map(({ tx, opening, verified }) => (
-            <div key={tx.id} className="flex items-center gap-3 py-2.5 border-b border-line last:border-0">
-              <span className="flex-1 min-w-0">
-                <span className="block text-[15px] num">
-                  {fmtYuan(tx.amount, { sign: true })}
-                  <span className="text-xs text-muted ml-2">{accounts.find((a) => a.id === tx.account_id)?.name ?? '未知账户'}</span>
-                </span>
-                <span className="block text-xs text-muted truncate">
-                  {fmtDateRel(tx.date)}
-                  {opening ? ' · 开户本金，不计入' : verified ? ' · 已核实，不计入' : ' · 算作有账没记'}
-                </span>
-              </span>
-              {opening ? (
-                <span className="text-xs text-muted shrink-0">自动排除</span>
-              ) : (
-                <button
-                  type="button"
-                  disabled={adjBusy}
-                  className={`text-xs shrink-0 rounded-full px-3 py-1.5 disabled:opacity-40 ${verified ? 'bg-bg text-muted' : 'bg-brand-soft text-brand'}`}
-                  onClick={async () => {
-                    setAdjBusy(true)
-                    await editTx({ ...tx, note: verified ? withoutVerified(tx.note) : withVerified(tx.note) })
-                    setAdjBusy(false)
-                  }}
-                >
-                  {verified ? '取消核实' : '标为已核实'}
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
-      </Sheet>
 
       <Sheet open={help} onClose={() => setHelp(false)} title="五大类的含义">
         <div className="flex flex-col gap-3">

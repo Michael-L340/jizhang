@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { Sheet } from '../components/Sheet'
-import { balances, OPENING_NOTE, totalOf } from '../lib/compute'
+import { balances, totalOf } from '../lib/compute'
 import { fmtIsoZh, nowIso, today } from '../lib/date'
 import { newId } from '../lib/id'
 import { fmtYuan, parseYuan } from '../lib/money'
@@ -42,9 +42,6 @@ export function Accounts() {
 
   async function confirm() {
     if (!target || delta === null) return
-    // 账户还没有任何记录时，推算余额是 0，这笔差额就是开户本金而不是漏记差异。
-    // 备注写成「初始余额」，统计页的「未记录差额」才不会把本金算成「有收入忘了记」。
-    const virgin = !txs.some((t) => t.account_id === target.id || t.to_account_id === target.id)
     setBusy(true)
     const ok = await addTx({
       id: newId(),
@@ -54,7 +51,7 @@ export function Accounts() {
       account_id: target.id,
       to_account_id: null,
       category_id: null,
-      note: delta === 0 ? '余额核对' : virgin ? OPENING_NOTE : '余额校准',
+      note: delta === 0 ? '余额核对' : '余额校准',
       created_at: nowIso(),
     })
     setBusy(false)
@@ -100,7 +97,6 @@ export function Accounts() {
 
       <div className="text-xs text-muted mt-4 leading-relaxed">
         点账户输入实际余额。若与推算不一致，差额会记成一条「余额校准」，出现在流水里但不计入收入支出；随时可以删除或改成一笔正常收支。
-        第一次给一个账户录余额时，那条记录的备注是「初始余额」——它是本金，不会被统计页算成「有收入忘了记」。
       </div>
 
       <Sheet open={Boolean(target)} onClose={() => setTarget(null)} title={target ? `${target.name} · 输入实际余额` : ''}>

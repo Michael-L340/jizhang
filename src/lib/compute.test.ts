@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, isVerifiedAdjust, monthSummary, monthTotals, monthlySeries, OPENING_NOTE, openingAdjustIds, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf, VERIFIED_MARK, withVerified, withoutVerified } from './compute'
+import { balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, monthSummary, monthTotals, monthlySeries, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -153,83 +153,6 @@ describe('month stats exclude transfer and adjust', () => {
     expect(agg[0].children.map((c) => c.name).sort()).toEqual(['未细分', '午餐'].sort())
   })
 
-  it('adjustTotal reports unrecorded delta', () => {
-    expect(adjustTotal(txs, '2026-09')).toBe(-99999)
-  })
-
-  describe('adjustTotal 排除开户时录的初始余额', () => {
-    // 一条校准记的是「实际 − 推算」。账户还没有任何记录时推算是 0，
-    // 差额就等于本金 —— 那不是漏记，不能算进「未记录差额」。
-    it('账户的第一条记录就是校准时，那是本金不是漏记', () => {
-      const open = [tx({ type: 'adjust', amount: 1500000, account_id: 'boc' })]
-      expect(adjustTotal(open)).toBe(0)
-    })
-
-    it('备注写了「初始余额」的一律排除', () => {
-      const rows = [
-        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
-        tx({ type: 'adjust', amount: 1500000, account_id: 'boc', note: OPENING_NOTE }),
-      ]
-      expect(adjustTotal(rows)).toBe(0)
-    })
-
-    it('已经有记录之后再做的校准，仍然算漏记差额', () => {
-      const rows = [
-        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
-        tx({ type: 'adjust', amount: -5000, account_id: 'boc' }),
-      ]
-      expect(adjustTotal(rows)).toBe(-5000)
-    })
-
-    it('开户那笔排除，之后的校准照常统计', () => {
-      const rows = [
-        tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
-        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
-        tx({ type: 'adjust', amount: -5000, account_id: 'boc' }),
-      ]
-      expect(adjustTotal(rows)).toBe(-5000)
-    })
-
-    it('每个账户各认各的开户那笔', () => {
-      const rows = [
-        tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
-        tx({ type: 'adjust', amount: 30000, account_id: 'wx' }),
-        tx({ type: 'adjust', amount: -700, account_id: 'wx' }),
-      ]
-      expect(adjustTotal(rows)).toBe(-700)
-    })
-
-    it('转账进来也算「已经有记录」，之后的校准是真差额', () => {
-      const rows = [
-        tx({ type: 'transfer', amount: 100000, account_id: 'cmb', to_account_id: 'wx' }),
-        tx({ type: 'adjust', amount: -700, account_id: 'wx' }),
-      ]
-      expect(adjustTotal(rows)).toBe(-700)
-    })
-
-    it('补记一笔更早日期的账，不能改变谁是开户那笔', () => {
-      // 用 created_at 判断而不是 date：否则今天补记上周的开销，
-      // 统计页那个数字会莫名其妙地变
-      const rows = [
-        tx({ type: 'adjust', amount: 1500000, account_id: 'boc', date: '2026-09-03' }),
-        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch', date: '2026-08-20' }),
-      ]
-      expect(adjustTotal(rows)).toBe(0)
-    })
-
-    it('不指定账户的流水不影响判断', () => {
-      const rows = [
-        tx({ type: 'expense', amount: 53800, account_id: null, category_id: 'lunch' }),
-        tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
-      ]
-      expect(adjustTotal(rows)).toBe(0)
-    })
-
-    it('按月统计时也要排除', () => {
-      const rows = [tx({ type: 'adjust', amount: 1500000, account_id: 'boc', date: '2026-09-03' })]
-      expect(adjustTotal(rows, '2026-09')).toBe(0)
-    })
-  })
   it('dailyCumulative ends at month expense and nulls future days', () => {
     const arr = dailyCumulative(txs, '2026-09', '2026-09-05')
     expect(arr.length).toBe(30)
@@ -390,80 +313,3 @@ describe('月份选择器与起点', () => {
   })
 })
 
-describe('把校准标记成「已核实」', () => {
-  it('标记后不再计入未记录差额，取消后又计入', () => {
-    const rows = [
-      tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
-      tx({ type: 'adjust', amount: -5000, account_id: 'boc', note: '余额校准' }),
-    ]
-    expect(adjustTotal(rows)).toBe(-5000)
-    rows[1] = { ...rows[1], note: withVerified(rows[1].note) }
-    expect(adjustTotal(rows)).toBe(0)
-    rows[1] = { ...rows[1], note: withoutVerified(rows[1].note) }
-    expect(adjustTotal(rows)).toBe(-5000)
-  })
-
-  it('保留用户自己写的备注，不能把它冲掉', () => {
-    expect(withVerified('银行给的利息')).toBe(`银行给的利息 · ${VERIFIED_MARK}`)
-    expect(withoutVerified(`银行给的利息 · ${VERIFIED_MARK}`)).toBe('银行给的利息')
-  })
-
-  it('没有备注时来回切换要干净，不能留下一个孤零零的点', () => {
-    expect(withVerified(null)).toBe(VERIFIED_MARK)
-    expect(withoutVerified(VERIFIED_MARK)).toBeNull()
-    expect(withoutVerified(withVerified(null))).toBeNull()
-  })
-
-  it('重复标记不会越加越长', () => {
-    const once = withVerified('余额校准')
-    expect(withVerified(once)).toBe(once)
-    expect(withVerified(withVerified(withVerified(null)))).toBe(VERIFIED_MARK)
-  })
-
-  it('来回切换任意次，备注都能回到原样', () => {
-    for (const start of [null, '余额校准', '银行利息', '  前后有空格  ', '利息 · 招行']) {
-      let n: string | null = start
-      for (let i = 0; i < 3; i++) n = withoutVerified(withVerified(n))
-      expect(n).toBe(start === null ? null : start.trim())
-    }
-  })
-
-  it('标记在开头时取消也要干净，不能留下孤零零的分隔符', () => {
-    expect(withoutVerified(`${VERIFIED_MARK} · 银行利息`)).toBe('银行利息')
-    expect(withoutVerified(`银行利息 · ${VERIFIED_MARK} · 招行`)).toBe('银行利息 · 招行')
-  })
-
-  it('用户自己写的「银行已核实的利息」不算我们的标记', () => {
-    // 整段相等才算，否则用户的正常文字会被误判，而且取消时无从下手
-    // 先建支出再建校准：tx() 按调用顺序发 created_at，反过来的话这笔校准会成为
-    // 该账户的第一条记录，被当成开户本金排除，测不到我们想测的东西
-    const first = tx({ type: 'expense', amount: 1, account_id: 'boc', category_id: 'lunch' })
-    const t1 = tx({ type: 'adjust', amount: -1, account_id: 'boc', note: '银行已核实的利息' })
-    expect(isVerifiedAdjust(t1)).toBe(false)
-    expect(adjustTotal([first, t1])).toBe(-1)
-  })
-
-  it('isVerifiedAdjust 认得出标记', () => {
-    expect(isVerifiedAdjust(tx({ type: 'adjust', amount: -1, account_id: 'boc', note: withVerified('余额校准') }))).toBe(true)
-    expect(isVerifiedAdjust(tx({ type: 'adjust', amount: -1, account_id: 'boc', note: '余额校准' }))).toBe(false)
-  })
-
-  it('开户本金是自动排除的，不需要也不允许用户去标记', () => {
-    const rows = [
-      tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
-      tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
-      tx({ type: 'adjust', amount: -5000, account_id: 'boc' }),
-    ]
-    const opening = openingAdjustIds(rows)
-    expect(opening.has(rows[0].id)).toBe(true)
-    expect(opening.has(rows[2].id)).toBe(false)
-  })
-
-  it('按月统计时也认「已核实」', () => {
-    const rows = [
-      tx({ type: 'expense', amount: 100, account_id: 'boc', category_id: 'lunch', date: '2026-09-01' }),
-      tx({ type: 'adjust', amount: -5000, account_id: 'boc', date: '2026-09-03', note: withVerified(null) }),
-    ]
-    expect(adjustTotal(rows, '2026-09')).toBe(0)
-  })
-})
