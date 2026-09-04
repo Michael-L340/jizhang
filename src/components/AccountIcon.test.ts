@@ -27,8 +27,7 @@ describe('账户图标', () => {
   })
 
   it('同一种底板下大小占比一致，不能一个大一个小', () => {
-    // 深色底板上的白标要留出一圈底色，浅色底板上的标可以做大，
-    // 两者视觉重量才接近。同一组内必须一致。
+    // 深色底板上的白标要留出一圈底色，浅色底板上的标可以做大，两者视觉重量才接近。
     for (const [name, b] of Object.entries(BRANDS)) {
       const [lo, hi] = b.plate === 'brand' ? [0.55, 0.62] : [0.7, 0.85]
       expect(b.scale, `${name}（${b.plate} 底板）`).toBeGreaterThanOrEqual(lo)
@@ -36,12 +35,10 @@ describe('账户图标', () => {
     }
   })
 
-  it('银行用白底红标，微信支付宝用彩底白标——按各家官方形象来', () => {
-    // 反过来做会变成负片，认不出来
-    expect(BRANDS.BOC.plate).toBe('light')
-    expect(BRANDS.CMB.plate).toBe('light')
-    expect(BRANDS.WECHAT.plate).toBe('brand')
-    expect(BRANDS.ALIPAY.plate).toBe('brand')
+  it('四个账户的配色方向统一——并排时不能一深一浅', () => {
+    // 2026-09-04 用户拍板：宁可银行标志是负片，也要四个并排看起来是一套
+    const plates = new Set(['WECHAT', 'ALIPAY', 'BOC', 'CMB'].map((k) => BRANDS[k].plate))
+    expect(plates.size).toBe(1)
   })
 
   it('招行图标右侧那六条横线必须保留——它们是标志的一部分', () => {
