@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { useEffect, useMemo, useState } from 'react'
+import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
@@ -27,7 +27,18 @@ export function Ledger() {
   const catMap = useCategoryMap()
   const nav = useNavigate()
 
-  const [ym, setYm] = useState(monthOf(today()))
+  const [params, setParams] = useSearchParams()
+  const [ym, setYm] = useState(() => params.get('ym') || monthOf(today()))
+  const [dayFilter, setDayFilter] = useState<string | null>(() => params.get('date'))
+
+  // 从统计页跳过来时带着 ym / date
+  useEffect(() => {
+    const qYm = params.get('ym')
+    const qDate = params.get('date')
+    if (qYm) setYm(qYm)
+    setDayFilter(qDate)
+    if (qYm || qDate) setParams({}, { replace: true })
+  }, [params, setParams])
   const [type, setType] = useState<string>('all')
   const [accountId, setAccountId] = useState<string>('all')
   const [parentId, setParentId] = useState<string>('all')
@@ -37,7 +48,9 @@ export function Ledger() {
 
   const list = useMemo(() => {
     return txs.filter((t) => {
-      if (!inMonth(t, ym)) return false
+      if (dayFilter) {
+        if (t.date !== dayFilter) return false
+      } else if (!inMonth(t, ym)) return false
       if (type !== 'all' && t.type !== (type as TxType)) return false
       if (accountId === 'none' && t.account_id) return false
       if (accountId !== 'all' && accountId !== 'none' && t.account_id !== accountId && t.to_account_id !== accountId) return false
@@ -49,7 +62,7 @@ export function Ledger() {
       }
       return true
     })
-  }, [txs, ym, type, accountId, parentId, catMap])
+  }, [txs, ym, dayFilter, type, accountId, parentId, catMap])
 
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
@@ -59,7 +72,22 @@ export function Ledger() {
   return (
     <div className="pb-6">
       <div className="sticky top-0 z-10 bg-bg px-4 pt-3 pb-2">
-        <MonthPicker value={ym} onChange={setYm} totals={totalsByMonth} />
+        <MonthPicker
+          value={ym}
+          onChange={(v) => {
+            setDayFilter(null)
+            setYm(v)
+          }}
+          totals={totalsByMonth}
+        />
+        {dayFilter ? (
+          <div className="flex justify-center pb-1">
+            <button type="button" className="chip on flex items-center gap-1.5" style={{ padding: '5px 12px' }} onClick={() => setDayFilter(null)}>
+              只看 {fmtDateZh(dayFilter, false)}
+              <span className="opacity-70">×</span>
+            </button>
+          </div>
+        ) : null}
         <div className="flex items-center justify-between text-xs text-muted px-1">
           <span className="num">
             支出 <span className="text-expense">{fmtYuan(sum.expense)}</span> · 收入 <span className="text-income">{fmtYuan(sum.income)}</span>

@@ -1,5 +1,6 @@
 import type { Account, Category, Transaction } from '../types'
 import { AccountIcon } from './AccountIcon'
+import { categoryColor } from '../lib/palette'
 import { fmtYuan } from '../lib/money'
 
 interface Props {
@@ -14,15 +15,20 @@ export function describeTx(tx: Transaction, accounts: Map<string, Account>, cate
   const acc = tx.account_id ? accounts.get(tx.account_id)?.name ?? '未知账户' : '未指定账户'
   if (tx.type === 'transfer') {
     const to = tx.to_account_id ? accounts.get(tx.to_account_id)?.name ?? '未知账户' : '?'
-    return { icon: '🔁', title: '转账', sub: `${acc} → ${to}` }
+    return { icon: '🔁', title: '转账', sub: `${acc} → ${to}`, tint: '#7c5cff' }
   }
   if (tx.type === 'adjust') {
-    return { icon: '⚖️', title: tx.amount === 0 ? '余额核对' : '余额校准', sub: acc }
+    return { icon: '⚖️', title: tx.amount === 0 ? '余额核对' : '余额校准', sub: acc, tint: '#b8860b' }
   }
   const c = tx.category_id ? categories.get(tx.category_id) : undefined
   const parent = c?.parent_id ? categories.get(c.parent_id) : c
   const title = c ? (c.parent_id ? `${parent?.name ?? ''} · ${c.name}` : c.name) : '未分类'
-  return { icon: parent?.icon ?? (tx.type === 'income' ? '💰' : '🧾'), title, sub: acc }
+  return {
+    icon: parent?.icon ?? (tx.type === 'income' ? '💰' : '🧾'),
+    title,
+    sub: acc,
+    tint: parent ? categoryColor(parent.name) : '#7a808c',
+  }
 }
 
 export function amountClass(tx: Transaction): string {
@@ -47,7 +53,9 @@ export function TxRow({ tx, accounts, categories, onClick, showDate }: Props) {
       {tx.type === 'transfer' || tx.type === 'adjust' ? (
         <AccountIcon name={accounts.get(tx.account_id ?? '')?.name ?? ''} />
       ) : (
-        <span className="w-10 h-10 rounded-full bg-bg flex items-center justify-center text-xl shrink-0">{d.icon}</span>
+        <span className="w-10 h-10 rounded-full flex items-center justify-center text-[23px] leading-none shrink-0" style={{ background: `${d.tint}1f` }}>
+          {d.icon}
+        </span>
       )}
       <span className="flex-1 min-w-0">
         <span className="block truncate text-[15px]">{d.title}</span>

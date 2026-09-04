@@ -1,4 +1,5 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
@@ -18,6 +19,7 @@ export function Stats() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
+  const nav = useNavigate()
   const [ym, setYm] = useState(monthOf(today()))
   const [kind, setKind] = usePersistedState<'expense' | 'income'>('jz_stats_pieKind', 'expense')
   const [drill, setDrill] = useState<string | null>(null)
@@ -63,6 +65,13 @@ export function Stats() {
   )
 
   const earliest = useMemo(() => firstFlowDate(txs), [txs])
+
+  /** 点图表某个点 → 跳到那个月（按日时再定位到那一天）的流水 */
+  function gotoLedger(i: number) {
+    const k = keys[i]
+    if (!k) return
+    nav(unit === 'day' ? `/ledger?ym=${monthOf(k)}&date=${k}` : `/ledger?ym=${k}`)
+  }
 
   // 趋势区间：终点跟随顶部选中的月份（当月则到今天），起点由范围选项决定
   const { start: tStart, end: tEnd } = useMemo(() => {
@@ -359,11 +368,11 @@ export function Stats() {
           <div className="text-sm text-muted py-12 text-center">这段时间没有{trendKind === 'expense' ? '支出' : '收入'}</div>
         ) : (
           <Suspense fallback={<div style={{ height: 230 }} />}>
-            <Chart option={trendOption} height={230} />
+            <Chart option={trendOption} height={230} onClick={(p) => gotoLedger(p.dataIndex)} />
           </Suspense>
         )}
         <div className="text-[11px] text-muted mt-1">
-          每个点是{unit === 'day' ? '当天' : '当月'}{trendKind === 'expense' ? '支出' : '收入'}总额{lineMode === 'category' ? '，按分类分开' : ''}。
+          每个点是{unit === 'day' ? '当天' : '当月'}{trendKind === 'expense' ? '支出' : '收入'}总额{lineMode === 'category' ? '，按分类分开' : ''}，点一下可以看{unit === 'day' ? '当天' : '当月'}的流水。
           {unit === 'month' && monthOf(tEnd) === monthOf(today()) ? '本月还没结束，显示的是目前的总计。' : ''}
         </div>
       </div>
@@ -388,9 +397,9 @@ export function Stats() {
           </div>
         </div>
         <Suspense fallback={<div style={{ height: 230 }} />}>
-          <Chart option={balOption} height={230} />
+          <Chart option={balOption} height={230} onClick={(p) => gotoLedger(p.dataIndex)} />
         </Suspense>
-        <div className="text-[11px] text-muted mt-1">每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录。</div>
+        <div className="text-[11px] text-muted mt-1">每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录；点一下可以看当时的流水。</div>
       </div>
 
       <div className="card p-4 mb-3 text-sm">
