@@ -298,27 +298,41 @@ export function recentChildOrder(txs: Transaction[], cats: Category[], parentId:
 /** 开户时录入初始余额的那条校准，备注固定用这个词，统计时要排除 */
 export const OPENING_NOTE = '初始余额'
 
+/** 用户手动标记「这笔差额我核对过了，不是漏记」时，往备注里加的词 */
+export const VERIFIED_MARK = '已核实'
+
+// 备注按「·」分段，整段等于「已核实」才算标记。
+// 不能用 note.includes('已核实')：用户自己写的「银行已核实的利息」会被误判成标记，
+// 而且取消时也无从下手。分段之后加和减是对称的，来回切换永远回得到原样。
+const noteParts = (note: string | null): string[] =>
+  (note ?? '')
+    .split('·')
+    .map((s) => s.trim())
+    .filter(Boolean)
+
+export function isVerifiedAdjust(t: Transaction): boolean {
+  return noteParts(t.note).includes(VERIFIED_MARK)
+}
+
+/** 给备注加上「已核实」，保留用户原本写的内容；已经有了就原样返回 */
+export function withVerified(note: string | null): string {
+  const parts = noteParts(note)
+  if (parts.includes(VERIFIED_MARK)) return parts.join(' · ')
+  return [...parts, VERIFIED_MARK].join(' · ')
+}
+
+/** 去掉「已核实」；不剩别的就返回 null（等于清空备注） */
+export function withoutVerified(note: string | null): string | null {
+  return noteParts(note).filter((s) => s !== VERIFIED_MARK).join(' · ') || null
+}
+
 /**
- * 校准差额合计（可按月）。正数 = 有漏记收入，负数 = 有漏记支出。
- *
- * 开户时录的初始余额必须排除。它也是一条 adjust，但语义完全不同：
- * 一条校准记的是「实际 − 推算」，而账户还没有任何记录时推算必然是 0，
- * 于是差额就等于本金全额。那不是「漏记」，是这笔钱本来就在那儿。
- * 不排除的话，统计页会永远挂着一句「有一万五的收入忘了记」，而且永远消不掉——
- * 除非删掉开户那笔，但删了账户余额又归零。
- *
- * 两条判据，命中任一即排除：
- * 1. 备注是「初始余额」（Accounts.tsx 从 2026-09-04 起这样写）
- * 2. 是该账户创建时间最早的一条记录，且是 adjust
- *
- * 第二条不是靠猜：账户没有任何在先记录时，推算余额必然为 0，
- * 所以那笔差额必然是本金而非差异。它的作用是兜住 09-04 之前已经记下的历史，
- * 不需要用户回头去改备注。
- *
- * 用 created_at 而不是 date 判断「最早」：补记一笔日期更早的账（比如今天记上周的开销）
- * 不应该改变「哪一笔是开户那笔」，否则这个数字会莫名其妙地变。
+ * 哪些校准是「开户时录的本金」。
+ * 判据：该账户按创建时间最早的一条记录，且是 adjust。
+ * 账户没有任何在先记录时推算余额必然是 0，那笔差额必然是本金而不是漏记差异。
+ * 用 created_at 而不是 date：补记一笔更早日期的账不应该改变谁是开户那笔。
  */
-export function adjustTotal(txs: Transaction[], ym?: string): number {
+export function openingAdjustIds(txs: Transaction[]): Set<string> {
   const firstKey = new Map<string, string>()
   const firstOpening = new Map<string, string>()
   for (const t of txs) {
@@ -331,10 +345,32 @@ export function adjustTotal(txs: Transaction[], ym?: string): number {
       firstOpening.set(id, t.type === 'adjust' ? t.id : '')
     }
   }
-  const opening = new Set([...firstOpening.values()].filter(Boolean))
+  return new Set([...firstOpening.values()].filter(Boolean))
+}
+
+/**
+ * 校准差额合计（可按月）。正数 = 有漏记收入，负数 = 有漏记支出。
+ *
+ * 开户时录的初始余额必须排除。它也是一条 adjust，但语义完全不同：
+ * 一条校准记的是「实际 − 推算」，而账户还没有任何记录时推算必然是 0，
+ * 于是差额就等于本金全额。那不是「漏记」，是这笔钱本来就在那儿。
+ * 不排除的话，统计页会永远挂着一句「有一万五的收入忘了记」，而且永远消不掉——
+ * 除非删掉开户那笔，但删了账户余额又归零。
+ *
+ * 三条判据，命中任一即排除：
+ * 1. 备注是「初始余额」（Accounts.tsx 从 2026-09-04 起这样写）
+ * 2. 是该账户创建时间最早的一条记录，且是 adjust（兜住 09-04 之前的历史，
+ *    用户不必回头改备注）
+ * 3. 用户手动标记了「已核实」——他核对过，确认这笔差额不是漏记
+ *
+ * 第二条不是靠猜：账户没有任何在先记录时，推算余额必然为 0，
+ * 所以那笔差额必然是本金而非差异。
+ */
+export function adjustTotal(txs: Transaction[], ym?: string): number {
+  const opening = openingAdjustIds(txs)
   let s = 0
   for (const t of txs) {
-    if (t.type !== 'adjust' || t.note === OPENING_NOTE || opening.has(t.id)) continue
+    if (t.type !== 'adjust' || t.note === OPENING_NOTE || isVerifiedAdjust(t) || opening.has(t.id)) continue
     if (ym && !inMonth(t, ym)) continue
     s += t.amount
   }

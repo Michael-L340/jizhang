@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, monthSummary, monthTotals, monthlySeries, OPENING_NOTE, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf } from './compute'
+import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, isVerifiedAdjust, monthSummary, monthTotals, monthlySeries, OPENING_NOTE, openingAdjustIds, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf, VERIFIED_MARK, withVerified, withoutVerified } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -387,5 +387,83 @@ describe('月份选择器与起点', () => {
   it('「自有记录以来」的起点是最早一笔收支，不算转账', () => {
     expect(firstFlowDate(rows)).toBe('2026-08-31')
     expect(firstFlowDate([], '2026-09-04')).toBe('2026-09-04')
+  })
+})
+
+describe('把校准标记成「已核实」', () => {
+  it('标记后不再计入未记录差额，取消后又计入', () => {
+    const rows = [
+      tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
+      tx({ type: 'adjust', amount: -5000, account_id: 'boc', note: '余额校准' }),
+    ]
+    expect(adjustTotal(rows)).toBe(-5000)
+    rows[1] = { ...rows[1], note: withVerified(rows[1].note) }
+    expect(adjustTotal(rows)).toBe(0)
+    rows[1] = { ...rows[1], note: withoutVerified(rows[1].note) }
+    expect(adjustTotal(rows)).toBe(-5000)
+  })
+
+  it('保留用户自己写的备注，不能把它冲掉', () => {
+    expect(withVerified('银行给的利息')).toBe(`银行给的利息 · ${VERIFIED_MARK}`)
+    expect(withoutVerified(`银行给的利息 · ${VERIFIED_MARK}`)).toBe('银行给的利息')
+  })
+
+  it('没有备注时来回切换要干净，不能留下一个孤零零的点', () => {
+    expect(withVerified(null)).toBe(VERIFIED_MARK)
+    expect(withoutVerified(VERIFIED_MARK)).toBeNull()
+    expect(withoutVerified(withVerified(null))).toBeNull()
+  })
+
+  it('重复标记不会越加越长', () => {
+    const once = withVerified('余额校准')
+    expect(withVerified(once)).toBe(once)
+    expect(withVerified(withVerified(withVerified(null)))).toBe(VERIFIED_MARK)
+  })
+
+  it('来回切换任意次，备注都能回到原样', () => {
+    for (const start of [null, '余额校准', '银行利息', '  前后有空格  ', '利息 · 招行']) {
+      let n: string | null = start
+      for (let i = 0; i < 3; i++) n = withoutVerified(withVerified(n))
+      expect(n).toBe(start === null ? null : start.trim())
+    }
+  })
+
+  it('标记在开头时取消也要干净，不能留下孤零零的分隔符', () => {
+    expect(withoutVerified(`${VERIFIED_MARK} · 银行利息`)).toBe('银行利息')
+    expect(withoutVerified(`银行利息 · ${VERIFIED_MARK} · 招行`)).toBe('银行利息 · 招行')
+  })
+
+  it('用户自己写的「银行已核实的利息」不算我们的标记', () => {
+    // 整段相等才算，否则用户的正常文字会被误判，而且取消时无从下手
+    // 先建支出再建校准：tx() 按调用顺序发 created_at，反过来的话这笔校准会成为
+    // 该账户的第一条记录，被当成开户本金排除，测不到我们想测的东西
+    const first = tx({ type: 'expense', amount: 1, account_id: 'boc', category_id: 'lunch' })
+    const t1 = tx({ type: 'adjust', amount: -1, account_id: 'boc', note: '银行已核实的利息' })
+    expect(isVerifiedAdjust(t1)).toBe(false)
+    expect(adjustTotal([first, t1])).toBe(-1)
+  })
+
+  it('isVerifiedAdjust 认得出标记', () => {
+    expect(isVerifiedAdjust(tx({ type: 'adjust', amount: -1, account_id: 'boc', note: withVerified('余额校准') }))).toBe(true)
+    expect(isVerifiedAdjust(tx({ type: 'adjust', amount: -1, account_id: 'boc', note: '余额校准' }))).toBe(false)
+  })
+
+  it('开户本金是自动排除的，不需要也不允许用户去标记', () => {
+    const rows = [
+      tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
+      tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
+      tx({ type: 'adjust', amount: -5000, account_id: 'boc' }),
+    ]
+    const opening = openingAdjustIds(rows)
+    expect(opening.has(rows[0].id)).toBe(true)
+    expect(opening.has(rows[2].id)).toBe(false)
+  })
+
+  it('按月统计时也认「已核实」', () => {
+    const rows = [
+      tx({ type: 'expense', amount: 100, account_id: 'boc', category_id: 'lunch', date: '2026-09-01' }),
+      tx({ type: 'adjust', amount: -5000, account_id: 'boc', date: '2026-09-03', note: withVerified(null) }),
+    ]
+    expect(adjustTotal(rows, '2026-09')).toBe(0)
   })
 })
