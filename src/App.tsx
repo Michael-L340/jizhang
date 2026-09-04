@@ -6,6 +6,7 @@ import { TabBar } from './components/TabBar'
 import { Toast } from './components/Toast'
 import { useStore } from './lib/store'
 import { Accounts } from './pages/Accounts'
+import { Categories } from './pages/Categories'
 import { Entry } from './pages/Entry'
 import { Home } from './pages/Home'
 import { Ledger } from './pages/Ledger'
@@ -94,6 +95,7 @@ const router = createHashRouter([
           { path: 'stats', element: page('统计', <Stats />) },
           { path: 'accounts', element: page('账户', <Accounts />) },
           { path: 'settings', element: page('设置', <Settings />) },
+          { path: 'categories', element: page('分类管理', <Categories />) },
         ],
       },
       { path: 'add', element: page('记一笔', <Entry />) },

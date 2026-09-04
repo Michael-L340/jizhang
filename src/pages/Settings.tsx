@@ -1,33 +1,31 @@
 import { useMemo, useRef, useState } from 'react'
-import { Sheet } from '../components/Sheet'
 import { useNavigate } from 'react-router-dom'
+import { AccountIcon } from '../components/AccountIcon'
+import { Sheet } from '../components/Sheet'
+import { changePassword, friendlyError } from '../lib/api'
 import { buildCsv, buildJson, parseImport, shareOrDownload } from '../lib/csv'
 import { fmtIsoZh, today } from '../lib/date'
-import { changePassword, friendlyError } from '../lib/api'
 import { checkForUpdate, hardReload } from '../lib/sw'
 import { useStore } from '../lib/store'
-import type { CatKind, Category } from '../types'
-
-const ICONS = [
-  '🧾', '🍚', '🍜', '🍽️', '🥤', '☕', '🍎', '🛒',
-  '🎮', '🎬', '🎧', '🎤', '🎯', '🏀', '✈️', '🎁',
-  '🏠', '💡', '🚇', '🚌', '🚗', '📱', '💻', '👕',
-  '👟', '💊', '📚', '✂️', '⚡', '🔧', '💰', '🏷️',
-]
 
 export function Settings() {
   const nav = useNavigate()
   const s = useStore()
   const [busy, setBusy] = useState('')
-  const [showArchived, setShowArchived] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
   const [pwOpen, setPwOpen] = useState(false)
   const [pw1, setPw1] = useState('')
   const [pw2, setPw2] = useState('')
   const [pwErr, setPwErr] = useState('')
-  const [editCat, setEditCat] = useState<Category | null>(null)
-  const [moving, setMoving] = useState(false)
-  const [iconFor, setIconFor] = useState<Category | null>(null)
+
+  const stat = useMemo(() => {
+    const roots = s.categories.filter((c) => !c.parent_id && !c.is_archived)
+    return {
+      expenseRoots: roots.filter((c) => c.kind === 'expense').length,
+      children: s.categories.filter((c) => c.parent_id && !c.is_archived).length,
+      incomeRoots: roots.filter((c) => c.kind === 'income').length,
+    }
+  }, [s.categories])
 
   async function submitPassword() {
     setPwErr('')
@@ -45,19 +43,6 @@ export function Settings() {
     } finally {
       setBusy('')
     }
-  }
-
-  const roots = useMemo(() => s.categories.filter((c) => !c.parent_id).sort((a, b) => a.sort - b.sort), [s.categories])
-  const childrenOf = (id: string) => s.categories.filter((c) => c.parent_id === id && (showArchived || !c.is_archived)).sort((a, b) => a.sort - b.sort)
-
-  async function rename(c: Category) {
-    const name = window.prompt('新名称', c.name)?.trim()
-    if (name && name !== c.name) await s.updateCategory(c.id, { name })
-  }
-
-  async function addChild(kind: CatKind, parentId: string | null) {
-    const name = window.prompt(parentId ? '新二级分类名' : '新收入分类名')?.trim()
-    if (name) await s.addCategory(kind, parentId, name)
   }
 
   async function exportCsv() {
@@ -104,6 +89,37 @@ export function Settings() {
         </button>
       </div>
 
+      <Section title="分类与账户">
+        <Nav
+          label="分类管理"
+          hint={`${stat.expenseRoots} 个支出大类 · ${stat.children} 个二级 · ${stat.incomeRoots} 个收入分类`}
+          onClick={() => nav('/categories')}
+        />
+        <div className="py-3 border-b border-line last:border-0">
+          <div className="text-sm mb-2">账户</div>
+          <div className="flex flex-col gap-1">
+            {s.accounts
+              .slice()
+              .sort((a, b) => a.sort - b.sort)
+              .map((a) => (
+                <button
+                  key={a.id}
+                  type="button"
+                  className="flex items-center gap-2.5 py-1.5 text-left"
+                  onClick={async () => {
+                    const name = window.prompt('账户名称', a.name)?.trim()
+                    if (name && name !== a.name) await s.updateAccount(a.id, { name })
+                  }}
+                >
+                  <AccountIcon name={a.name} size={26} />
+                  <span className="flex-1 text-[15px]">{a.name}</span>
+                  <span className="text-xs text-muted">改名</span>
+                </button>
+              ))}
+          </div>
+        </div>
+      </Section>
+
       <Section title="数据">
         <Row label={s.lastSync ? `上次同步 ${fmtIsoZh(s.lastSync)}` : '尚未同步'} action={s.syncing ? '同步中…' : '立即同步'} onClick={() => void s.refresh()} />
         <Row label="导出 CSV（Excel 可打开）" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
@@ -112,89 +128,8 @@ export function Settings() {
         <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
       </Section>
 
-      <Section title="账户">
-        {s.accounts
-          .sort((a, b) => a.sort - b.sort)
-          .map((a) => (
-            <Row
-              key={a.id}
-              label={a.name}
-              action="改名"
-              onClick={async () => {
-                const name = window.prompt('账户名称', a.name)?.trim()
-                if (name && name !== a.name) await s.updateAccount(a.id, { name })
-              }}
-            />
-          ))}
-      </Section>
-
-      <Section
-        title="支出用途"
-        right={
-          <button type="button" className="text-xs text-muted" onClick={() => setShowArchived(!showArchived)}>
-            {showArchived ? '隐藏已归档' : '显示已归档'}
-          </button>
-        }
-      >
-        {roots
-          .filter((c) => c.kind === 'expense')
-          .map((p) => (
-            <div key={p.id} className="py-2 border-b border-line last:border-0">
-              <div className="flex items-start justify-between gap-2">
-                <span className="min-w-0">
-                  <span className="block font-medium">
-                    <button type="button" className="mr-1 active:opacity-60" onClick={() => setIconFor(p)} title="换图标">
-                      {p.icon || '🏷️'}
-                    </button>
-                    {p.name}
-                  </span>
-                  <button
-                    type="button"
-                    className={`block text-left text-xs ${p.note ? 'text-muted' : 'text-brand'}`}
-                    onClick={async () => {
-                      const note = window.prompt(`「${p.name}」的含义说明`, p.note ?? '')
-                      if (note !== null && note.trim() !== (p.note ?? '')) await s.updateCategory(p.id, { note: note.trim() || null })
-                    }}
-                  >
-                    {p.note || '＋ 添加含义说明'}
-                  </button>
-                </span>
-                <span className="flex gap-3 text-xs text-brand shrink-0 pt-0.5">
-                  <button type="button" onClick={() => rename(p)}>
-                    改名
-                  </button>
-                  <button type="button" onClick={() => addChild('expense', p.id)}>
-                    ＋二级
-                  </button>
-                </span>
-              </div>
-              <div className="flex flex-wrap gap-1.5 mt-2">
-                {childrenOf(p.id).map((c) => (
-                  <ChildChip key={c.id} c={c} onOpen={() => setEditCat(c)} />
-                ))}
-              </div>
-            </div>
-          ))}
-      </Section>
-
-      <Section
-        title="收入分类"
-        right={
-          <button type="button" className="text-xs text-brand" onClick={() => addChild('income', null)}>
-            ＋新增
-          </button>
-        }
-      >
-        <div className="flex flex-wrap gap-1.5 py-2">
-          {roots
-            .filter((c) => c.kind === 'income' && (showArchived || !c.is_archived))
-            .map((c) => (
-              <ChildChip key={c.id} c={c} onOpen={() => setEditCat(c)} />
-            ))}
-        </div>
-      </Section>
-
-      <Section title="账号">
+      <Section title="账号与版本">
+        <Row label="修改密码" action="修改" onClick={() => setPwOpen(true)} />
         <Row
           label="检查更新"
           action={busy === 'upd' ? '检查中…' : '检查'}
@@ -212,7 +147,6 @@ export function Settings() {
             if (window.confirm('清空程序缓存并重新加载？账本数据和登录状态不受影响。')) await hardReload()
           }}
         />
-        <Row label="修改密码" action="修改" onClick={() => setPwOpen(true)} />
         <Row
           label="退出登录"
           action="退出"
@@ -226,89 +160,6 @@ export function Settings() {
         />
         <div className="text-xs text-muted py-2">版本 {__APP_VERSION__}</div>
       </Section>
-
-      <Sheet
-        open={Boolean(editCat)}
-        onClose={() => {
-          setEditCat(null)
-          setMoving(false)
-        }}
-        title={editCat ? editCat.name : ''}
-      >
-        {editCat && moving ? (
-          <>
-            <div className="text-sm text-muted mb-2">移动到哪个大类？该分类下所有历史记录都会跟着变。</div>
-            <div className="flex flex-col">
-              {roots
-                .filter((r) => r.kind === editCat.kind && r.id !== editCat.parent_id && !r.is_archived)
-                .map((r) => (
-                  <button
-                    key={r.id}
-                    type="button"
-                    className="flex items-center gap-2 py-3 border-b border-line text-left"
-                    onClick={async () => {
-                      const n = s.transactions.filter((t) => t.category_id === editCat.id).length
-                      if (!window.confirm(`把「${editCat.name}」移到「${r.name}」下？受影响的历史记录 ${n} 笔。`)) return
-                      const ok = await s.updateCategory(editCat.id, { parent_id: r.id })
-                      if (ok) {
-                        s.showToast(`已移到「${r.name}」`)
-                        setEditCat(null)
-                        setMoving(false)
-                      }
-                    }}
-                  >
-                    <span>{r.icon}</span>
-                    <span className="flex-1">{r.name}</span>
-                    <span className="text-muted">›</span>
-                  </button>
-                ))}
-            </div>
-            <button type="button" className="w-full mt-4 py-2.5 rounded-xl bg-bg text-sm" onClick={() => setMoving(false)}>
-              返回
-            </button>
-          </>
-        ) : editCat ? (
-          <div className="flex flex-col">
-            <SheetRow
-              label="改名"
-              onClick={async () => {
-                await rename(editCat)
-                setEditCat(null)
-              }}
-            />
-            {editCat.parent_id ? <SheetRow label="移动到其他大类" onClick={() => setMoving(true)} /> : null}
-            <SheetRow
-              label={editCat.is_archived ? '取消归档' : '归档（不再出现在记账页）'}
-              danger={!editCat.is_archived}
-              onClick={async () => {
-                await s.updateCategory(editCat.id, { is_archived: !editCat.is_archived })
-                setEditCat(null)
-              }}
-            />
-            <div className="text-xs text-muted mt-3">
-              这个分类下现有 {s.transactions.filter((t) => t.category_id === editCat.id).length} 笔记录。分类只能归档，不能删除，避免历史记录变成孤儿。
-            </div>
-          </div>
-        ) : null}
-      </Sheet>
-
-      <Sheet open={Boolean(iconFor)} onClose={() => setIconFor(null)} title={iconFor ? `${iconFor.name} 的图标` : ''}>
-        <div className="grid grid-cols-8 gap-1.5">
-          {ICONS.map((e) => (
-            <button
-              key={e}
-              type="button"
-              className={`h-11 rounded-xl text-xl ${iconFor?.icon === e ? 'bg-brand-soft ring-2 ring-brand' : 'bg-bg'}`}
-              onClick={async () => {
-                if (iconFor) await s.updateCategory(iconFor.id, { icon: e })
-                setIconFor(null)
-              }}
-            >
-              {e}
-            </button>
-          ))}
-        </div>
-      </Sheet>
 
       <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">
         <input
@@ -338,22 +189,23 @@ export function Settings() {
   )
 }
 
-function Section(props: { title: string; right?: React.ReactNode; children: React.ReactNode }) {
+function Section(props: { title: string; children: React.ReactNode }) {
   return (
     <div className="card px-4 py-2 mb-3">
-      <div className="flex items-center justify-between py-2">
-        <span className="text-xs text-muted">{props.title}</span>
-        {props.right}
-      </div>
+      <div className="py-2 text-xs text-muted">{props.title}</div>
       {props.children}
     </div>
   )
 }
 
-function SheetRow({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+function Nav({ label, hint, onClick }: { label: string; hint?: string; onClick: () => void }) {
   return (
-    <button type="button" className={`py-3.5 border-b border-line last:border-0 text-left text-[15px] ${danger ? 'text-expense' : ''}`} onClick={onClick}>
-      {label}
+    <button type="button" className="w-full flex items-center gap-3 py-3 border-b border-line last:border-0 text-left" onClick={onClick}>
+      <span className="flex-1 min-w-0">
+        <span className="block text-[15px]">{label}</span>
+        {hint ? <span className="block text-xs text-muted truncate">{hint}</span> : null}
+      </span>
+      <span className="text-muted">›</span>
     </button>
   )
 }
@@ -366,13 +218,5 @@ function Row(props: { label: string; action: string; onClick: () => void; danger
         {props.action}
       </button>
     </div>
-  )
-}
-
-function ChildChip({ c, onOpen }: { c: Category; onOpen: () => void }) {
-  return (
-    <button type="button" className={`chip ${c.is_archived ? 'opacity-40 line-through' : ''}`} style={{ padding: '5px 12px' }} onClick={onOpen}>
-      {c.name}
-    </button>
   )
 }
