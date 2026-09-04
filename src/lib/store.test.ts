@@ -159,17 +159,19 @@ describe('S4 在途写入不被 refresh 冲掉', () => {
     expect(await p).toBe(true)
   })
 
-  it('刚建的分类在 10 秒窗口内不会被 refresh 冲掉，窗口过后以服务端为准', async () => {
+  it('新建分类时已经在飞的同步不会把它冲掉，之后的同步以服务端为准', async () => {
+    const d = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(d.promise) // GET 先出门，此刻服务端还没有这个分类
+    const rp = st().refresh()
+
     api.addCategory.mockResolvedValueOnce(cat('new1', { name: '新分类' }))
     await st().addCategory('expense', null, '新分类')
+
+    d.resolve(snap([], []))
+    await rp
     expect(st().categories.map((c) => c.id)).toContain('new1')
 
-    api.fetchAll.mockResolvedValueOnce(snap([], [])) // 服务端还没返回这个分类
-    await st().refresh()
-    expect(st().categories.map((c) => c.id)).toContain('new1')
-
-    // 窗口过后补丁必须撤销，否则一个真被删掉的分类会永远钉在界面上
-    await vi.advanceTimersByTimeAsync(11_000)
+    // 而在它建好之后才出门的同步是权威的：说没有就是真没有（比如另一台设备删了）
     api.fetchAll.mockResolvedValueOnce(snap([], []))
     await st().refresh()
     expect(st().categories.map((c) => c.id)).not.toContain('new1')
@@ -423,5 +425,144 @@ describe('导入与整库恢复', () => {
     api.fetchAll.mockResolvedValueOnce(snap([tx('half')]))
     await expect(st().importSnapshot(snapshot)).rejects.toThrow('网络不通')
     expect(ids()).toEqual(['half'])
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 反向时序：同步先出门，写入先完成
+//   手工复现方式：切回 App（触发后台同步）后立刻记一笔。
+//   补丁一写完就删的话，那份「比写入更早出门」的快照落地时会把它冲掉。
+//   正确的退休判据是「有没有一次在写完之后才出门的同步回来过」。
+// ══════════════════════════════════════════════════════════════
+describe('反向时序：同步先出门、写入先完成', () => {
+  it('新增：那份更早出门的快照落地后，这笔必须还在', async () => {
+    const fetchD = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(fetchD.promise)
+    const rp = st().refresh()
+
+    api.insertTx.mockResolvedValueOnce(undefined)
+    await st().addTx(tx('t1'))
+    expect(ids()).toContain('t1')
+
+    fetchD.resolve(snap([])) // 早于这次写入的快照现在才落地
+    await rp
+    expect(ids()).toContain('t1')
+  })
+
+  it('删除：那份更早出门的快照落地后，这条不能复活', async () => {
+    store.useStore.setState({ transactions: [tx('t1')] })
+    const fetchD = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(fetchD.promise)
+    const rp = st().refresh()
+
+    api.deleteTx.mockResolvedValueOnce(undefined)
+    await st().removeTx('t1')
+
+    fetchD.resolve(snap([tx('t1')]))
+    await rp
+    expect(ids()).not.toContain('t1')
+  })
+
+  it('修改：那份更早出门的快照落地后，不能被打回旧值', async () => {
+    store.useStore.setState({ transactions: [tx('t1', { amount: 1000 })] })
+    const fetchD = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(fetchD.promise)
+    const rp = st().refresh()
+
+    api.updateTx.mockResolvedValueOnce(undefined)
+    await st().editTx(tx('t1', { amount: 8888 }))
+
+    fetchD.resolve(snap([tx('t1', { amount: 1000 })]))
+    await rp
+    expect(st().transactions[0].amount).toBe(8888)
+  })
+
+  it('写入失败时补丁必须立刻删，不能冒出一笔幽灵记录', async () => {
+    // 用户明明看到「保存失败」，账本里却多出一笔——这是「成功才退休」写歪了的典型后果
+    const fetchD = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(fetchD.promise)
+    const rp = st().refresh()
+
+    api.insertTx.mockRejectedValueOnce(new Error('网络不通'))
+    expect(await st().addTx(tx('ghost'))).toBe(false)
+
+    fetchD.resolve(snap([]))
+    await rp
+    expect(ids()).not.toContain('ghost')
+  })
+
+  it('删除失败时补丁也要立刻删，不能让已回滚的记录再次消失', async () => {
+    store.useStore.setState({ transactions: [tx('t1')] })
+    const fetchD = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(fetchD.promise)
+    const rp = st().refresh()
+
+    api.deleteTx.mockRejectedValueOnce(new Error('网络不通'))
+    expect(await st().removeTx('t1')).toBe(false)
+
+    fetchD.resolve(snap([tx('t1')]))
+    await rp
+    expect(ids()).toContain('t1')
+  })
+
+  it('补丁最终会退休：写完之后才出门的同步说没有，就是真没有', async () => {
+    api.insertTx.mockResolvedValueOnce(undefined)
+    await st().addTx(tx('t1'))
+
+    api.fetchAll.mockResolvedValueOnce(snap([])) // 这次 GET 在写入落库之后才出门
+    await st().refresh()
+    expect(ids()).not.toContain('t1')
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 同步卡死
+//   「正在同步」曾经是一把没有超时的锁：请求永远不返回，此后整个会话的同步
+//   都被静默丢弃，杀掉 App 才恢复。
+// ══════════════════════════════════════════════════════════════
+describe('同步卡死不再锁死整个会话', () => {
+  it('卡住 45 秒后允许重新发起', async () => {
+    const stuck = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(stuck.promise)
+    void st().refresh()
+    expect(st().syncing).toBe(true)
+
+    // 紧接着再来一次会被守卫挡掉，这是对的：正常情况下不该并发同步
+    api.fetchAll.mockResolvedValueOnce(snap([tx('a')]))
+    await st().refresh()
+    expect(ids()).toEqual([])
+
+    // 超过 45 秒就认定上一次已经死了
+    await vi.advanceTimersByTimeAsync(46_000)
+    api.fetchAll.mockResolvedValueOnce(snap([tx('a')]))
+    await st().refresh()
+    expect(ids()).toEqual(['a'])
+  })
+
+  it('被取代的那一轮即使后来返回了，也不许落地', async () => {
+    const slow = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(slow.promise)
+    const first = st().refresh()
+
+    await vi.advanceTimersByTimeAsync(46_000)
+    api.fetchAll.mockResolvedValueOnce(snap([tx('new')]))
+    await st().refresh()
+    expect(ids()).toEqual(['new'])
+
+    slow.resolve(snap([tx('old')])) // 那一轮这时才返回
+    await first
+    expect(ids()).toEqual(['new']) // 不能被更旧的快照盖掉
+    expect(st().syncing).toBe(false)
+  })
+
+  it('同步失败后锁要放开，下一次能正常发起', async () => {
+    api.fetchAll.mockRejectedValueOnce(new Error('Failed to fetch'))
+    await st().refresh()
+    expect(st().syncing).toBe(false)
+    expect(st().syncingSince).toBeNull()
+
+    api.fetchAll.mockResolvedValueOnce(snap([tx('a')]))
+    await st().refresh()
+    expect(ids()).toEqual(['a'])
   })
 })

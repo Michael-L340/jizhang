@@ -12,6 +12,7 @@ interface Call {
   filters: string[]
   rows?: unknown
   opts?: unknown
+  aborted?: boolean
 }
 
 const h = vi.hoisted(() => {
@@ -31,6 +32,23 @@ const h = vi.hoisted(() => {
           rec.opts = opts
           return b
         },
+        select(cols: string) {
+          rec.op = 'select'
+          rec.filters.push(`cols=${cols.split(',').length}`)
+          return b
+        },
+        order(c: string) {
+          rec.filters.push(`order.${c}`)
+          return b
+        },
+        range(a: number, z: number) {
+          rec.filters.push(`range.${a}.${z}`)
+          return b
+        },
+        abortSignal(s: AbortSignal) {
+          rec.aborted = s instanceof AbortSignal
+          return b
+        },
         not(c: string, o: string, v: unknown) {
           rec.filters.push(`not.${c}.${o}.${String(v)}`)
           return b
@@ -41,7 +59,7 @@ const h = vi.hoisted(() => {
         },
         then(res: (v: unknown) => unknown, rej: (e: unknown) => unknown) {
           calls.push(rec)
-          return Promise.resolve(results.length ? results.shift() : { data: null, error: null }).then(res, rej)
+          return Promise.resolve(results.length ? results.shift() : { data: [], error: null }).then(res, rej)
         },
       }
       return b
@@ -51,7 +69,7 @@ const h = vi.hoisted(() => {
 })
 vi.mock('./supabase', () => ({ supabase: h.client, configured: true }))
 
-const { importAll, wipeAll } = await import('./api')
+const { fetchAll, friendlyError, importAll, wipeAll } = await import('./api')
 
 const shape = () => h.calls.map((c) => `${c.table}:${c.op}${c.filters.length ? ':' + c.filters.join('+') : ''}`)
 
@@ -142,5 +160,44 @@ describe('importAll', () => {
     await importAll({ accounts: [], categories: [], transactions: many })
     const batches = h.calls.filter((c) => c.table === 'transactions')
     expect(batches.map((b) => (b.rows as unknown[]).length)).toEqual([500, 500, 200])
+  })
+})
+
+describe('friendlyError', () => {
+  it('同步超时要给中文，不能把英文原文甩给用户', () => {
+    const e = new Error('The operation was aborted.')
+    e.name = 'AbortError'
+    expect(friendlyError(e)).toBe('网络太慢，同步超时')
+  })
+
+  it('账户重名不再说成「已有同名分类」', () => {
+    expect(friendlyError({ code: '23505', message: 'duplicate key value violates unique constraint' })).toBe('已有同名的账户或分类')
+  })
+
+  it('网络不通仍然优先匹配，不被超时那条抢走', () => {
+    expect(friendlyError(new Error('Failed to fetch'))).toBe('网络不通，请稍后再试')
+  })
+})
+
+describe('fetchAll 的中止信号', () => {
+  it('三处查询都要挂上，漏一处就还是会卡死整个会话', async () => {
+    // supabase-js 默认的 fetch 没有超时，iOS 在后台冻结页面时飞在路上的请求可能
+    // 永远不 settle。最容易卡住的恰恰是分页循环里那个 transactions 查询。
+    const ac = new AbortController()
+    await fetchAll(ac.signal)
+    expect(h.calls.map((c) => c.table)).toEqual(['accounts', 'categories', 'transactions'])
+    expect(h.calls.every((c) => c.aborted === true)).toBe(true)
+  })
+
+  it('不传信号时不调用 abortSignal（旧调用方不受影响）', async () => {
+    await fetchAll()
+    expect(h.calls.every((c) => c.aborted === undefined)).toBe(true)
+  })
+
+  it('分页要按主键做 tiebreaker，否则跨页会重复或漏行', async () => {
+    await fetchAll()
+    const tx = h.calls.find((c) => c.table === 'transactions')
+    expect(tx?.filters).toContain('order.id')
+    expect(tx?.filters).toContain('range.0.999')
   })
 })

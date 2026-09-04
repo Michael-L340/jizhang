@@ -50,6 +50,8 @@ export interface State extends Snapshot {
   /** 本次会话是否已从云端成功拉取过 */
   loaded: boolean
   syncing: boolean
+  /** 本次同步开始的时间戳；卡死超过 STALE_SYNC_MS 就允许重新发起 */
+  syncingSince: number | null
   lastSync: string | null
   /** 上次同步是否失败（首次加载成功后失败不再静默） */
   syncFailed: boolean
@@ -89,6 +91,58 @@ export interface State extends Snapshot {
 const pendingTx: Pending<Transaction> = new Map()
 const pendingCat: Pending<Category> = new Map()
 
+// 补丁不能一写完就删，那只挡住了一个方向的时序。
+// 反过来的顺序照样出事：refresh 先发出 GET（此刻服务端还没有这笔）→ 用户立刻记一笔、
+// POST 后发先至并成功 → 那份「比写入更早出门」的快照这时才落地，补丁表已空，
+// 于是用过期快照覆盖了正确的状态，刚记的那笔从界面消失、刚删的那条复活。
+//
+// 正确的退休判据不是「写完了没」，而是「有没有一次在写完之后才出门的同步回来过」。
+// 所以给每次真正发出的 GET 编号，写成功时记下当时的号，只有更晚的号回来才允许丢补丁。
+let fetchSeq = 0
+const settledTx = new Map<string, number>()
+const settledCat = new Map<string, number>()
+
+/** 快照落地前淘汰已经被这次 GET 覆盖到的补丁。g < my 意味着这次 GET 出门时该写入已经落库 */
+function retirePatches(my: number): void {
+  for (const [id, g] of settledTx) {
+    if (g >= my) continue
+    pendingTx.delete(id)
+    settledTx.delete(id)
+  }
+  for (const [id, g] of settledCat) {
+    if (g >= my) continue
+    pendingCat.delete(id)
+    settledCat.delete(id)
+  }
+}
+
+/**
+ * 写成功：等一次「出门时间晚于本次写入」的同步回来再退休。
+ * 兜底定时器是防止长期不同步时补丁表越攒越多；60 秒安全地大于 FETCH_TIMEOUT_MS，
+ * 所以不会出现「补丁已删、更早出门的 GET 还在飞」。
+ */
+function settle(map: Map<string, number>, pending: Map<string, unknown>, id: string): void {
+  map.set(id, fetchSeq)
+  setTimeout(() => {
+    if (map.get(id) === undefined) return
+    map.delete(id)
+    pending.delete(id)
+  }, PATCH_TTL_MS)
+}
+
+/** 写失败：立刻删补丁。留着的话，那份还在飞的旧快照落地时会把一条根本没进云端的记录塞回来 */
+function drop(map: Map<string, number>, pending: Map<string, unknown>, id: string): void {
+  map.delete(id)
+  pending.delete(id)
+}
+
+/** 单次 fetchAll 的超时。没有它，iOS 后台冻结时飞在路上的请求可能永远不 settle */
+const FETCH_TIMEOUT_MS = 30_000
+/** 上一次同步超过这个时间还没落地就视为已死，允许重新发起。必须大于 FETCH_TIMEOUT_MS */
+const STALE_SYNC_MS = 45_000
+/** 在途补丁的兜底存活时间。必须大于 FETCH_TIMEOUT_MS */
+const PATCH_TTL_MS = 60_000
+
 // ── 缓存写入去抖 ────────────────────────────────────────────
 // 每次增删改都同步 JSON.stringify 全量流水，数据多了会让「保存」明显卡顿，
 // 而撤销路径还会连着触发两次。尾部去抖 500ms。
@@ -115,6 +169,7 @@ export const useStore = create<State>((set, get) => ({
   auth: 'loading',
   loaded: false,
   syncing: false,
+  syncingSince: null,
   lastSync: null,
   syncFailed: false,
   toast: null,
@@ -143,11 +198,20 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async refresh() {
-    if (get().syncing || get().auth !== 'in') return
-    set({ syncing: true })
+    if (get().auth !== 'in') return
+    const since = get().syncingSince
+    // 「正在同步」曾经是一把没有超时的锁：请求一旦永远不返回，此后整个会话的同步
+    // 都会在这一行被静默丢掉，杀掉 App 才能恢复。超过 STALE_SYNC_MS 就当上一次已死。
+    if (since !== null && Date.now() - since < STALE_SYNC_MS) return
+    const my = ++fetchSeq
+    const ac = new AbortController()
+    const timer = setTimeout(() => ac.abort(), FETCH_TIMEOUT_MS)
+    set({ syncing: true, syncingSince: Date.now() })
     try {
-      const snap = await api.fetchAll()
-      // 把还在飞的写入叠回去，否则刚记的那笔会被这份快照冲掉
+      const snap = await api.fetchAll(ac.signal)
+      if (my !== fetchSeq) return // 已被更新的一轮取代，这份旧快照不许落地
+      // 顺序要紧：先按世代淘汰过期补丁，再把仍在途的叠回去
+      retirePatches(my)
       const merged: Snapshot = {
         accounts: snap.accounts,
         categories: applyPending(snap.categories, pendingCat),
@@ -156,11 +220,13 @@ export const useStore = create<State>((set, get) => ({
       set({ ...merged, loaded: true, lastSync: nowIso(), syncFailed: false })
       get().persist()
     } catch (e) {
+      if (my !== fetchSeq) return
       // 首次加载成功之后失败也要留痕，否则断网/登录过期/项目休眠全都无声
       set({ syncFailed: true })
       if (!get().loaded) get().showToast(`同步失败：${api.friendlyError(e)}`)
     } finally {
-      set({ syncing: false })
+      clearTimeout(timer)
+      if (my === fetchSeq) set({ syncing: false, syncingSince: null })
     }
   },
 
@@ -197,12 +263,14 @@ export const useStore = create<State>((set, get) => ({
     }
     pendingTx.clear()
     pendingCat.clear()
+    settledTx.clear()
+    settledCat.clear()
     try {
       localStorage.removeItem(CACHE_KEY)
     } catch {
       /* ignore */
     }
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncing: false, syncingSince: null })
   },
 
   async addTx(t) {
@@ -212,14 +280,18 @@ export const useStore = create<State>((set, get) => ({
     get().persist()
     try {
       await api.insertTx(t)
+      // 成功不能立刻删补丁：可能有一次「比这次写入更早出门」的同步还在飞，
+      // 它落地时会用一份没有这笔的快照把界面盖回去
+      settle(settledTx, pendingTx, t.id)
       return true
     } catch (e) {
+      // 失败必须立刻删：留着的话那份旧快照落地时会把一条根本没进云端的记录塞回来，
+      // 用户明明看到「保存失败」，账本里却多出一笔幽灵记录
+      drop(settledTx, pendingTx, t.id)
       set((s) => ({ transactions: s.transactions.filter((x) => x.id !== t.id) }))
       get().persist()
       get().showToast(`保存失败：${api.friendlyError(e)}`)
       return false
-    } finally {
-      pendingTx.delete(t.id)
     }
   },
 
@@ -230,15 +302,15 @@ export const useStore = create<State>((set, get) => ({
     get().persist()
     try {
       await api.updateTx(t)
+      settle(settledTx, pendingTx, t.id)
       return true
     } catch (e) {
+      drop(settledTx, pendingTx, t.id)
       // 用 map 换回旧值而不是插回去：这条可能已被并发删除，插回去会让它复活
       if (before) set((s) => ({ transactions: s.transactions.map((x) => (x.id === t.id ? before : x)) }))
       get().persist()
       get().showToast(`修改失败：${api.friendlyError(e)}`)
       return false
-    } finally {
-      pendingTx.delete(t.id)
     }
   },
 
@@ -249,16 +321,16 @@ export const useStore = create<State>((set, get) => ({
     get().persist()
     try {
       await api.deleteTx(id)
+      settle(settledTx, pendingTx, id)
       return true
     } catch (e) {
+      drop(settledTx, pendingTx, id)
       // 位置无所谓：列表都靠 groupByDay/sortTxs 重排。但要幂等，
       // 万一 refresh 已经把它拉回来了，不能插成两条
       if (row) set((s) => (s.transactions.some((x) => x.id === id) ? s : { transactions: [row, ...s.transactions] }))
       get().persist()
       get().showToast(`删除失败：${api.friendlyError(e)}`)
       return false
-    } finally {
-      pendingTx.delete(id)
     }
   },
 
@@ -276,9 +348,9 @@ export const useStore = create<State>((set, get) => ({
       const created = await api.addCategory({ kind, parent_id: parentId, name: trimmed, sort })
       // 登记为在途：紧接着的一次 refresh 可能还拉不到它，会把它冲掉
       pendingCat.set(created.id, created)
+      settle(settledCat, pendingCat, created.id)
       set((st) => ({ categories: [...st.categories, created] }))
       get().persist()
-      setTimeout(() => pendingCat.delete(created.id), 10_000)
       return created
     } catch (e) {
       get().showToast(`新增分类失败：${api.friendlyError(e)}`)
@@ -293,14 +365,14 @@ export const useStore = create<State>((set, get) => ({
     set((s) => ({ categories: s.categories.map((c) => (c.id === id ? { ...c, ...patch } : c)) }))
     try {
       await api.updateCategory(id, patch)
+      settle(settledCat, pendingCat, id)
       get().persist()
       return true
     } catch (e) {
+      drop(settledCat, pendingCat, id)
       if (before) set((s) => ({ categories: s.categories.map((c) => (c.id === id ? before : c)) }))
       get().showToast(`修改分类失败：${api.friendlyError(e)}`)
       return false
-    } finally {
-      pendingCat.delete(id)
     }
   },
 

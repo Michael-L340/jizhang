@@ -225,7 +225,13 @@ export function Settings() {
           label="强制刷新（拿最新版本）"
           action="刷新"
           onClick={async () => {
-            if (window.confirm('清空程序缓存并重新加载？账本数据和登录状态不受影响。')) await hardReload()
+            if (!window.confirm('清空程序缓存并重新加载？需要联网，账本数据和登录状态不受影响。')) return
+            try {
+              await hardReload()
+            } catch (e) {
+              // 没信号时不能往下走：清掉缓存又加载不回来，App 会变成打不开的白屏
+              showToast(friendlyError(e))
+            }
           }}
         />
         <Row

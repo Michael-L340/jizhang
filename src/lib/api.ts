@@ -45,6 +45,9 @@ export function friendlyError(e: unknown): string {
   if (/Invalid login credentials/i.test(msg)) return '邮箱或密码错误'
   if (/Email not confirmed/i.test(msg)) return '邮箱未确认，请联系管理员'
   if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) return '网络不通，请稍后再试'
+  // 同步超时走的是 AbortError，message 是英文的 "The operation was aborted."，
+  // 不翻译的话首次打开就超时时用户会看到一句英文报错
+  if ((e as { name?: string })?.name === 'AbortError' || /abort/i.test(msg)) return '网络太慢，同步超时'
   if (code === '23505' || /duplicate key/i.test(msg)) return '已有同名的账户或分类'
   if (code === '23514' || /violates check constraint/i.test(msg)) return '数据不合法（类型与字段不匹配）'
   if (/New password should be different/i.test(msg)) return '新密码不能和旧密码相同'
@@ -55,25 +58,34 @@ export function friendlyError(e: unknown): string {
 
 // ---------- 读取 ----------
 
-export async function fetchAll(): Promise<Snapshot> {
+/**
+ * 拉全量快照。signal 用于超时中止：supabase-js 默认的 fetch 没有超时，
+ * iOS 在后台冻结页面时飞在路上的请求可能永远不 settle，不中止的话
+ * store 里那把「正在同步」的锁就再也放不开了。三处查询都要挂 signal，
+ * 尤其是分页循环里那个——最容易卡住的恰恰是它。
+ */
+export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
+  const withSignal = <T extends { abortSignal: (s: AbortSignal) => T }>(q: T): T => (signal ? q.abortSignal(signal) : q)
   const [a, c] = await Promise.all([
-    supabase.from('accounts').select(ACC_COLS).order('sort'),
-    supabase.from('categories').select(CAT_COLS).order('sort'),
+    withSignal(supabase.from('accounts').select(ACC_COLS).order('sort')),
+    withSignal(supabase.from('categories').select(CAT_COLS).order('sort')),
   ])
   if (a.error) throw a.error
   if (c.error) throw c.error
   const transactions: Transaction[] = []
   const PAGE = 1000
   for (let from = 0; ; from += PAGE) {
-    const { data, error } = await supabase
-      .from('transactions')
-      .select(TX_COLS)
-      .order('date', { ascending: false })
-      .order('created_at', { ascending: false })
-      // (date, created_at) 不唯一：导入的数据可能造出同值，跨页边界会重复或漏行。
-      // 主键做 tiebreaker 构成全序，分页才稳定。
-      .order('id', { ascending: false })
-      .range(from, from + PAGE - 1)
+    const { data, error } = await withSignal(
+      supabase
+        .from('transactions')
+        .select(TX_COLS)
+        .order('date', { ascending: false })
+        .order('created_at', { ascending: false })
+        // (date, created_at) 不唯一：导入的数据可能造出同值，跨页边界会重复或漏行。
+        // 主键做 tiebreaker 构成全序，分页才稳定。
+        .order('id', { ascending: false })
+        .range(from, from + PAGE - 1),
+    )
     if (error) throw error
     transactions.push(...(data as TxRow[]).map(rowToTx))
     if (data.length < PAGE) break
