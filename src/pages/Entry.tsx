@@ -75,6 +75,12 @@ export function Entry() {
   const [newName, setNewName] = useState('')
   const [busy, setBusy] = useState(false)
   const loadedEdit = useRef<string | null>(null)
+  // 编辑态要等回填完成，默认值兜底才允许动账户。新增时（editId 为空）直接放行。
+  // 必须是 state 不能是 ref：ref 在回填那一帧就被同步改掉，同一帧的兜底 effect
+  // 立刻读到新值，门等于没设。
+  const [backfilled, setBackfilled] = useState(!editId)
+  // 用户有没有手动改过日期。没改过的，切回前台时要跟着滚到新的今天。
+  const [dateTouched, setDateTouched] = useState(false)
 
   // 编辑态：把记录回填到表单（只做一次）
   useEffect(() => {
@@ -101,18 +107,43 @@ export function Entry() {
         setChildId(c.parent_id ? c.id : null)
       }
     }
+    setBackfilled(true)
   }, [editing, cats])
 
   const parents = useMemo(() => cats.filter((c) => c.kind === 'expense' && !c.parent_id && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
   const children = useMemo(() => (parentId ? recentChildOrder(txs, cats, parentId) : []), [txs, cats, parentId])
   const incomeCats = useMemo(() => cats.filter((c) => c.kind === 'income' && !c.parent_id && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
 
-  // 默认值兜底：账户 / 大类 / 二级 没有记忆时取第一个
+  // 默认值兜底：账户 / 大类 / 二级 没有记忆时取第一个。
+  //
+  // 编辑态必须等回填完成再跑。这两个 effect 在同一次提交里先后执行，回填先
+  // setAccountId(这笔真正的账户)，但兜底读到的是本次渲染的旧闭包值（accountId 仍为 null），
+  // 于是又排一次 setAccountId(accounts[0].id) 并且排在后面赢——在一台没存过账的新设备上
+  // （新手机、新电脑，或同一部 iPhone 的 Safari 与主屏 App 之间，两者存储是隔离的），
+  // 打开一笔微信的支出会显示成中国银行，哪怕只改个备注点更新，这笔钱就被挪走了。
   useEffect(() => {
+    if (!backfilled) return
     if (!accountId && !accountTouched && accounts.length) setAccountId(accounts[0].id)
     if (!fromId && accounts.length) setFromId(accounts[0].id)
     if (!toId && accounts.length > 1) setToId(accounts[1].id)
-  }, [accounts, accountId, accountTouched, fromId, toId])
+  }, [backfilled, accounts, accountId, accountTouched, fromId, toId])
+
+  // 挂起过夜后回到前台，把没被手动改过的日期滚到新的今天。
+  //
+  // 保存后页面不跳走，所以「记一笔」几乎总是退出 App 时停留的那一页；iOS 主屏 App 是
+  // 挂起不是关闭，第二天点图标回来 date 还是昨天，当天第一笔就记进了昨天。
+  // 编辑态绝不能动：那里的日期是记录本身的日期，不是「今天」——切出去看眼微信再回来
+  // 就把上周那条记录改成今天，比原来的问题严重得多。
+  useEffect(() => {
+    if (editId) return
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible' || dateTouched) return
+      const t = today()
+      setDate((d) => (d === t ? d : t))
+    }
+    document.addEventListener('visibilitychange', onVisible)
+    return () => document.removeEventListener('visibilitychange', onVisible)
+  }, [editId, dateTouched])
   useEffect(() => {
     if (!parentId && parents.length) setParentId(parents[0].id)
   }, [parents, parentId])
@@ -228,6 +259,7 @@ export function Entry() {
     setAmount('')
     setNote('')
     setDate(today())
+    setDateTouched(false) // 不复位的话，记过一笔昨天的账之后这页就永久停止跟随日期了
     setMore(false)
   }
 
@@ -365,7 +397,15 @@ export function Entry() {
             <input className="w-full rounded-xl bg-card border border-line px-3 py-2 mb-3" placeholder="备注（可不填）" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
-        <DatePicker open={dateOpen} value={date} onPick={setDate} onClose={() => setDateOpen(false)} />
+        <DatePicker
+          open={dateOpen}
+          value={date}
+          onPick={(d) => {
+            setDateTouched(true)
+            setDate(d)
+          }}
+          onClose={() => setDateOpen(false)}
+        />
       </div>
 
       <Keypad onInput={(k) => setAmount((a) => nextAmount(a, k))} onSave={save} saveLabel={editing ? '更新' : '保存'} disabled={busy || !online} />

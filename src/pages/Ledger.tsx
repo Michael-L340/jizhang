@@ -102,7 +102,10 @@ export function Ledger() {
     showToast(`${fmtDateZh(target, false)} 没有记录`)
     setTarget(null)
   }, [target, groups, showToast])
-  const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
+  // 按筛选后的口径算。传全量 txs 的话，选了「微信」之后列表和每日小计都只剩微信，
+  // 顶上这行却还是全月全账户的数，两个合计对不上会让人以为漏了记录。
+  // list 已经按 inMonth 过滤过，monthSummary 里那次判断只是冗余。
+  const sum = useMemo(() => monthSummary(list, ym), [list, ym])
   const filtered = type !== 'all' || accountId !== 'all' || parentId !== 'all'
 
   return (
@@ -118,7 +121,26 @@ export function Ledger() {
         />
         <div className="flex items-center justify-between text-xs text-muted px-1">
           <span className="num">
-            支出 <span className="text-expense">{fmtYuan(sum.expense)}</span> · 收入 <span className="text-income">{fmtYuan(sum.income)}</span>
+            {filtered ? '已筛选 · ' : ''}
+            {sum.expense || sum.income ? (
+              <>
+                {sum.expense ? (
+                  <>
+                    支出 <span className="text-expense">{fmtYuan(sum.expense)}</span>
+                  </>
+                ) : null}
+                {sum.expense && sum.income ? ' · ' : ''}
+                {sum.income ? (
+                  <>
+                    收入 <span className="text-income">{fmtYuan(sum.income)}</span>
+                  </>
+                ) : null}
+              </>
+            ) : (
+              // 筛「转账」或「校准」时收支必然是 0（铁律：这两种不进收支统计）。
+              // 显示两个 0.00 而下面列着十几笔，看起来更像坏了，所以改成显示笔数。
+              `${list.length} 笔`
+            )}
           </span>
           <button type="button" className={`chip ${filtered ? 'on' : ''}`} style={{ padding: '5px 10px' }} onClick={() => setOpen(true)}>
             筛选{filtered ? ' ·' : ''}

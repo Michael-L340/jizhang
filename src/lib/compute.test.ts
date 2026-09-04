@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, monthSummary, monthlySeries, OPENING_NOTE, recentChildOrder, totalOf } from './compute'
+import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, monthSummary, monthTotals, monthlySeries, OPENING_NOTE, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -27,7 +27,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount'> & { a
     to_account_id: null,
     category_id: null,
     note: null,
-    created_at: `2026-09-03T0${seq % 10}:00:00.000Z`,
+    created_at: new Date(Date.UTC(2026, 8, 3, 0, 0, seq)).toISOString(), // 严格递增，不能用 seq % 10 那种会回绕的写法
     ...p,
   }
 }
@@ -281,5 +281,111 @@ describe('recentChildOrder', () => {
     ]
     expect(recentChildOrder(txs, cats, 'food').map((c) => c.name)).toEqual(['晚餐', '午餐'])
     expect(recentChildOrder([], cats, 'food').map((c) => c.name)).toEqual(['午餐', '晚餐'])
+  })
+})
+
+// 趋势图和流水列表靠这几个函数撑着，以前一行单测都没有。
+describe('趋势序列', () => {
+  const rows = [
+    tx({ type: 'expense', amount: 1000, account_id: 'wx', category_id: 'lunch', date: '2026-03-10' }),
+    tx({ type: 'expense', amount: 2000, account_id: 'wx', category_id: 'game', date: '2026-03-20' }),
+    tx({ type: 'expense', amount: 400, account_id: 'wx', category_id: 'lunch', date: '2026-04-05' }),
+    tx({ type: 'income', amount: 9000, account_id: 'cmb', category_id: 'salary', date: '2026-03-15' }),
+    tx({ type: 'transfer', amount: 5000, account_id: 'cmb', to_account_id: 'wx', date: '2026-03-15' }),
+    tx({ type: 'adjust', amount: -700, account_id: 'wx', date: '2026-03-15' }),
+  ]
+
+  it('按月分桶，transfer 和 adjust 一律不进', () => {
+    const keys = bucketKeys('2026-03-01', '2026-04-30', 'month')
+    expect(keys).toEqual(['2026-03', '2026-04'])
+    expect(seriesTotals(rows, keys, 'month')).toEqual([3000, 400])
+    expect(seriesTotals(rows, keys, 'month', 'income')).toEqual([9000, 0])
+  })
+
+  it('空桶出 0，不能变成缺项', () => {
+    const keys = bucketKeys('2026-01-01', '2026-03-31', 'month')
+    expect(seriesTotals(rows, keys, 'month')).toEqual([0, 0, 3000])
+  })
+
+  it('只按桶键匹配，不看区间端点——调用方必须自己裁', () => {
+    // 这是 Stats.tsx 那个「自定义 3/15–3/31 却算了整个 3 月」的根因。
+    // 函数本身的口径就是整月，所以裁剪的责任在调用方，这里把契约锁下来。
+    const keys = bucketKeys('2026-03-15', '2026-03-31', 'month')
+    expect(keys).toEqual(['2026-03'])
+    expect(seriesTotals(rows, keys, 'month')).toEqual([3000]) // 3/10 那笔也算进来了
+    const clipped = rows.filter((r) => r.date >= '2026-03-15' && r.date <= '2026-03-31')
+    expect(seriesTotals(clipped, keys, 'month')).toEqual([2000]) // 裁过之后才只剩 3/20
+  })
+
+  it('闰年 2 月按日分桶是 29 天', () => {
+    expect(bucketKeys('2024-02-01', '2024-02-29', 'day')).toHaveLength(29)
+    expect(bucketKeys('2026-02-01', '2026-02-28', 'day')).toHaveLength(28)
+  })
+
+  it('按分类拆分时二级归到一级，各线之和等于总额', () => {
+    const keys = bucketKeys('2026-03-01', '2026-04-30', 'month')
+    const byCat = seriesByCategory(rows, cats, keys, 'month')
+    expect(byCat.map((s) => s.name)).toEqual(['娱乐消费', '日常餐饮']) // 按区间总额降序：2000 > 1400
+    const total = seriesTotals(rows, keys, 'month')
+    for (let i = 0; i < keys.length; i++) {
+      expect(byCat.reduce((s, c) => s + c.data[i], 0)).toBe(total[i])
+    }
+  })
+
+  it('分类已被删掉的流水不会让它崩，只是不进分类拆分', () => {
+    const orphan = [tx({ type: 'expense', amount: 100, account_id: 'wx', category_id: 'gone', date: '2026-03-01' })]
+    const keys = bucketKeys('2026-03-01', '2026-03-31', 'month')
+    expect(() => seriesByCategory(orphan, cats, keys, 'month')).not.toThrow()
+    expect(seriesTotals(orphan, keys, 'month')).toEqual([100]) // 总额仍然算得对
+  })
+})
+
+describe('流水分组与排序', () => {
+  const mk = (date: string, created: string, over: Partial<Transaction> = {}) =>
+    tx({ type: 'expense', amount: 100, account_id: 'wx', category_id: 'lunch', date, created_at: created, ...over })
+
+  it('组间日期倒序，组内创建时间倒序', () => {
+    const rows = [
+      mk('2026-09-01', '2026-09-01T01:00:00.000Z'),
+      mk('2026-09-03', '2026-09-03T01:00:00.000Z'),
+      mk('2026-09-03', '2026-09-03T05:00:00.000Z'),
+    ]
+    const g = groupByDay(rows)
+    expect(g.map((x) => x.date)).toEqual(['2026-09-03', '2026-09-01'])
+    expect(g[0].items.map((x) => x.created_at)).toEqual(['2026-09-03T05:00:00.000Z', '2026-09-03T01:00:00.000Z'])
+    expect(sortTxs(rows).map((x) => x.date)).toEqual(['2026-09-03', '2026-09-03', '2026-09-01'])
+  })
+
+  it('每日小计排除转账和校准', () => {
+    const rows = [
+      mk('2026-09-03', '2026-09-03T01:00:00.000Z', { amount: 800 }),
+      mk('2026-09-03', '2026-09-03T02:00:00.000Z', { type: 'income', amount: 5000, category_id: 'salary' }),
+      mk('2026-09-03', '2026-09-03T03:00:00.000Z', { type: 'transfer', amount: 9999, to_account_id: 'cmb', category_id: null }),
+      mk('2026-09-03', '2026-09-03T04:00:00.000Z', { type: 'adjust', amount: -777, category_id: null }),
+    ]
+    const g = groupByDay(rows)
+    expect(g[0].expense).toBe(800)
+    expect(g[0].income).toBe(5000)
+    expect(g[0].items).toHaveLength(4) // 四条都要显示，只是不进小计
+  })
+})
+
+describe('月份选择器与起点', () => {
+  const rows = [
+    tx({ type: 'expense', amount: 300, account_id: 'wx', category_id: 'lunch', date: '2026-08-31' }),
+    tx({ type: 'income', amount: 900, account_id: 'cmb', category_id: 'salary', date: '2026-09-02' }),
+    tx({ type: 'transfer', amount: 5000, account_id: 'cmb', to_account_id: 'wx', date: '2026-07-01' }),
+  ]
+
+  it('monthTotals 只统计收支，转账不生成月份', () => {
+    const m = monthTotals(rows)
+    expect([...m.keys()].sort()).toEqual(['2026-08', '2026-09'])
+    expect(m.get('2026-08')).toEqual({ expense: 300, income: 0 })
+    expect(m.get('2026-09')).toEqual({ expense: 0, income: 900 })
+  })
+
+  it('「自有记录以来」的起点是最早一笔收支，不算转账', () => {
+    expect(firstFlowDate(rows)).toBe('2026-08-31')
+    expect(firstFlowDate([], '2026-09-04')).toBe('2026-09-04')
   })
 })

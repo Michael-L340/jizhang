@@ -4,8 +4,8 @@ import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
-import { adjustTotal, balanceSeries, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
-import { addDays, fmtDateZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
+import { adjustTotal, balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
+import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { categoryColor, childColors } from '../lib/palette'
 import { usePersistedState } from '../lib/hooks'
@@ -43,6 +43,10 @@ export function Stats() {
     : agg
   const pieColors = drillAgg ? childColors(rootColors[drillIdx], pieRows.length) : rootColors
   const pieTotal = pieRows.reduce((s, r) => s + r.amount, 0)
+  // drill 存的是分类 id，换月后那个分类可能在新月份里根本没有记录，drillAgg 变 undefined
+  // 而 drill 仍是 truthy：界面退回一级列表，却因为到处写着 !drill 而点不动。
+  // 全页统一用这个派生值判断，drill 只作为原始状态存在。
+  const drilled = Boolean(drillAgg)
 
   const pieOption = useMemo(
     () => ({
@@ -86,8 +90,12 @@ export function Stats() {
   }, [range, ym, earliest])
 
   const keys = useMemo(() => bucketKeys(tStart, tEnd, unit), [tStart, tEnd, unit])
-  const trendTotal = useMemo(() => seriesTotals(txs, keys, unit, trendKind), [txs, keys, unit, trendKind])
-  const trendByCat = useMemo(() => seriesByCategory(txs, cats, keys, unit, trendKind), [txs, cats, keys, unit, trendKind])
+  // 趋势必须先按真实区间裁一刀。bucketKeys 在「按月」时会把两端折成整月，
+  // 而 seriesTotals 只按 monthOf(date) 匹配桶键、从不看端点：选 6月1日–6月10日，
+  // 算出来的是整个 6 月。非自定义区间的端点本来就对齐月初月末，这一刀是空操作。
+  const inRange = useMemo(() => txs.filter((t) => t.date >= tStart && t.date <= tEnd), [txs, tStart, tEnd])
+  const trendTotal = useMemo(() => seriesTotals(inRange, keys, unit, trendKind), [inRange, keys, unit, trendKind])
+  const trendByCat = useMemo(() => seriesByCategory(inRange, cats, keys, unit, trendKind), [inRange, cats, keys, unit, trendKind])
   const trendSum = useMemo(() => trendTotal.reduce((a, b) => a + b, 0), [trendTotal])
   const fewPoints = keys.length <= 3
   const crossYear = keys.length > 0 && keys[0].slice(0, 4) !== keys[keys.length - 1].slice(0, 4)
@@ -173,6 +181,10 @@ export function Stats() {
   }, [lineMode, keys, labels, trendTotal, trendByCat, fewPoints, unit, trendKind])
 
   const bal = useMemo(() => balanceSeries(txs, accounts, keys, unit), [txs, accounts, keys, unit])
+  // 大数字其实是「最后一个桶结束时」的余额。切到 8 月它就是 8/31 收盘值，
+  // 而账户页显示的是当前值，两个页面对不上会让人以为同步坏了。
+  // 用 bucketEnd 而不是 tEnd：按月时最后一个桶到月末，两者可能差好几天。
+  const balAsOf = keys.length ? bucketEnd(keys[keys.length - 1], unit) : tEnd
   const balOption = useMemo(() => {
     const full = (i: number) => (unit === 'day' ? fmtDateZh(keys[i], false) : `${+keys[i].slice(0, 4)}年${+keys[i].slice(5)}月`)
     const common = {
@@ -238,7 +250,14 @@ export function Stats() {
 
   return (
     <div className="px-4 pb-6">
-      <MonthPicker value={ym} onChange={setYm} totals={totalsByMonth} />
+      <MonthPicker
+        value={ym}
+        onChange={(v) => {
+          setYm(v)
+          setDrill(null)
+        }}
+        totals={totalsByMonth}
+      />
 
       {/* 分类占比 */}
       <div className="card p-4 mb-3">
@@ -258,7 +277,7 @@ export function Stats() {
               </button>
             ))}
           </div>
-          {drill ? (
+          {drilled ? (
             <button type="button" className="text-sm text-brand px-1" onClick={() => setDrill(null)}>
               ‹ 返回
             </button>
@@ -275,11 +294,11 @@ export function Stats() {
           <>
             <div className="relative mt-1">
               <Suspense fallback={<div style={{ height: 232 }} />}>
-                <Chart option={pieOption} height={232} onClick={(p) => !drill && setDrill(agg[p.dataIndex]?.id ?? null)} />
+                <Chart option={pieOption} height={232} onClick={(p) => !drilled && setDrill(agg[p.dataIndex]?.id ?? null)} />
               </Suspense>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <div className="text-[11px] text-muted max-w-[46%] text-center leading-tight">
-                  {drillAgg ? drillAgg.name : kind === 'expense' ? '本月支出' : '本月收入'}
+                  {drillAgg ? drillAgg.name : `${ym === monthOf(today()) ? '本月' : fmtMonthZh(ym)}${kind === 'expense' ? '支出' : '收入'}`}
                 </div>
                 <div className="num text-[22px] font-bold leading-tight mt-0.5">{fmtYuan(pieTotal, { symbol: true })}</div>
                 <div className="text-[11px] text-muted mt-0.5">{pieRows.reduce((s, r) => s + r.count, 0)} 笔</div>
@@ -292,18 +311,18 @@ export function Stats() {
                   key={r.id}
                   type="button"
                   className="flex items-center gap-2.5 py-2 border-b border-line last:border-0 text-left"
-                  onClick={() => !drill && setDrill(r.id)}
+                  onClick={() => !drilled && setDrill(r.id)}
                 >
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: pieColors[i % pieColors.length] }} />
                   <span className="flex-1 min-w-0 truncate text-[15px]">{r.name}</span>
                   <span className="text-xs text-muted shrink-0">{r.count} 笔</span>
                   <span className="num text-xs text-muted w-9 text-right shrink-0">{pieTotal ? Math.round((r.amount / pieTotal) * 100) : 0}%</span>
                   <span className="num w-[88px] text-right shrink-0">{fmtYuan(r.amount)}</span>
-                  {!drill ? <span className="text-muted text-xs shrink-0">›</span> : <span className="w-2" />}
+                  {!drilled ? <span className="text-muted text-xs shrink-0">›</span> : <span className="w-2" />}
                 </button>
               ))}
             </div>
-            {!drill ? <div className="text-[11px] text-muted text-center mt-2">点任意一项查看二级分类</div> : null}
+            {!drilled ? <div className="text-[11px] text-muted text-center mt-2">点任意一项查看二级分类</div> : null}
           </>
         )}
       </div>
@@ -380,7 +399,9 @@ export function Stats() {
       <div className="card p-4 mb-3">
         <div className="flex items-start justify-between mb-2">
           <div>
-            <div className="text-sm text-muted">账户余额</div>
+            <div className="text-sm text-muted">
+              账户余额{balAsOf >= today() ? '（当前）' : ` · 截至${unit === 'day' ? fmtDateZh(balAsOf, false) : fmtMonthZh(monthOf(balAsOf)) + '末'}`}
+            </div>
             <div className="num text-lg font-semibold leading-tight">{fmtYuan(bal.total[bal.total.length - 1] ?? 0, { symbol: true })}</div>
           </div>
           <div className="inline-flex rounded-full bg-bg p-0.5">
