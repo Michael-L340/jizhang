@@ -31,7 +31,7 @@ export function Home() {
   const dayStat = useMemo(() => {
     let expense = 0
     let income = 0
-    let count = 0
+    let count = 0 // 只数支出笔数，这张卡讲的是今天花了多少
     for (const t of txs) {
       if (t.date !== td) continue
       if (t.type === 'expense') {
@@ -39,7 +39,6 @@ export function Home() {
         count++
       } else if (t.type === 'income') {
         income += t.amount
-        count++
       }
     }
     return { expense, income, count }
@@ -74,14 +73,14 @@ export function Home() {
 
       <Link to={`/ledger?date=${td}`} className="card p-4 mb-3 flex items-center gap-4">
         <span className="flex-1 min-w-0">
-          <span className="block text-xs text-muted">今天 · {fmtDateZh(td)}</span>
-          <span className="block num text-2xl font-bold leading-tight mt-0.5 text-expense">
+          <span className="block text-xs text-muted">今日开支 · {fmtDateZh(td)}</span>
+          <span className={`block num text-2xl font-bold leading-tight mt-0.5 ${dayStat.expense ? 'text-expense' : 'text-muted'}`}>
             {dayStat.expense ? `-${fmtYuan(dayStat.expense)}` : fmtYuan(0)}
           </span>
         </span>
         <span className="text-right shrink-0">
           {dayStat.income ? (
-            <span className="block num text-sm font-medium text-income">+{fmtYuan(dayStat.income)}</span>
+            <span className="block num text-sm font-medium text-income">今日收入 +{fmtYuan(dayStat.income)}</span>
           ) : null}
           <span className="block text-xs text-muted mt-0.5">{dayStat.count ? `${dayStat.count} 笔 ›` : '还没记账 ›'}</span>
         </span>
