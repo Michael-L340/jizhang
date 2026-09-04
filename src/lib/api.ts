@@ -104,7 +104,7 @@ export async function addCategory(input: { kind: CatKind; parent_id: string | nu
   return data as Category
 }
 
-export async function updateCategory(id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note'>>): Promise<void> {
+export async function updateCategory(id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note' | 'parent_id'>>): Promise<void> {
   const { error } = await supabase.from('categories').update(patch).eq('id', id)
   if (error) throw error
 }

@@ -2,7 +2,7 @@
 import type { Category } from '../types'
 
 const BY_NAME: { test: (n: string) => boolean; color: string }[] = [
-  { test: (n) => n.includes('餐饮') || n.includes('吃'), color: '#f5a524' },
+  { test: (n) => n.includes('餐饮') || n.includes('日常') || n.includes('吃'), color: '#f5a524' },
   { test: (n) => n.includes('娱乐') || n.includes('游戏'), color: '#7c5cff' },
   { test: (n) => n.includes('非经常') || n.includes('大额'), color: '#14b8a6' },
   { test: (n) => n.includes('经常') || n.includes('固定'), color: '#2f6fed' },

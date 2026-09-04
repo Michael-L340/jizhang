@@ -18,6 +18,8 @@ export function Settings() {
   const [pw1, setPw1] = useState('')
   const [pw2, setPw2] = useState('')
   const [pwErr, setPwErr] = useState('')
+  const [editCat, setEditCat] = useState<Category | null>(null)
+  const [moving, setMoving] = useState(false)
 
   async function submitPassword() {
     setPwErr('')
@@ -157,7 +159,7 @@ export function Settings() {
               </div>
               <div className="flex flex-wrap gap-1.5 mt-2">
                 {childrenOf(p.id).map((c) => (
-                  <ChildChip key={c.id} c={c} onRename={() => rename(c)} onToggle={() => void s.updateCategory(c.id, { is_archived: !c.is_archived })} />
+                  <ChildChip key={c.id} c={c} onOpen={() => setEditCat(c)} />
                 ))}
               </div>
             </div>
@@ -176,7 +178,7 @@ export function Settings() {
           {roots
             .filter((c) => c.kind === 'income' && (showArchived || !c.is_archived))
             .map((c) => (
-              <ChildChip key={c.id} c={c} onRename={() => rename(c)} onToggle={() => void s.updateCategory(c.id, { is_archived: !c.is_archived })} />
+              <ChildChip key={c.id} c={c} onOpen={() => setEditCat(c)} />
             ))}
         </div>
       </Section>
@@ -213,6 +215,71 @@ export function Settings() {
         />
         <div className="text-xs text-muted py-2">版本 {__APP_VERSION__}</div>
       </Section>
+
+      <Sheet
+        open={Boolean(editCat)}
+        onClose={() => {
+          setEditCat(null)
+          setMoving(false)
+        }}
+        title={editCat ? editCat.name : ''}
+      >
+        {editCat && moving ? (
+          <>
+            <div className="text-sm text-muted mb-2">移动到哪个大类？该分类下所有历史记录都会跟着变。</div>
+            <div className="flex flex-col">
+              {roots
+                .filter((r) => r.kind === editCat.kind && r.id !== editCat.parent_id && !r.is_archived)
+                .map((r) => (
+                  <button
+                    key={r.id}
+                    type="button"
+                    className="flex items-center gap-2 py-3 border-b border-line text-left"
+                    onClick={async () => {
+                      const n = s.transactions.filter((t) => t.category_id === editCat.id).length
+                      if (!window.confirm(`把「${editCat.name}」移到「${r.name}」下？受影响的历史记录 ${n} 笔。`)) return
+                      const ok = await s.updateCategory(editCat.id, { parent_id: r.id })
+                      if (ok) {
+                        s.showToast(`已移到「${r.name}」`)
+                        setEditCat(null)
+                        setMoving(false)
+                      }
+                    }}
+                  >
+                    <span>{r.icon}</span>
+                    <span className="flex-1">{r.name}</span>
+                    <span className="text-muted">›</span>
+                  </button>
+                ))}
+            </div>
+            <button type="button" className="w-full mt-4 py-2.5 rounded-xl bg-bg text-sm" onClick={() => setMoving(false)}>
+              返回
+            </button>
+          </>
+        ) : editCat ? (
+          <div className="flex flex-col">
+            <SheetRow
+              label="改名"
+              onClick={async () => {
+                await rename(editCat)
+                setEditCat(null)
+              }}
+            />
+            {editCat.parent_id ? <SheetRow label="移动到其他大类" onClick={() => setMoving(true)} /> : null}
+            <SheetRow
+              label={editCat.is_archived ? '取消归档' : '归档（不再出现在记账页）'}
+              danger={!editCat.is_archived}
+              onClick={async () => {
+                await s.updateCategory(editCat.id, { is_archived: !editCat.is_archived })
+                setEditCat(null)
+              }}
+            />
+            <div className="text-xs text-muted mt-3">
+              这个分类下现有 {s.transactions.filter((t) => t.category_id === editCat.id).length} 笔记录。分类只能归档，不能删除，避免历史记录变成孤儿。
+            </div>
+          </div>
+        ) : null}
+      </Sheet>
 
       <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">
         <input
@@ -254,6 +321,14 @@ function Section(props: { title: string; right?: React.ReactNode; children: Reac
   )
 }
 
+function SheetRow({ label, onClick, danger }: { label: string; onClick: () => void; danger?: boolean }) {
+  return (
+    <button type="button" className={`py-3.5 border-b border-line last:border-0 text-left text-[15px] ${danger ? 'text-expense' : ''}`} onClick={onClick}>
+      {label}
+    </button>
+  )
+}
+
 function Row(props: { label: string; action: string; onClick: () => void; danger?: boolean }) {
   return (
     <div className="flex items-center justify-between py-3 border-b border-line last:border-0">
@@ -265,15 +340,10 @@ function Row(props: { label: string; action: string; onClick: () => void; danger
   )
 }
 
-function ChildChip({ c, onRename, onToggle }: { c: Category; onRename: () => void; onToggle: () => void }) {
+function ChildChip({ c, onOpen }: { c: Category; onOpen: () => void }) {
   return (
-    <span className={`inline-flex items-center gap-1 chip ${c.is_archived ? 'opacity-40 line-through' : ''}`} style={{ padding: '4px 8px 4px 12px' }}>
-      <button type="button" onClick={onRename}>
-        {c.name}
-      </button>
-      <button type="button" className="text-muted px-1" title={c.is_archived ? '恢复' : '归档'} onClick={onToggle}>
-        {c.is_archived ? '↺' : '×'}
-      </button>
-    </span>
+    <button type="button" className={`chip ${c.is_archived ? 'opacity-40 line-through' : ''}`} style={{ padding: '5px 12px' }} onClick={onOpen}>
+      {c.name}
+    </button>
   )
 }
