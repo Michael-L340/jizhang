@@ -158,13 +158,31 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  */
 export async function wipeAll(): Promise<void> {
   const tx = await supabase.from('transactions').delete().not('id', 'is', null)
-  if (tx.error) throw tx.error
+  if (tx.error) wipeFailed('transactions', tx.error)
   const child = await supabase.from('categories').delete().not('parent_id', 'is', null)
-  if (child.error) throw child.error
+  if (child.error) wipeFailed('child_categories', child.error)
   const root = await supabase.from('categories').delete().is('parent_id', null)
-  if (root.error) throw root.error
+  if (root.error) wipeFailed('root_categories', root.error)
   const acc = await supabase.from('accounts').delete().not('id', 'is', null)
-  if (acc.error) throw acc.error
+  if (acc.error) wipeFailed('accounts', acc.error)
+}
+
+/**
+ * wipeAll 抛的错会挂上 step，指出是删到哪一步炸的。
+ * 用处只有一个但很要紧：step === 'transactions' 表示**第一句就失败了，云端一行都没删**，
+ * 调用方据此可以老实告诉用户「账本原封不动」，而不是吓人的「可能只剩一半」。
+ * 这四个删除不是一个事务，别的 step 都意味着已经删掉了一部分。
+ */
+export type WipeStep = 'transactions' | 'child_categories' | 'root_categories' | 'accounts'
+export interface WipeFailure extends Error {
+  step: WipeStep
+}
+
+function wipeFailed(step: WipeStep, cause: unknown): never {
+  const e = new Error(friendlyError(cause)) as WipeFailure
+  e.step = step
+  e.cause = cause
+  throw e
 }
 
 /**

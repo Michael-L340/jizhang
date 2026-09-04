@@ -400,14 +400,59 @@ describe('导入与整库恢复', () => {
     expect(ids()).toEqual(['t1'])
   })
 
-  it('清空失败就不要再导入了，否则可能删了一半又写一半', async () => {
-    api.wipeAll.mockRejectedValueOnce(new Error('网络不通'))
-    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow('网络不通')
+  it('清空的第一句就失败：云端一行都没删，不许吓唬人，也没什么可回滚的', async () => {
+    // wipeAll 的四条 DELETE 不是一个事务。api.ts 给错误挂了 step，
+    // step==='transactions' 表示第一条就没发出去，云端还是原样
+    store.useStore.setState({ transactions: [tx('old1')] })
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'transactions' }))
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/一条数据都没删/)
     expect(api.importAll).not.toHaveBeenCalled()
   })
 
+  it('清空到一半失败：绝不能接着导入新文件，只能拿操作前的快照往回填', async () => {
+    store.useStore.setState({ transactions: [tx('old1')] })
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'accounts' }))
+    api.importAll.mockResolvedValueOnce(undefined)
+    api.fetchAll.mockResolvedValueOnce(snap([tx('old1')]))
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
+    expect(api.importAll).toHaveBeenCalledTimes(1)
+    expect(api.importAll.mock.calls[0][0].transactions.map((t: Transaction) => t.id)).toEqual(['old1'])
+  })
+
+  it('导入中途失败：立刻用操作前的快照回滚，并明确告诉用户没丢东西', async () => {
+    // 这是最要命的一条：wipeAll 已经执行完，云端是空的。
+    // 修复前这里只会抛个错就走人，账本就真没了
+    store.useStore.setState({ transactions: [tx('old1'), tx('old2')] })
+    api.wipeAll.mockResolvedValueOnce(undefined)
+    api.importAll.mockRejectedValueOnce(new Error('网络不通')) // 导新文件炸了
+    api.importAll.mockResolvedValueOnce(undefined) // 回滚成功
+    api.fetchAll.mockResolvedValueOnce(snap([tx('old1'), tx('old2')]))
+
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow('恢复失败：网络不通。你的账本已经退回操作前的样子，没有丢东西。')
+    expect(api.importAll).toHaveBeenCalledTimes(2)
+    // 回滚写回去的必须是「操作前」那份，不是要恢复的那份
+    expect(api.importAll.mock.calls[1][0].transactions.map((t: Transaction) => t.id)).toEqual(['old1', 'old2'])
+    expect(ids()).toEqual(['old1', 'old2'])
+  })
+
+  it('回滚也失败：必须给出可操作的下一步，不能只说「失败了」', async () => {
+    store.useStore.setState({ transactions: [tx('old1')] })
+    api.wipeAll.mockResolvedValueOnce(undefined)
+    api.importAll.mockRejectedValueOnce(new Error('网络不通'))
+    api.importAll.mockRejectedValueOnce(new Error('还是没网'))
+    api.fetchAll.mockResolvedValueOnce(snap([]))
+
+    const e = (await st()
+      .restoreSnapshot(snapshot)
+      .catch((x: unknown) => x)) as Error
+    expect(e.message).toContain('自动退回也没成功')
+    expect(e.message).toContain('备份文件先别删')
+    expect(e.message).toContain('再走一次「整库恢复」')
+  })
+
   it('导入中途失败，界面也要拉到云端真实状态，不能停在「什么都没发生」', async () => {
-    // 不是事务：失败时前面的批次已经进了云端，用户必须看得见实际进了多少
+    // 不是事务：失败时前面的批次已经进了云端，用户必须看得见实际进了多少。
+    // 这里 store 里本来就是空的，没什么可回滚
     api.wipeAll.mockResolvedValueOnce(undefined)
     api.importAll.mockRejectedValueOnce(new Error('网络不通'))
     api.fetchAll.mockResolvedValueOnce(snap([tx('half')]))

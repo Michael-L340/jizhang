@@ -117,6 +117,17 @@ describe('wipeAll 的删除顺序', () => {
     await expect(wipeAll()).rejects.toBeTruthy()
     expect(shape()).toEqual(['transactions:delete:not.id.is.null'])
   })
+
+  it('失败时要说清楚是删到哪一步炸的——第一句就失败意味着云端一行没动', async () => {
+    // store.ts 的整库恢复靠这个 step 决定要不要回滚、以及怎么跟用户说：
+    // 'transactions' = 一行都没删，可以老实说「账本原封不动」；
+    // 其他 step = 已经删掉一部分，必须立刻拿操作前的快照写回去
+    h.results.push({ error: { message: '网络不通' } })
+    await expect(wipeAll()).rejects.toMatchObject({ step: 'transactions' })
+
+    h.results.push({}, { error: { message: '网络不通' } })
+    await expect(wipeAll()).rejects.toMatchObject({ step: 'child_categories' })
+  })
 })
 
 describe('importAll', () => {

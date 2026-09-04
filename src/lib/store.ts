@@ -77,7 +77,10 @@ export interface State extends Snapshot {
   updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived'>>) => Promise<boolean>
   /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
-  /** 整库恢复：先清空云端再整份写入。不可撤销，调用方必须已经跟用户确认过 */
+  /**
+   * 整库恢复：先清空云端再整份写入。调用方必须已经跟用户确认过，且 snap 必须过了 validate.ts。
+   * 中途失败会拿操作前的快照自动回滚一次，失败时抛的是 RestoreFailed，message 可直接显示。
+   */
   restoreSnapshot: (snap: Snapshot) => Promise<void>
 
   showToast: (msg: string, undo?: () => void | Promise<void>) => void
@@ -156,6 +159,17 @@ let persistTimer: ReturnType<typeof setTimeout> | null = null
 async function pullAfterWrite(get: () => State): Promise<void> {
   for (let i = 0; i < 40 && get().syncing; i++) await new Promise((r) => setTimeout(r, 250))
   await get().refresh()
+}
+
+/**
+ * 「整库恢复」失败时抛的错。message 已经是给用户看的**完整**说明——包括云端现在是什么状态、
+ * 该怎么办——页面直接原样显示就行，别再往后面拼别的话，那样只会自相矛盾。
+ */
+export class RestoreFailed extends Error {
+  constructor(msg: string) {
+    super(msg)
+    this.name = 'RestoreFailed'
+  }
 }
 
 let toastSeq = 0
@@ -419,9 +433,37 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async restoreSnapshot(snap) {
+    // 回滚底稿。wipeAll 一执行，云端就没有第二份了，所以先把「操作前的样子」留在内存里。
+    // 它只是本机现在显示的样子：本次会话没同步成功过的话，它可能比云端少几条——
+    // 页面在确认框里已经就这一点提醒过用户（Settings.tsx 的 exportTrustworthy 那段）。
+    const before: Snapshot = { accounts: get().accounts, categories: get().categories, transactions: get().transactions }
+    const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0
     try {
       await api.wipeAll()
       await api.importAll(snap)
+    } catch (e) {
+      const why = api.friendlyError(e)
+      // wipeAll 的第一句就失败 = 云端还没被动过，没什么可回滚的，也别吓唬人
+      if ((e as Partial<api.WipeFailure>).step === 'transactions') {
+        throw new RestoreFailed(`恢复失败：${why}。云端一条数据都没删，账本还是原来的样子，联网之后可以再试一次。`)
+      }
+      // 到这里云端已经被清空（或清了一半），必须立刻把底稿写回去。
+      // importAll 是按 id 的 upsert，重复执行安全；每 500 条一批，不是事务。
+      let rollbackErr: string | null = null
+      if (hadData) {
+        try {
+          await api.importAll(before)
+        } catch (e2) {
+          rollbackErr = api.friendlyError(e2)
+        }
+      }
+      throw new RestoreFailed(
+        rollbackErr === null
+          ? `恢复失败：${why}。你的账本已经退回操作前的样子，没有丢东西。`
+          : `恢复失败：${why}。自动退回也没成功（${rollbackErr}），云端现在可能只有一部分数据。` +
+            '别在这个页面上做别的操作：手机里那个备份文件先别删，等有网了回到这一页，用同一个文件再走一次「整库恢复」——' +
+            '同一个文件重复导入是安全的，不会变成两份。',
+      )
     } finally {
       await pullAfterWrite(get)
     }

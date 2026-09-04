@@ -3,10 +3,11 @@ import { useNavigate } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { Sheet } from '../components/Sheet'
 import { changePassword, friendlyError } from '../lib/api'
-import { buildCsv, buildJson, parseImport, shareOrDownload } from '../lib/csv'
+import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta, shareOrDownload, STALE_EXPORT_WARNING } from '../lib/csv'
 import { fmtIsoZh, today } from '../lib/date'
 import { checkForUpdate, hardReload } from '../lib/sw'
-import { CACHE_LIMIT_BYTES, useStore } from '../lib/store'
+import { CACHE_LIMIT_BYTES, RestoreFailed, useStore } from '../lib/store'
+import type { Snapshot } from '../types'
 
 export function Settings() {
   const nav = useNavigate()
@@ -23,8 +24,11 @@ export function Settings() {
   const restoreSnapshot = useStore((st) => st.restoreSnapshot)
   const showToast = useStore((st) => st.showToast)
   const syncFailed = useStore((st) => st.syncFailed)
+  const loaded = useStore((st) => st.loaded)
   const cacheBytes = useStore((st) => st.cacheBytes)
   const cacheDegraded = useStore((st) => st.cacheDegraded)
+  /** 这次导出的东西信不信得过：本次会话成功同步过、且最近一次没失败 */
+  const trustworthy = exportTrustworthy({ loaded, syncFailed })
   const snapshot = useMemo(() => ({ accounts, categories, transactions }), [accounts, categories, transactions])
   const [busy, setBusy] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
@@ -64,10 +68,19 @@ export function Settings() {
     }
   }
 
+  /**
+   * 同步状态不可靠时不要静默导出：导出的是本机缓存，可能比云端少几百条，
+   * 而用户拿它做「整库恢复」就会真的丢账。但也不能直接禁止——他可能正是在没网时想留个副本。
+   */
+  function exportAllowed(): boolean {
+    return trustworthy || window.confirm(STALE_EXPORT_WARNING)
+  }
+
   async function exportCsv() {
+    if (!exportAllowed()) return
     setBusy('csv')
     try {
-      const r = await shareOrDownload(`记账-${today()}.csv`, buildCsv(snapshot), 'text/csv')
+      const r = await shareOrDownload(backupFilename('csv', today(), trustworthy), buildCsv(snapshot), 'text/csv')
       showToast(r === 'shared' ? '已打开分享' : '已下载 CSV')
     } finally {
       setBusy('')
@@ -75,9 +88,11 @@ export function Settings() {
   }
 
   async function exportJson() {
+    if (!exportAllowed()) return
     setBusy('json')
     try {
-      const r = await shareOrDownload(`记账备份-${today()}.json`, buildJson(snapshot), 'application/json')
+      const content = buildJson(snapshot, { synced: trustworthy, lastSync })
+      const r = await shareOrDownload(backupFilename('json', today(), trustworthy), content, 'application/json')
       showToast(r === 'shared' ? '已打开分享' : '已下载 JSON 备份')
     } finally {
       setBusy('')
@@ -95,16 +110,30 @@ export function Settings() {
     setBusy('import')
     setImportErr('')
     try {
-      // 先解析并逐条校验，再动云端。整库恢复会先删数据，文件坏了就真没了
-      const snap = parseImport(await file.text())
-      if (restore) {
-        if (!snap.accounts.length || !snap.categories.length) {
-          throw new Error('这个文件里没有账户或分类，不像是完整备份，已停止，云端数据一条没动')
+      const text = await file.text()
+      // 第一步：解析并逐条校验，这一步没过就一个字节都不往云端发。
+      // 整库恢复是先删光再重建，文件里只要有一行数据库不收，账本就真没了（校验规则见 lib/validate.ts）
+      let snap: Snapshot
+      try {
+        snap = parseImport(text)
+        if (restore && (!snap.accounts.length || !snap.categories.length)) {
+          throw new Error('这个文件里没有账户或分类，不像是一份完整备份')
         }
+      } catch (e) {
+        setImportErr(`${friendlyError(e)}。已停止，云端一条数据都没动，账本原封不动。`)
+        return
+      }
+      if (restore) {
+        // 两种「这次恢复不太踏实」都要当面说清楚，用户仍可以坚持
+        const meta = readExportMeta(text)
+        const warn: string[] = []
+        if (meta.synced === false) warn.push('注意：这个备份文件导出时本机还没同步过云端，它自己标了「未同步」，里面的账可能不全。')
+        if (!trustworthy) warn.push('注意：这次打开 App 后还没成功同步过。万一恢复中途失败，自动退回用的是本机现在这份数据，可能比云端少几条。')
         const ok = window.confirm(
           `整库恢复会先删掉云端现在的 ${accounts.length} 个账户、${categories.length} 个分类、${transactions.length} 条流水，` +
             `再按这个文件重建成 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水。\n\n` +
-            '不可撤销。请先确认这个备份文件还在手机或电脑里。继续？',
+            (warn.length ? `${warn.join('\n\n')}\n\n` : '') +
+            '文件已经逐条查过，能导进去。中途万一断网会自动退回操作前的样子。\n\n请先确认这个备份文件还在手机或电脑里。继续？',
         )
         if (!ok) return
         await restoreSnapshot(snap)
@@ -119,9 +148,11 @@ export function Settings() {
         showToast('导入完成')
       }
     } catch (e) {
+      // RestoreFailed 的 message 已经把云端现在什么状态、下一步该干什么说全了，原样显示
       setImportErr(
-        `${restore ? '整库恢复' : '导入'}失败：${friendlyError(e)}。` +
-          '已经写进去的部分不会自动撤销，用同一个文件再走一遍是安全的（同 ID 覆盖）。',
+        e instanceof RestoreFailed
+          ? e.message
+          : `${restore ? '整库恢复' : '导入'}失败：${friendlyError(e)}。已经写进去的部分不会自动撤销，用同一个文件再走一遍是安全的（同 ID 覆盖）。`,
       )
     } finally {
       setBusy('')
@@ -198,8 +229,13 @@ export function Settings() {
               : `${transactions.length} 条记录。缓存是为了打开快和离线可看，写满后会提示。`}
           </div>
         </div>
+        {trustworthy ? null : (
+          <div className="text-xs text-expense leading-relaxed py-2 border-b border-line last:border-0">
+            这次打开 App 后还没成功同步过，现在导出的是本机缓存，可能不是最新的。建议先点上面的「立即同步」。
+          </div>
+        )}
         <Row label="导出 CSV（Excel 可打开）" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
-        <Row label="导出 JSON 完整备份" action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
+        <Row label={`导出 JSON ${trustworthy ? '完整备份' : '备份（会标记为「未同步」）'}`} action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
         <Row label="从备份合并导入（同 ID 覆盖，不删数据）" action={busy === 'import' ? '…' : '选择文件'} onClick={() => pickFile('merge')} />
         <Row label="整库恢复（先清空，再按备份重建）" action={busy === 'import' ? '…' : '选择文件'} danger onClick={() => pickFile('restore')} />
         {importErr ? <div className="text-xs text-expense leading-relaxed py-2 border-b border-line last:border-0">{importErr}</div> : null}
