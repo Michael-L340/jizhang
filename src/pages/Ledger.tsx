@@ -35,9 +35,12 @@ export function Ledger() {
   useEffect(() => {
     const qYm = params.get('ym')
     const qDate = params.get('date')
+    // 没带参数就什么都不做：清空参数会让本 effect 再跑一次，
+    // 那次不能把刚设好的筛选又冲掉
+    if (!qYm && !qDate) return
     if (qYm) setYm(qYm)
     setDayFilter(qDate)
-    if (qYm || qDate) setParams({}, { replace: true })
+    setParams({}, { replace: true })
   }, [params, setParams])
   const [type, setType] = useState<string>('all')
   const [accountId, setAccountId] = useState<string>('all')

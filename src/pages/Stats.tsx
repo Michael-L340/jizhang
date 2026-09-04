@@ -368,7 +368,7 @@ export function Stats() {
           <div className="text-sm text-muted py-12 text-center">这段时间没有{trendKind === 'expense' ? '支出' : '收入'}</div>
         ) : (
           <Suspense fallback={<div style={{ height: 230 }} />}>
-            <Chart option={trendOption} height={230} onClick={(p) => gotoLedger(p.dataIndex)} />
+            <Chart option={trendOption} height={230} onAxisClick={gotoLedger} />
           </Suspense>
         )}
         <div className="text-[11px] text-muted mt-1">
@@ -397,7 +397,7 @@ export function Stats() {
           </div>
         </div>
         <Suspense fallback={<div style={{ height: 230 }} />}>
-          <Chart option={balOption} height={230} onClick={(p) => gotoLedger(p.dataIndex)} />
+          <Chart option={balOption} height={230} onAxisClick={gotoLedger} />
         </Suspense>
         <div className="text-[11px] text-muted mt-1">每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录；点一下可以看当时的流水。</div>
       </div>
