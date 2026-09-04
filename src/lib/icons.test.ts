@@ -60,3 +60,21 @@ describe('图标库', () => {
     for (const g of GUESSED_ICONS) expect(all, `${g} 不在图标库里`).toContain(g)
   })
 })
+
+describe('emoji 渲染', () => {
+  // Unicode 基本平面里的符号默认是「文字外观」，必须跟一个 U+FE0F 变体选择符才会
+  // 渲染成彩色 emoji；少了它，iOS 上会显示成黑白的文字符号，一排彩色图标里格外突兀。
+  // 下面这几个是例外：它们的 Emoji_Presentation 属性本来就是 Yes，不带 FE0F 也是彩色的。
+  const EMOJI_BY_DEFAULT = ['⌚', '☕', '⚡', '⚽', '⛽', '⭐']
+
+  it('该带变体选择符的都带了', () => {
+    const all = [...ICON_GROUPS.flatMap((g) => g.icons), ...GUESSED_ICONS]
+    for (const e of all) {
+      const cps = [...e].map((c) => c.codePointAt(0) ?? 0)
+      const needsVs = cps[0] < 0x1f000 && !EMOJI_BY_DEFAULT.includes(e)
+      if (needsVs) {
+        expect(cps, `${e}（${cps.map((c) => 'U+' + c.toString(16).toUpperCase()).join(' ')}）缺少 U+FE0F`).toContain(0xfe0f)
+      }
+    }
+  })
+})
