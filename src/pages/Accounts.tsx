@@ -5,7 +5,7 @@ import { Sheet } from '../components/Sheet'
 import { balances, totalOf } from '../lib/compute'
 import { fmtIsoZh, nowIso, today } from '../lib/date'
 import { newId } from '../lib/id'
-import { fmtYuan, parseYuan } from '../lib/money'
+import { calcDelta, fmtYuan, parseYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 import type { Account } from '../types'
 
@@ -17,8 +17,9 @@ export function Accounts() {
   const syncFailed = useStore((s) => s.syncFailed)
   const accounts = useActiveAccounts()
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
-  // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页
-  const lastChecks = useMemo(() => {
+  // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页。
+  // 注意：adjust 记录只在「有差额」时才产生，所以这里得到的是「上次校准」而不是「上次核对」。
+  const lastAdjusts = useMemo(() => {
     const m = new Map<string, string>()
     for (const t of txs) {
       if (t.type !== 'adjust' || !t.account_id) continue
@@ -33,7 +34,7 @@ export function Accounts() {
 
   const computed = target ? bal[target.id] ?? 0 : 0
   const real = parseYuan(input)
-  const delta = real === null ? null : real - computed
+  const delta = calcDelta(input, computed) // 算式本体在 lib/money.ts，那里测得到
 
   function open(a: Account) {
     setTarget(a)
@@ -42,6 +43,13 @@ export function Accounts() {
 
   async function confirm() {
     if (!target || delta === null) return
+    // 没差额就不留痕：以前会写一条 0 元「余额核对」，只是为了同步「上次核对时间」，
+    // 结果流水里全是 0 元行，用户嫌碍眼。核对本身不产生数据。
+    if (delta === 0) {
+      showToast(`${target.name} 核对无差异，没有产生记录`)
+      setTarget(null)
+      return
+    }
     setBusy(true)
     const ok = await addTx({
       id: newId(),
@@ -51,12 +59,12 @@ export function Accounts() {
       account_id: target.id,
       to_account_id: null,
       category_id: null,
-      note: delta === 0 ? '余额核对' : '余额校准',
+      note: '余额校准',
       created_at: nowIso(),
     })
     setBusy(false)
     if (ok) {
-      showToast(delta === 0 ? `${target.name} 核对无差异` : `${target.name} 已校准 ${fmtYuan(delta, { sign: true })}`)
+      showToast(`${target.name} 已校准 ${fmtYuan(delta, { sign: true })}`)
       setTarget(null)
     }
   }
@@ -81,13 +89,13 @@ export function Accounts() {
 
       <div className="flex flex-col gap-2">
         {accounts.map((a) => {
-          const lc = lastChecks.get(a.id) ?? null
+          const lc = lastAdjusts.get(a.id) ?? null
           return (
             <button key={a.id} type="button" className="card p-4 text-left flex items-center gap-3" onClick={() => open(a)}>
               <AccountIcon name={a.name} />
               <span className="flex-1 min-w-0">
                 <span className="block font-medium">{a.name}</span>
-                <span className="block text-xs text-muted">{lc ? `上次核对 ${fmtIsoZh(lc)}` : '从未核对，点此输入实际余额'}</span>
+                <span className="block text-xs text-muted">{lc ? `上次校准 ${fmtIsoZh(lc)}` : '点此输入实际余额核对'}</span>
               </span>
               <span className={`num text-lg font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
             </button>
@@ -96,7 +104,7 @@ export function Accounts() {
       </div>
 
       <div className="text-xs text-muted mt-4 leading-relaxed">
-        点账户输入实际余额。若与推算不一致，差额会记成一条「余额校准」，出现在流水里但不计入收入支出；随时可以删除或改成一笔正常收支。
+        点账户输入实际余额。一致就什么都不记；不一致时，差额会记成一条「余额校准」，出现在流水里但不计入收入支出，随时可以删除或改成一笔正常收支。
       </div>
 
       <Sheet open={Boolean(target)} onClose={() => setTarget(null)} title={target ? `${target.name} · 输入实际余额` : ''}>
@@ -128,7 +136,7 @@ export function Accounts() {
           </div>
         </div>
         <button type="button" disabled={busy || delta === null} className="w-full rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-40" onClick={confirm}>
-          {delta === 0 ? '记录核对' : '生成校准记录'}
+          {delta === 0 ? '无差异，直接关闭' : '生成校准记录'}
         </button>
       </Sheet>
     </div>

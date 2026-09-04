@@ -90,7 +90,10 @@ async function agreed(db: PGlite): Promise<Record<string, number>> {
 /**
  * 复刻 Accounts.tsx 的 confirm()：
  *   推算余额 = 前端 balances()[账户]；差额 = 实际余额 − 推算余额；
- *   写一条 adjust，金额就是差额，差额为 0 也写（备注「余额核对」）。
+ *   写一条 adjust，金额就是差额。
+ *   注：2026-09-04 起，差额为 0 时界面上不再写记录（用户嫌流水里碍眼），
+ *   只弹一句「核对无差异」。但数据库仍然允许 0 元的 adjust——历史数据里有这种记录，
+ *   下面「场景5」验的就是这个兼容性，不是当前的界面行为。
  * 返回差额（分），方便断言。
  */
 async function calibrate(db: PGlite, accountId: string, realCents: number, date = '2026-09-10'): Promise<number> {
@@ -190,7 +193,7 @@ describe('修改账户余额（真数据库）', () => {
     expect(raw.map((r) => r.a)).toEqual(['-1500.75', '700.75'])
   })
 
-  it('场景5 差额为 0：数据库真的会存一条 0 元记录，余额一分不变', async () => {
+  it('场景5 历史遗留的 0 元核对记录：库里存得住，余额一分不变', async () => {
     const db = await freshDb()
     const boc = (await accountIds(db))['中国银行']
 
@@ -203,7 +206,7 @@ describe('修改账户余额（真数据库）', () => {
     const zero = await q(db, "select amount::text as a, note from transactions where type='adjust' and amount = 0")
     expect(zero).toHaveLength(1)
     expect(zero[0]).toMatchObject({ a: '0.00', note: '余额核对' })
-    // 「上次核对」就是靠这条 0 元记录的时间，所以它必须真的存在于库里
+    // 界面现在不再产生这种记录，但 2026-09-04 之前记下的还在库里，不能让它们变成非法数据
     expect((await q(db, "select count(*)::int as n from transactions where type='adjust'"))[0].n).toBe(2)
   })
 

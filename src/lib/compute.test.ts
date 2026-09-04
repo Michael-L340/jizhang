@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
 import { applyTx, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthSummary, monthTotals, monthlySeries, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
-import { centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
+import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
 const accounts: Account[] = [
   { id: 'boc', name: '中国银行', kind: 'bank', sort: 1, is_archived: false },
@@ -53,6 +53,51 @@ describe('money', () => {
     expect(fmtYuan(123456)).toBe('1,234.56')
     expect(fmtYuan(-500, { symbol: true })).toBe('-¥5.00')
     expect(fmtYuan(500, { sign: true })).toBe('+5.00')
+  })
+})
+
+// 「差额 = 实际余额 − 推算余额」是账户页余额核对的核心算式。
+// 它原来写在 Accounts.tsx 里，node 环境没有 DOM 测不到，改错了没人拦；
+// 现在挪进 money.ts，下面这一组就是拦它的人。
+describe('calcDelta（差额 = 实际余额 − 推算余额）', () => {
+  it('正常差额：实际比推算多 → 正数；单位是分', () => {
+    expect(calcDelta('5000', 480000)).toBe(20000) // 5000.00 − 4800.00 = +200.00
+    expect(calcDelta('4800.5', 480000)).toBe(50) // 只差 5 毛
+  })
+
+  it('差额为 0：一分不差时必须是 0，不是 null 也不是别的数', () => {
+    expect(calcDelta('5000', 500000)).toBe(0)
+    expect(calcDelta('5,000.00', 500000)).toBe(0) // 带千分位逗号同样认
+    expect(calcDelta('0', 0)).toBe(0) // 空账户核对空余额
+  })
+
+  it('差额为负：实际比推算少 → 负数，符号不能反', () => {
+    expect(calcDelta('4800', 500000)).toBe(-20000) // 4800.00 − 5000.00 = −200.00
+    expect(calcDelta('0', 150075)).toBe(-150075) // 花光了
+  })
+
+  it('输入非法：空 / abc / 三位小数 / 只有负号 → null，页面据此把按钮置灰', () => {
+    expect(calcDelta('', 500000)).toBeNull()
+    expect(calcDelta('   ', 500000)).toBeNull()
+    expect(calcDelta('abc', 500000)).toBeNull()
+    expect(calcDelta('1.234', 500000)).toBeNull() // 超过 2 位小数，分以下没法存
+    expect(calcDelta('-', 500000)).toBeNull()
+    expect(calcDelta('12.5abc', 500000)).toBeNull()
+  })
+
+  it('推算余额为负（信用卡欠款）：差额要跨过 0 正确算出来', () => {
+    expect(calcDelta('-1000', -170075)).toBe(70075) // 欠得比推算少 → 正差额
+    expect(calcDelta('-1500.75', 0)).toBe(-150075) // 从 0 变成欠款 → 负差额
+    expect(calcDelta('0', -150075)).toBe(150075) // 还清了
+    expect(calcDelta('-1500.75', -150075)).toBe(0) // 负余额也能核对出无差异
+  })
+
+  it('大额：999999.99 元不丢精度，正反两个方向都对', () => {
+    expect(calcDelta('999999.99', 0)).toBe(99999999)
+    expect(calcDelta('999999.99', 99999999)).toBe(0)
+    expect(calcDelta('0', 99999999)).toBe(-99999999)
+    expect(calcDelta('999999.99', 1)).toBe(99999998)
+    expect(centsFromDb(centsToDb(calcDelta('999999.99', 1)!))).toBe(99999998) // 存进 numeric(12,2) 再读回来
   })
 })
 
@@ -321,19 +366,20 @@ describe('月份选择器与起点', () => {
 //
 // 下面的 calibrate() 是 Accounts.tsx 里 confirm() 的等价复刻：
 //   推算余额 = balances(txs, accounts)[账户]
-//   差额     = 实际余额(parseYuan 解析的分) − 推算余额
-//   写一条 { type:'adjust', amount: 差额, account_id: 该账户 }，差额为 0 也照写。
-// 页面本身在 node 环境测不到（没有 DOM），所以把那条算式复制到这里锁住：
-// 只要 Accounts.tsx 的算式改了而这里没跟着改，两边就对不上了。
+//   差额     = calcDelta(用户输入的元, 推算余额)  ← 这一步两边共用 lib/money.ts 的同一份代码
+//   差额不为 0 才写一条 { type:'adjust', amount: 差额, account_id: 该账户, note:'余额校准' }；
+//   差额为 0 什么都不写（以前会写 0 元「余额核对」，用户嫌流水里碍眼）。
+// 页面本身在 node 环境测不到（没有 DOM），所以「写不写」这个判断只能复刻在这里；
+// 算式本身已经搬进 money.ts，由上面的 calcDelta 一组直接看着。
 // ─────────────────────────────────────────────────────────────────────
 describe('修改账户余额（校准链路）', () => {
-  /** 复刻 Accounts.tsx 的 confirm()：输入「实际余额（元）」，追加一条 adjust */
+  /** 复刻 Accounts.tsx 的 confirm()：输入「实际余额（元）」，有差额才追加一条 adjust */
   function calibrate(txs: Transaction[], accountId: string, realYuan: string): Transaction[] {
     const computed = balances(txs, accounts)[accountId] ?? 0
-    const real = parseYuan(realYuan)
-    if (real === null) throw new Error(`输入 ${realYuan} 解析不了，页面上按钮会是灰的`)
-    const delta = real - computed
-    return [...txs, tx({ type: 'adjust', amount: delta, account_id: accountId, note: delta === 0 ? '余额核对' : '余额校准' })]
+    const delta = calcDelta(realYuan, computed)
+    if (delta === null) throw new Error(`输入 ${realYuan} 解析不了，页面上按钮会是灰的`)
+    if (delta === 0) return txs // 无差异 → 只弹个提示，不落任何记录
+    return [...txs, tx({ type: 'adjust', amount: delta, account_id: accountId, note: '余额校准' })]
   }
   const bal = (txs: Transaction[], id: string) => balances(txs, accounts)[id] ?? 0
   const last = (txs: Transaction[]) => txs[txs.length - 1]
@@ -431,21 +477,28 @@ describe('修改账户余额（校准链路）', () => {
     expect(totalOf(balances(rows, accounts))).toBe(-100000)
   })
 
-  it('场景5 差额为 0：写一条 0 元记录，余额不变，但「上次核对」要更新', () => {
+  it('场景5 差额为 0：一条记录都不写，流水里不留 0 元行', () => {
     const before = calibrate([], 'boc', '5000')
     const n0 = before.length
     const check0 = lastCheck(before, 'boc')
 
     const after = calibrate(before, 'boc', '5000')
-    expect(after).toHaveLength(n0 + 1) // 真的多写了一条
-    expect(last(after)).toMatchObject({ type: 'adjust', amount: 0, account_id: 'boc', note: '余额核对' })
+    expect(calcDelta('5000', bal(before, 'boc'))).toBe(0) // 确实是无差异这一支
+    expect(after).toHaveLength(n0) // 没有多写任何一条
+    expect(after.filter((t) => t.type === 'adjust' && t.amount === 0)).toHaveLength(0) // 流水里没有 0 元行
     expect(bal(after, 'boc')).toBe(500000) // 余额一分不变
     expect(bal(before, 'boc')).toBe(bal(after, 'boc'))
-    // 0 元记录的唯一作用：把「上次核对时间」推进（能跨设备同步）
-    expect(lastCheck(after, 'boc')).toBe(last(after).created_at)
-    expect(lastCheck(after, 'boc')! > check0!).toBe(true)
-    // 0 元记录不进收支
+    // 代价：不写记录 → 「上次校准时间」不会因为一次无差异核对而前进，这是有意的
+    expect(lastCheck(after, 'boc')).toBe(check0)
     expect(monthSummary(after, '2026-09')).toMatchObject({ expense: 0, income: 0 })
+  })
+
+  it('场景5b 连着核对十次无差异：流水条数一条都不涨', () => {
+    let rows = calibrate([], 'wx', '200')
+    const n0 = rows.length
+    for (let i = 0; i < 10; i++) rows = calibrate(rows, 'wx', '200')
+    expect(rows).toHaveLength(n0)
+    expect(bal(rows, 'wx')).toBe(20000)
   })
 
   it('场景6 转账不影响这条链路：转完两边各自对，各自再校准一次仍然对', () => {
@@ -481,8 +534,10 @@ describe('修改账户余额（校准链路）', () => {
     expect(monthSummary(rows, '2026-09')).toMatchObject({ expense: 8000, income: 3000 }) // 但要进收支统计
 
     // 再核对一次实际余额 5000：差额必须是 0，不能被那两笔无账户流水带偏
+    expect(calcDelta('5000', bal(rows, 'boc'))).toBe(0)
+    const n0 = rows.length
     rows = calibrate(rows, 'boc', '5000')
-    expect(last(rows).amount).toBe(0)
+    expect(rows).toHaveLength(n0) // 无差异 → 不写记录
   })
 
   it('场景8 多账户互不干扰：给中国银行校准，微信一分不变', () => {
@@ -543,7 +598,7 @@ describe('修改账户余额（校准链路）', () => {
     const rows = [
       tx({ type: 'adjust', amount: 100, account_id: 'boc' }),
       tx({ type: 'adjust', amount: 200, account_id: 'wx' }),
-      tx({ type: 'adjust', amount: 0, account_id: 'boc' }), // 0 元核对也算核对过
+      tx({ type: 'adjust', amount: 0, account_id: 'boc' }), // 历史遗留的 0 元核对记录，仍然算「校准过」
       tx({ type: 'expense', amount: 300, account_id: 'boc', category_id: 'lunch' }), // 收支不算核对
     ]
     expect(lastCheck(rows, 'boc')).toBe(rows[2].created_at)

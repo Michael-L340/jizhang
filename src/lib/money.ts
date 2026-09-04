@@ -32,3 +32,18 @@ export function fmtYuan(cents: number, opts: { sign?: boolean; symbol?: boolean 
   if (neg) return `-${body}`
   return opts.sign && cents > 0 ? `+${body}` : body
 }
+
+/**
+ * 余额核对的那条算式：差额 = 实际余额 − 推算余额。
+ * @param input          用户输入的实际余额（元，字符串）
+ * @param computedCents  由流水推算出来的余额（分）
+ * @returns 差额（分）；input 解析不出金额时返回 null，页面据此把按钮置灰。
+ *
+ * 抽在这里是因为页面（Accounts.tsx）跑在浏览器里，node 单测没有 DOM 进不去；
+ * 算式留在页面里就等于没人看着它。
+ */
+export function calcDelta(input: string, computedCents: number): number | null {
+  const real = parseYuan(input)
+  if (real === null) return null
+  return real - computedCents
+}
