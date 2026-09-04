@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
@@ -26,20 +26,26 @@ export function Ledger() {
   const accMap = useAccountMap()
   const catMap = useCategoryMap()
   const nav = useNavigate()
+  const showToast = useStore((s) => s.showToast)
 
   const [params, setParams] = useSearchParams()
-  const [ym, setYm] = useState(() => params.get('ym') || monthOf(today()))
-  const [dayFilter, setDayFilter] = useState<string | null>(() => params.get('date'))
+  const [ym, setYm] = useState(() => {
+    const d = params.get('date')
+    return d ? monthOf(d) : params.get('ym') || monthOf(today())
+  })
+  const [target, setTarget] = useState<string | null>(() => params.get('date'))
+  const scrolledFor = useRef<string | null>(null)
 
   // 从统计页跳过来时带着 ym / date
   useEffect(() => {
     const qYm = params.get('ym')
     const qDate = params.get('date')
     // 没带参数就什么都不做：清空参数会让本 effect 再跑一次，
-    // 那次不能把刚设好的筛选又冲掉
+    // 那次不能把刚设好的状态冲掉
     if (!qYm && !qDate) return
-    if (qYm) setYm(qYm)
-    setDayFilter(qDate)
+    setYm(qDate ? monthOf(qDate) : (qYm as string))
+    setTarget(qDate)
+    scrolledFor.current = null
     setParams({}, { replace: true })
   }, [params, setParams])
   const [type, setType] = useState<string>('all')
@@ -51,9 +57,7 @@ export function Ledger() {
 
   const list = useMemo(() => {
     return txs.filter((t) => {
-      if (dayFilter) {
-        if (t.date !== dayFilter) return false
-      } else if (!inMonth(t, ym)) return false
+      if (!inMonth(t, ym)) return false
       if (type !== 'all' && t.type !== (type as TxType)) return false
       if (accountId === 'none' && t.account_id) return false
       if (accountId !== 'all' && accountId !== 'none' && t.account_id !== accountId && t.to_account_id !== accountId) return false
@@ -65,10 +69,27 @@ export function Ledger() {
       }
       return true
     })
-  }, [txs, ym, dayFilter, type, accountId, parentId, catMap])
+  }, [txs, ym, type, accountId, parentId, catMap])
 
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
+
+  // 从图表跳过来：滚到那一天并短暂高亮；那天没记录就提示一下
+  useEffect(() => {
+    if (!target || scrolledFor.current === target) return
+    const el = document.getElementById(`day-${target}`)
+    if (el) {
+      scrolledFor.current = target
+      requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+      const t = setTimeout(() => setTarget(null), 2400)
+      return () => clearTimeout(t)
+    }
+    if (groups.length) {
+      scrolledFor.current = target
+      showToast(`${fmtDateZh(target, false)} 没有记录`)
+      setTarget(null)
+    }
+  }, [target, groups, showToast])
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const filtered = type !== 'all' || accountId !== 'all' || parentId !== 'all'
 
@@ -78,19 +99,11 @@ export function Ledger() {
         <MonthPicker
           value={ym}
           onChange={(v) => {
-            setDayFilter(null)
+            setTarget(null)
             setYm(v)
           }}
           totals={totalsByMonth}
         />
-        {dayFilter ? (
-          <div className="flex justify-center pb-1">
-            <button type="button" className="chip on flex items-center gap-1.5" style={{ padding: '5px 12px' }} onClick={() => setDayFilter(null)}>
-              只看 {fmtDateZh(dayFilter, false)}
-              <span className="opacity-70">×</span>
-            </button>
-          </div>
-        ) : null}
         <div className="flex items-center justify-between text-xs text-muted px-1">
           <span className="num">
             支出 <span className="text-expense">{fmtYuan(sum.expense)}</span> · 收入 <span className="text-income">{fmtYuan(sum.income)}</span>
@@ -105,7 +118,7 @@ export function Ledger() {
         <div className="text-center text-muted text-sm py-16">这个月没有记录</div>
       ) : (
         groups.map((g) => (
-          <div key={g.date} className="mt-3">
+          <div key={g.date} id={`day-${g.date}`} className="mt-3" style={{ scrollMarginTop: 92 }}>
             <div className="flex justify-between px-4 pb-1 text-xs text-muted">
               <span>
                 {fmtDateZh(g.date)}
@@ -117,7 +130,7 @@ export function Ledger() {
                 {g.income ? `收入 ${fmtYuan(g.income)}` : ''}
               </span>
             </div>
-            <div className="card mx-4 divide-y divide-line overflow-hidden">
+            <div className={`card mx-4 divide-y divide-line overflow-hidden ${target === g.date ? 'day-flash' : ''}`}>
               {g.items.map((t) => (
                 <TxRow key={t.id} tx={t} accounts={accMap} categories={catMap} onClick={() => nav(`/add?id=${t.id}`)} />
               ))}
