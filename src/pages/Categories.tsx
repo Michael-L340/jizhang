@@ -275,7 +275,14 @@ export function Categories() {
               }}
             />
             <div className="text-xs text-muted mt-3">
-              这个分类下现有 {countById.get(editCat.id) ?? 0} 笔记录。
+              {/* countById 是按分类 ID 精确计数的，对一级分类来说只数到「直接记在这一级、
+                  没选二级」的那些，而收起来的列表里显示的是含二级的合计——同一个分类
+                  在同一个页面出现两个数字。这里改成和列表一致，并把差额说清楚。 */}
+              这个分类下现有 {countOf(editCat)} 笔记录
+              {!editCat.parent_id && countOf(editCat) !== (countById.get(editCat.id) ?? 0)
+                ? `，其中 ${countById.get(editCat.id) ?? 0} 笔直接记在这一级、没选二级`
+                : ''}
+              。
             </div>
           </div>
         ) : null}
