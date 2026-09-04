@@ -7,6 +7,7 @@ import { adjustTotal, balanceSeries, bucketKeys, byCategory, firstFlowDate, mont
 import { addDays, fmtDateZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { categoryColor, childColors } from '../lib/palette'
+import { usePersistedState } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
 
 const Chart = lazy(() => import('../components/Chart'))
@@ -18,14 +19,14 @@ export function Stats() {
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
   const [ym, setYm] = useState(monthOf(today()))
-  const [kind, setKind] = useState<'expense' | 'income'>('expense')
+  const [kind, setKind] = usePersistedState<'expense' | 'income'>('jz_stats_pieKind', 'expense')
   const [drill, setDrill] = useState<string | null>(null)
-  const [lineMode, setLineMode] = useState<'total' | 'category'>('total')
-  const [unit, setUnit] = useState<Unit>('month')
-  const [range, setRange] = useState<RangeValue>({ kind: 'year' })
+  const [lineMode, setLineMode] = usePersistedState<'total' | 'category'>('jz_stats_lineMode', 'total')
+  const [unit, setUnit] = usePersistedState<Unit>('jz_stats_unit', 'month')
+  const [range, setRange] = usePersistedState<RangeValue>('jz_stats_range', { kind: 'year' })
   const [rangeOpen, setRangeOpen] = useState(false)
-  const [trendKind, setTrendKind] = useState<'expense' | 'income'>('expense')
-  const [balMode, setBalMode] = useState<'total' | 'account'>('total')
+  const [trendKind, setTrendKind] = usePersistedState<'expense' | 'income'>('jz_stats_trendKind', 'expense')
+  const [balMode, setBalMode] = usePersistedState<'total' | 'account'>('jz_stats_balMode', 'total')
   const [help, setHelp] = useState(false)
 
   const agg = useMemo(() => byCategory(txs, cats, ym, kind), [txs, cats, ym, kind])

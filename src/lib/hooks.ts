@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Account, Category } from '../types'
 import { useStore } from './store'
 
@@ -25,6 +25,30 @@ export function useOnline(): boolean {
     }
   }, [])
   return online
+}
+
+/** 记住用户的选择：切页面再回来保持原样，重开 App 也还在 */
+export function usePersistedState<T>(key: string, initial: T): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    try {
+      const raw = localStorage.getItem(key)
+      return raw === null ? initial : (JSON.parse(raw) as T)
+    } catch {
+      return initial
+    }
+  })
+  const set = useCallback(
+    (next: T) => {
+      setValue(next)
+      try {
+        localStorage.setItem(key, JSON.stringify(next))
+      } catch {
+        /* 存储被禁用时只保留内存里的值 */
+      }
+    },
+    [key],
+  )
+  return [value, set]
 }
 
 /** 读写 localStorage 的小工具，失败时静默 */
