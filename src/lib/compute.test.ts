@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, monthSummary, monthlySeries, recentChildOrder, totalOf } from './compute'
+import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, monthSummary, monthlySeries, OPENING_NOTE, recentChildOrder, totalOf } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -155,6 +155,80 @@ describe('month stats exclude transfer and adjust', () => {
 
   it('adjustTotal reports unrecorded delta', () => {
     expect(adjustTotal(txs, '2026-09')).toBe(-99999)
+  })
+
+  describe('adjustTotal 排除开户时录的初始余额', () => {
+    // 一条校准记的是「实际 − 推算」。账户还没有任何记录时推算是 0，
+    // 差额就等于本金 —— 那不是漏记，不能算进「未记录差额」。
+    it('账户的第一条记录就是校准时，那是本金不是漏记', () => {
+      const open = [tx({ type: 'adjust', amount: 1500000, account_id: 'boc' })]
+      expect(adjustTotal(open)).toBe(0)
+    })
+
+    it('备注写了「初始余额」的一律排除', () => {
+      const rows = [
+        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
+        tx({ type: 'adjust', amount: 1500000, account_id: 'boc', note: OPENING_NOTE }),
+      ]
+      expect(adjustTotal(rows)).toBe(0)
+    })
+
+    it('已经有记录之后再做的校准，仍然算漏记差额', () => {
+      const rows = [
+        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
+        tx({ type: 'adjust', amount: -5000, account_id: 'boc' }),
+      ]
+      expect(adjustTotal(rows)).toBe(-5000)
+    })
+
+    it('开户那笔排除，之后的校准照常统计', () => {
+      const rows = [
+        tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
+        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch' }),
+        tx({ type: 'adjust', amount: -5000, account_id: 'boc' }),
+      ]
+      expect(adjustTotal(rows)).toBe(-5000)
+    })
+
+    it('每个账户各认各的开户那笔', () => {
+      const rows = [
+        tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
+        tx({ type: 'adjust', amount: 30000, account_id: 'wx' }),
+        tx({ type: 'adjust', amount: -700, account_id: 'wx' }),
+      ]
+      expect(adjustTotal(rows)).toBe(-700)
+    })
+
+    it('转账进来也算「已经有记录」，之后的校准是真差额', () => {
+      const rows = [
+        tx({ type: 'transfer', amount: 100000, account_id: 'cmb', to_account_id: 'wx' }),
+        tx({ type: 'adjust', amount: -700, account_id: 'wx' }),
+      ]
+      expect(adjustTotal(rows)).toBe(-700)
+    })
+
+    it('补记一笔更早日期的账，不能改变谁是开户那笔', () => {
+      // 用 created_at 判断而不是 date：否则今天补记上周的开销，
+      // 统计页那个数字会莫名其妙地变
+      const rows = [
+        tx({ type: 'adjust', amount: 1500000, account_id: 'boc', date: '2026-09-03' }),
+        tx({ type: 'expense', amount: 2800, account_id: 'boc', category_id: 'lunch', date: '2026-08-20' }),
+      ]
+      expect(adjustTotal(rows)).toBe(0)
+    })
+
+    it('不指定账户的流水不影响判断', () => {
+      const rows = [
+        tx({ type: 'expense', amount: 53800, account_id: null, category_id: 'lunch' }),
+        tx({ type: 'adjust', amount: 1500000, account_id: 'boc' }),
+      ]
+      expect(adjustTotal(rows)).toBe(0)
+    })
+
+    it('按月统计时也要排除', () => {
+      const rows = [tx({ type: 'adjust', amount: 1500000, account_id: 'boc', date: '2026-09-03' })]
+      expect(adjustTotal(rows, '2026-09')).toBe(0)
+    })
   })
   it('dailyCumulative ends at month expense and nulls future days', () => {
     const arr = dailyCumulative(txs, '2026-09', '2026-09-05')

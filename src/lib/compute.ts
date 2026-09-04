@@ -295,10 +295,49 @@ export function recentChildOrder(txs: Transaction[], cats: Category[], parentId:
   })
 }
 
-/** 校准差额合计（可按月），正数 = 有漏记收入，负数 = 有漏记支出 */
+/** 开户时录入初始余额的那条校准，备注固定用这个词，统计时要排除 */
+export const OPENING_NOTE = '初始余额'
+
+/**
+ * 校准差额合计（可按月）。正数 = 有漏记收入，负数 = 有漏记支出。
+ *
+ * 开户时录的初始余额必须排除。它也是一条 adjust，但语义完全不同：
+ * 一条校准记的是「实际 − 推算」，而账户还没有任何记录时推算必然是 0，
+ * 于是差额就等于本金全额。那不是「漏记」，是这笔钱本来就在那儿。
+ * 不排除的话，统计页会永远挂着一句「有一万五的收入忘了记」，而且永远消不掉——
+ * 除非删掉开户那笔，但删了账户余额又归零。
+ *
+ * 两条判据，命中任一即排除：
+ * 1. 备注是「初始余额」（Accounts.tsx 从 2026-09-04 起这样写）
+ * 2. 是该账户创建时间最早的一条记录，且是 adjust
+ *
+ * 第二条不是靠猜：账户没有任何在先记录时，推算余额必然为 0，
+ * 所以那笔差额必然是本金而非差异。它的作用是兜住 09-04 之前已经记下的历史，
+ * 不需要用户回头去改备注。
+ *
+ * 用 created_at 而不是 date 判断「最早」：补记一笔日期更早的账（比如今天记上周的开销）
+ * 不应该改变「哪一笔是开户那笔」，否则这个数字会莫名其妙地变。
+ */
 export function adjustTotal(txs: Transaction[], ym?: string): number {
+  const firstKey = new Map<string, string>()
+  const firstOpening = new Map<string, string>()
+  for (const t of txs) {
+    const key = `${t.created_at}|${t.id}`
+    for (const id of [t.account_id, t.to_account_id]) {
+      if (!id) continue
+      const prev = firstKey.get(id)
+      if (prev && prev <= key) continue
+      firstKey.set(id, key)
+      firstOpening.set(id, t.type === 'adjust' ? t.id : '')
+    }
+  }
+  const opening = new Set([...firstOpening.values()].filter(Boolean))
   let s = 0
-  for (const t of txs) if (t.type === 'adjust' && (!ym || inMonth(t, ym))) s += t.amount
+  for (const t of txs) {
+    if (t.type !== 'adjust' || t.note === OPENING_NOTE || opening.has(t.id)) continue
+    if (ym && !inMonth(t, ym)) continue
+    s += t.amount
+  }
   return s
 }
 

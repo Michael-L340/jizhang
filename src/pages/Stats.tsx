@@ -411,7 +411,7 @@ export function Stats() {
           <span className="text-muted">累计未记录差额</span>
           <span className={`num ${adjAll < 0 ? 'text-expense' : adjAll > 0 ? 'text-income' : ''}`}>{fmtYuan(adjAll, { sign: true })}</span>
         </div>
-        <div className="text-xs text-muted mt-1">来自余额校准：负数说明有支出没记，正数说明有收入没记。</div>
+        <div className="text-xs text-muted mt-1">来自余额校准，不含开户时录入的初始余额：负数说明有支出没记，正数说明有收入没记。</div>
       </div>
 
       <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />
