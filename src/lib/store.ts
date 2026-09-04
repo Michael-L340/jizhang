@@ -337,12 +337,19 @@ export const useStore = create<State>((set, get) => ({
   async addCategory(kind, parentId, name) {
     const trimmed = name.trim()
     if (!trimmed) return null
-    const siblings = get().categories.filter((c) => c.kind === kind && c.parent_id === parentId)
-    const existing = siblings.find((c) => c.name === trimmed)
-    if (existing) {
-      if (existing.is_archived) await get().updateCategory(existing.id, { is_archived: false })
+    const findSame = (): Category | undefined => get().categories.find((c) => c.kind === kind && c.parent_id === parentId && c.name === trimmed)
+    // 同名的分类已经在库里：直接复用它。分类只归档不删除，同名多半就是同一件事，
+    // 所以归档过的要原地取消归档——但必须说一声，历史记录会跟着一起回来，
+    // 不吭声的话用户以为自己建了个干干净净的新分类。
+    const reuse = async (existing: Category): Promise<Category> => {
+      if (existing.is_archived && (await get().updateCategory(existing.id, { is_archived: false }))) {
+        get().showToast(`「${existing.name}」之前归档过，已经恢复，历史记录一起回来了`)
+      }
       return existing
     }
+    const existing = findSame()
+    if (existing) return await reuse(existing)
+    const siblings = get().categories.filter((c) => c.kind === kind && c.parent_id === parentId)
     const sort = siblings.reduce((m, c) => Math.max(m, c.sort), 0) + 1
     try {
       const created = await api.addCategory({ kind, parent_id: parentId, name: trimmed, sort })
@@ -353,6 +360,17 @@ export const useStore = create<State>((set, get) => ({
       get().persist()
       return created
     } catch (e) {
+      // 网慢时连点两次「确定」：两个请求都出了门，第二个被唯一索引挡下。
+      // 这不是失败——分类已经建好了，弹一句红字反而让人以为没建成，再去点第三次。
+      // 先看本地（第一次请求的结果可能已经落到 state 里），本地没有就同步一次再找，
+      // 都找不到才是真的失败。
+      if (api.isDuplicateName(e)) {
+        const local = findSame()
+        if (local) return await reuse(local)
+        await pullAfterWrite(get)
+        const synced = findSame()
+        if (synced) return await reuse(synced)
+      }
       get().showToast(`新增分类失败：${api.friendlyError(e)}`)
       return null
     }

@@ -61,6 +61,18 @@ export function monthSummary(txs: Transaction[], ym: string): MonthSummary {
   return { income, expense, net, savingRate: income > 0 ? net / income : null }
 }
 
+/**
+ * 分类查不到时用的兜底桶。
+ *
+ * 每笔账存的是分类编号不是名字，画饼图时要拿编号去分类表里查。查不到就跳过的话，
+ * 这笔钱在「本月支出」里算了、在饼图里却没了，两个数字对不上而且毫无提示。
+ * 数据库有外键挡着，正常情况下不会出现孤儿记录；但正确性不该押在别处，
+ * 万一出现（手改过的备份、内存里短暂不一致、以后新增的写入路径），
+ * 要让用户一眼看见「有一笔钱没归类」，而不是钱悄悄少了。
+ */
+export const UNCATEGORIZED_ID = '__uncategorized__'
+export const UNCATEGORIZED_NAME = '未分类'
+
 export interface CatAgg {
   id: string
   name: string
@@ -79,32 +91,41 @@ export function byCategory(
 ): CatAgg[] {
   const byId = new Map(cats.map((c) => [c.id, c]))
   const agg = new Map<string, CatAgg>()
-  const ensure = (parent: Category): CatAgg => {
-    let a = agg.get(parent.id)
+  const ensure = (id: string, name: string, icon: string | null): CatAgg => {
+    let a = agg.get(id)
     if (!a) {
-      a = { id: parent.id, name: parent.name, icon: parent.icon, amount: 0, count: 0, children: [] }
-      agg.set(parent.id, a)
+      a = { id, name, icon, amount: 0, count: 0, children: [] }
+      agg.set(id, a)
     }
     return a
   }
-  for (const t of txs) {
-    if (t.type !== type || !inMonth(t, ym) || !t.category_id) continue
-    const c = byId.get(t.category_id)
-    if (!c) continue
-    const parent = c.parent_id ? byId.get(c.parent_id) ?? c : c
-    const a = ensure(parent)
-    a.amount += t.amount
+  const addTo = (a: CatAgg, childId: string, childName: string, amount: number) => {
+    a.amount += amount
     a.count += 1
-    // 直接记在一级上（没选二级）的，归入「未细分」，否则下钻时会漏掉这部分钱
-    const childId = c.id !== parent.id ? c.id : `${parent.id}:none`
-    const childName = c.id !== parent.id ? c.name : '未细分'
     let ch = a.children.find((x) => x.id === childId)
     if (!ch) {
       ch = { id: childId, name: childName, amount: 0, count: 0 }
       a.children.push(ch)
     }
-    ch.amount += t.amount
+    ch.amount += amount
     ch.count += 1
+  }
+  for (const t of txs) {
+    if (t.type !== type || !inMonth(t, ym)) continue
+    // 分类查不到就归入「未分类」，绝不能 continue 当它不存在——
+    // 那样这笔钱在「本月支出」里算了、在饼图里却没有，两个数字对不上且没有任何提示。
+    // 这条等式必须无条件成立：本月支出 = 饼图各块之和。
+    const c = t.category_id ? byId.get(t.category_id) : undefined
+    if (!c) {
+      addTo(ensure(UNCATEGORIZED_ID, UNCATEGORIZED_NAME, null), UNCATEGORIZED_ID, UNCATEGORIZED_NAME, t.amount)
+      continue
+    }
+    const parent = c.parent_id ? byId.get(c.parent_id) ?? c : c
+    const a = ensure(parent.id, parent.name, parent.icon)
+    // 直接记在一级上（没选二级）的，归入「未细分」，否则下钻时会漏掉这部分钱
+    const childId = c.id !== parent.id ? c.id : `${parent.id}:none`
+    const childName = c.id !== parent.id ? c.name : '未细分'
+    addTo(a, childId, childName, t.amount)
   }
   const list = [...agg.values()]
   for (const a of list) a.children.sort((x, y) => y.amount - x.amount)
@@ -178,16 +199,17 @@ export function seriesByCategory(
   const idx = new Map(keys.map((k, i) => [k, i]))
   const acc = new Map<string, { name: string; data: number[]; total: number }>()
   for (const t of txs) {
-    if (t.type !== type || !t.category_id) continue
+    if (t.type !== type) continue
     const at = idx.get(keyOf(t, unit))
     if (at === undefined) continue
-    const c = byId.get(t.category_id)
-    if (!c) continue
-    const root = c.parent_id ? byId.get(c.parent_id) ?? c : c
-    let e = acc.get(root.id)
+    // 同 byCategory：分类查不到归入「未分类」，不能让这笔钱从趋势图里静默消失
+    const c = t.category_id ? byId.get(t.category_id) : undefined
+    const rootId = c ? (c.parent_id ? byId.get(c.parent_id)?.id ?? c.id : c.id) : UNCATEGORIZED_ID
+    const rootName = c ? (c.parent_id ? byId.get(c.parent_id)?.name ?? c.name : c.name) : UNCATEGORIZED_NAME
+    let e = acc.get(rootId)
     if (!e) {
-      e = { name: root.name, data: new Array(keys.length).fill(0), total: 0 }
-      acc.set(root.id, e)
+      e = { name: rootName, data: new Array(keys.length).fill(0), total: 0 }
+      acc.set(rootId, e)
     }
     e.data[at] += t.amount
     e.total += t.amount
@@ -337,4 +359,31 @@ export function typeSign(type: TxType): 1 | -1 | 0 {
   if (type === 'income') return 1
   if (type === 'expense') return -1
   return 0
+}
+
+/**
+ * 记一笔页面「此刻该选中哪个分类」的兜底判断。支出大类、支出二级、收入分类三处共用。
+ *
+ * 规则：当前值仍在可选列表里就原样保留 → 否则退回记忆值（记忆值也得在列表里）→
+ * 再不行取列表第一个 → 列表为空返回 null。
+ * 归档掉一个大类后，页面上那排按钮一个都不高亮、下面挂的还是它的二级、点保存还能存进去，
+ * 就是因为以前只判断「值为空才兜底」，没判断「值不为空但已经不在列表里」。
+ *
+ * ⚠️ editing 为 true 时原样返回 current，一个字都不许改。
+ * 编辑一条旧记录时，分类是从那条记录本身回填的，而它用的分类完全可能已经被归档、
+ * 不在列表里；这里要是「顺手纠正」一下，用户点「更新」就把这条历史记录的分类
+ * 换成了另一个分类，而且毫不知情。和「新设备上编辑旧账把钱挪到中国银行」是同一类事故：
+ * 兜底只许在新增时生效。
+ */
+export function pickCategoryId(o: {
+  options: readonly { id: string }[]
+  current: string | null
+  remembered?: string | null
+  editing: boolean
+}): string | null {
+  if (o.editing) return o.current
+  const has = (id: string | null | undefined): id is string => !!id && o.options.some((c) => c.id === id)
+  if (has(o.current)) return o.current
+  if (has(o.remembered)) return o.remembered
+  return o.options[0]?.id ?? null
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { applyTx, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthSummary, monthTotals, monthlySeries, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf } from './compute'
+import { applyTx, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthSummary, monthTotals, monthlySeries, pickCategoryId, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -604,5 +604,99 @@ describe('修改账户余额（校准链路）', () => {
     expect(lastCheck(rows, 'boc')).toBe(rows[2].created_at)
     expect(lastCheck(rows, 'wx')).toBe(rows[1].created_at)
     expect(lastCheck(rows, 'cmb')).toBeNull()
+  })
+})
+
+// 归档一个大类之后，记账页那排按钮一个都不高亮（列表里已经没有它了），
+// 但状态还指着它、下面挂的还是它的二级、点保存照样存得进去。
+// 这段判断以前散在页面的三个 effect 里、三处写法还不一样，挪到这里才测得到。
+describe('pickCategoryId 分类兜底', () => {
+  const opts = [{ id: 'food' }, { id: 'fun' }]
+
+  it('当前值还在列表里就原样保留，不去动它', () => {
+    expect(pickCategoryId({ options: opts, current: 'fun', remembered: 'food', editing: false })).toBe('fun')
+  })
+
+  it('当前值已经不在列表里（大类被归档）→ 退回记忆值', () => {
+    expect(pickCategoryId({ options: opts, current: 'gone', remembered: 'fun', editing: false })).toBe('fun')
+  })
+
+  it('当前值和记忆值都不在列表里 → 取第一个', () => {
+    expect(pickCategoryId({ options: opts, current: 'gone', remembered: 'alsoGone', editing: false })).toBe('food')
+  })
+
+  it('当前值为空时记忆值优先于第一个', () => {
+    expect(pickCategoryId({ options: opts, current: null, remembered: 'fun', editing: false })).toBe('fun')
+    expect(pickCategoryId({ options: opts, current: null, remembered: null, editing: false })).toBe('food')
+    expect(pickCategoryId({ options: opts, current: null, editing: false })).toBe('food')
+  })
+
+  it('列表为空返回 null（分类还没加载出来时不要瞎猜）', () => {
+    expect(pickCategoryId({ options: [], current: 'food', remembered: 'fun', editing: false })).toBeNull()
+  })
+
+  // ★ 这条是这次改动最要紧的一条 ★
+  // 编辑一条旧账时分类是从记录本身回填的，它用的分类完全可能已经归档、不在列表里。
+  // 兜底逻辑要是在这里「顺手纠正」，用户点一下「更新」就把这条历史记录的分类
+  // 改成了别的分类，而且毫不知情——和「新设备上编辑旧账把钱挪到中国银行」一模一样。
+  it('编辑态：分类已归档、不在列表里，也必须原样留着，一个字都不许改', () => {
+    expect(pickCategoryId({ options: opts, current: 'archivedCat', remembered: 'food', editing: true })).toBe('archivedCat')
+    expect(pickCategoryId({ options: [], current: 'archivedCat', remembered: 'food', editing: true })).toBe('archivedCat')
+  })
+
+  it('编辑态：当前值为空也不许塞第一个进去', () => {
+    expect(pickCategoryId({ options: opts, current: null, remembered: 'fun', editing: true })).toBeNull()
+  })
+})
+
+describe('分类查不到时的「未分类」兜底', () => {
+  // 这条等式必须无条件成立：本月支出 = 饼图各块之和。
+  // 数据库有外键挡着，今天造不出孤儿记录，所以这是防御性的——
+  // 但正确性不该押在别处：哪天加了「删除分类」或换了后端，它就是最后一道防线。
+  const orphan = (over: Partial<Transaction> = {}) =>
+    tx({ type: 'expense', amount: 5000, account_id: 'wx', category_id: 'gone', date: '2026-09-03', ...over })
+
+  it('分类查不到的钱进「未分类」，不再凭空消失', () => {
+    const rows = [tx({ type: 'expense', amount: 2800, account_id: 'wx', category_id: 'lunch' }), orphan()]
+    const agg = byCategory(rows, cats, '2026-09', 'expense')
+    expect(agg.map((a) => a.id)).toContain(UNCATEGORIZED_ID)
+    expect(agg.find((a) => a.id === UNCATEGORIZED_ID)?.name).toBe(UNCATEGORIZED_NAME)
+  })
+
+  it('饼图各块之和 = 本月支出，有孤儿也成立', () => {
+    const rows = [
+      tx({ type: 'expense', amount: 2800, account_id: 'wx', category_id: 'lunch' }),
+      tx({ type: 'expense', amount: 6480, account_id: 'wx', category_id: 'game' }),
+      orphan({ amount: 5000 }),
+      orphan({ amount: 1234, id: undefined as unknown as string }),
+    ]
+    const agg = byCategory(rows, cats, '2026-09', 'expense')
+    expect(agg.reduce((s, a) => s + a.amount, 0)).toBe(monthSummary(rows, '2026-09').expense)
+  })
+
+  it('二级之和 = 一级之和，「未分类」那块也不例外', () => {
+    const agg = byCategory([orphan({ amount: 700 }), orphan({ amount: 300 })], cats, '2026-09', 'expense')
+    const u = agg.find((a) => a.id === UNCATEGORIZED_ID)!
+    expect(u.amount).toBe(1000)
+    expect(u.count).toBe(2)
+    expect(u.children.reduce((s, c) => s + c.amount, 0)).toBe(u.amount)
+  })
+
+  it('趋势图按分类拆分时也不漏，各线之和 = 总额线', () => {
+    const rows = [
+      tx({ type: 'expense', amount: 2800, account_id: 'wx', category_id: 'lunch', date: '2026-09-03' }),
+      orphan({ amount: 5000, date: '2026-09-03' }),
+    ]
+    const keys = bucketKeys('2026-09-01', '2026-09-30', 'month')
+    const byCat = seriesByCategory(rows, cats, keys, 'month')
+    expect(byCat.map((s) => s.id)).toContain(UNCATEGORIZED_ID)
+    expect(byCat.reduce((s, c) => s + c.data[0], 0)).toBe(seriesTotals(rows, keys, 'month')[0])
+  })
+
+  it('分类表完整时不产生「未分类」这一块', () => {
+    const rows = [tx({ type: 'expense', amount: 2800, account_id: 'wx', category_id: 'lunch' })]
+    expect(byCategory(rows, cats, '2026-09', 'expense').map((a) => a.id)).not.toContain(UNCATEGORIZED_ID)
+    const keys = bucketKeys('2026-09-01', '2026-09-30', 'month')
+    expect(seriesByCategory(rows, cats, keys, 'month').map((s) => s.id)).not.toContain(UNCATEGORIZED_ID)
   })
 })

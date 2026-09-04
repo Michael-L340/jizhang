@@ -38,6 +38,15 @@ function txToRow(t: Transaction): TxRow {
   }
 }
 
+/**
+ * 唯一索引冲突：同名的账户或分类已经存在（Postgres 23505）。
+ * store.ts 靠它把「连点两次确定，第二次被数据库挡下」认成「已经建好了」而不是失败。
+ */
+export function isDuplicateName(e: unknown): boolean {
+  const msg = (e as { message?: string })?.message ?? String(e)
+  return (e as { code?: string })?.code === '23505' || /duplicate key/i.test(msg)
+}
+
 /** 把各种错误翻译成能给用户看的中文 */
 export function friendlyError(e: unknown): string {
   const msg = (e as { message?: string })?.message ?? String(e)
@@ -48,7 +57,7 @@ export function friendlyError(e: unknown): string {
   // 同步超时走的是 AbortError，message 是英文的 "The operation was aborted."，
   // 不翻译的话首次打开就超时时用户会看到一句英文报错
   if ((e as { name?: string })?.name === 'AbortError' || /abort/i.test(msg)) return '网络太慢，同步超时'
-  if (code === '23505' || /duplicate key/i.test(msg)) return '已有同名的账户或分类'
+  if (isDuplicateName(e)) return '已有同名的账户或分类'
   if (code === '23514' || /violates check constraint/i.test(msg)) return '数据不合法（类型与字段不匹配）'
   if (/New password should be different/i.test(msg)) return '新密码不能和旧密码相同'
   if (/Password should be at least/i.test(msg)) return '密码太短，至少 6 位'

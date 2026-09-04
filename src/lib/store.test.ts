@@ -24,6 +24,7 @@ const api = vi.hoisted(() => ({
   hasSession: vi.fn(),
   onAuthChange: vi.fn(() => () => {}),
   friendlyError: (e: unknown) => String((e as { message?: string })?.message ?? e),
+  isDuplicateName: (e: unknown) => (e as { code?: string })?.code === '23505' || /duplicate key/i.test(String((e as { message?: string })?.message ?? e)),
   configured: true,
 }))
 vi.mock('./api', () => api)
@@ -564,5 +565,86 @@ describe('同步卡死不再锁死整个会话', () => {
     api.fetchAll.mockResolvedValueOnce(snap([tx('a')]))
     await st().refresh()
     expect(ids()).toEqual(['a'])
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 新增分类
+//   手工复现方式：网慢时连点两次「确定」；以及归档「午餐」之后再新建一个「午餐」
+// ══════════════════════════════════════════════════════════════
+describe('新增分类', () => {
+  /** 数据库唯一索引挡下重复名字时抛的错 */
+  function dupErr(): Error {
+    return Object.assign(new Error('duplicate key value violates unique constraint "cat_root_uniq"'), { code: '23505' })
+  }
+
+  it('连点两次：第二次被数据库挡下，本地已经有了 → 当成建好了，不弹红字', async () => {
+    // 第二次点击的请求先出门（此刻本地还什么都没有），挂住不返回
+    const d = deferred<Category>()
+    api.addCategory.mockReturnValueOnce(d.promise)
+    const p2 = st().addCategory('expense', null, '午餐')
+
+    // 等它被挡下的这段时间里，第一次点击的结果落了地
+    store.useStore.setState({ categories: [cat('c1', { name: '午餐' })] })
+    d.reject(dupErr())
+
+    expect((await p2)?.id).toBe('c1') // 修复前这里是 null
+    expect(st().toast).toBeNull() // 修复前会弹「新增分类失败：已有同名的账户或分类」
+    expect(api.fetchAll).not.toHaveBeenCalled() // 本地找得到就别多跑一趟网络
+    expect(st().categories).toHaveLength(1) // 不能变出第二个「午餐」
+  })
+
+  it('被挡下时本地还没有 → 同步一次再找，找到了照样算成功', async () => {
+    api.addCategory.mockRejectedValueOnce(dupErr())
+    api.fetchAll.mockResolvedValueOnce(snap([], [cat('c9', { name: '午餐' })]))
+
+    const got = await st().addCategory('expense', null, '午餐')
+    expect(got?.id).toBe('c9')
+    expect(api.fetchAll).toHaveBeenCalled()
+    expect(st().toast).toBeNull()
+  })
+
+  it('被挡下、同步之后还是找不到 → 这才是真的失败，要报错', async () => {
+    api.addCategory.mockRejectedValueOnce(dupErr())
+    api.fetchAll.mockResolvedValueOnce(snap())
+
+    expect(await st().addCategory('expense', null, '午餐')).toBeNull()
+    expect(st().toast?.msg).toContain('新增分类失败')
+  })
+
+  it('不是重名的错（断网之类）仍然照常报错，不许被吞掉', async () => {
+    api.addCategory.mockRejectedValueOnce(new Error('Failed to fetch'))
+
+    expect(await st().addCategory('expense', null, '午餐')).toBeNull()
+    expect(st().toast?.msg).toContain('新增分类失败')
+    expect(api.fetchAll).not.toHaveBeenCalled() // 别拿网络故障去空跑一次同步
+  })
+
+  it('同名分类归档过 → 恢复它，并且必须告诉用户历史记录跟着回来了', async () => {
+    store.useStore.setState({ categories: [cat('c1', { name: '午餐', is_archived: true })] })
+
+    const got = await st().addCategory('expense', null, '午餐')
+    expect(got?.id).toBe('c1') // 行为不变：复用旧分类，不建新的
+    expect(api.addCategory).not.toHaveBeenCalled()
+    expect(st().categories[0].is_archived).toBe(false)
+    expect(st().toast?.msg).toContain('午餐')
+    expect(st().toast?.msg).toContain('已经恢复') // 修复前一声不吭
+  })
+
+  it('同名分类没归档 → 直接复用，什么都不用提示', async () => {
+    store.useStore.setState({ categories: [cat('c1', { name: '午餐' })] })
+
+    expect((await st().addCategory('expense', null, '午餐'))?.id).toBe('c1')
+    expect(st().toast).toBeNull()
+    expect(api.updateCategory).not.toHaveBeenCalled()
+  })
+
+  it('被挡下、同步回来发现那个同名分类是归档的 → 一样要恢复并提示', async () => {
+    api.addCategory.mockRejectedValueOnce(dupErr())
+    api.fetchAll.mockResolvedValueOnce(snap([], [cat('c9', { name: '午餐', is_archived: true })]))
+
+    expect((await st().addCategory('expense', null, '午餐'))?.id).toBe('c9')
+    expect(st().categories[0].is_archived).toBe(false)
+    expect(st().toast?.msg).toContain('已经恢复')
   })
 })

@@ -5,7 +5,7 @@ import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { DatePicker } from '../components/DatePicker'
 import { Keypad } from '../components/Keypad'
-import { recentChildOrder } from '../lib/compute'
+import { pickCategoryId, recentChildOrder } from '../lib/compute'
 import { fmtDateRel, nowIso, today } from '../lib/date'
 import { loadLocal, saveLocal, useOnline } from '../lib/hooks'
 import { newId } from '../lib/id'
@@ -144,19 +144,27 @@ export function Entry() {
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
   }, [editId, dateTouched])
+  // 分类兜底：判断全在 compute.ts 的 pickCategoryId 里（纯函数，有单测覆盖）。
+  // 以前这三处各写各的：大类和收入只判断「值为空」，二级才判断「值还在不在列表里」，
+  // 于是归档掉一个大类之后，按钮一个都不高亮、下面还挂着它的二级、点保存照样存得进去。
+  //
+  // editing 传的是「有没有 ?id=」而不是 editing 这条记录本身：一进编辑态就立刻封死，
+  // 不等记录找出来，也就不存在「回填前先被兜底改一次」的窗口（账户那条 backfilled
+  // 门挡的正是这种时序）。编辑一条用了已归档分类的旧账，分类必须原样留着。
+  const isEdit = Boolean(editId)
   useEffect(() => {
-    if (!parentId && parents.length) setParentId(parents[0].id)
-  }, [parents, parentId])
+    const next = pickCategoryId({ options: parents, current: parentId, remembered: mem.parentId, editing: isEdit })
+    if (next !== parentId) setParentId(next)
+  }, [parents, parentId, mem, isEdit])
   useEffect(() => {
-    if (!incomeCatId && incomeCats.length) setIncomeCatId(incomeCats[0].id)
-  }, [incomeCats, incomeCatId])
+    const next = pickCategoryId({ options: incomeCats, current: incomeCatId, remembered: mem.incomeCatId, editing: isEdit })
+    if (next !== incomeCatId) setIncomeCatId(next)
+  }, [incomeCats, incomeCatId, mem, isEdit])
   useEffect(() => {
-    if (!parentId) return
-    if (childId && children.some((c) => c.id === childId)) return
-    const remembered = mem.childByParent[parentId]
-    if (remembered && children.some((c) => c.id === remembered)) setChildId(remembered)
-    else setChildId(children[0]?.id ?? null)
-  }, [parentId, children, childId, mem])
+    const remembered = parentId ? mem.childByParent[parentId] ?? null : null
+    const next = pickCategoryId({ options: children, current: childId, remembered, editing: isEdit })
+    if (next !== childId) setChildId(next)
+  }, [parentId, children, childId, mem, isEdit])
 
   function pickParent(id: string) {
     setParentId(id)
