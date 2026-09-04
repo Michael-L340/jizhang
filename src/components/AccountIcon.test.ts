@@ -26,16 +26,28 @@ describe('账户图标', () => {
     }
   })
 
-  it('大小占比统一在 0.55~0.62，不能一个大一个小', () => {
+  it('同一种底板下大小占比一致，不能一个大一个小', () => {
+    // 深色底板上的白标要留出一圈底色，浅色底板上的标可以做大，
+    // 两者视觉重量才接近。同一组内必须一致。
     for (const [name, b] of Object.entries(BRANDS)) {
-      expect(b.scale, name).toBeGreaterThanOrEqual(0.55)
-      expect(b.scale, name).toBeLessThanOrEqual(0.62)
+      const [lo, hi] = b.plate === 'brand' ? [0.55, 0.62] : [0.7, 0.85]
+      expect(b.scale, `${name}（${b.plate} 底板）`).toBeGreaterThanOrEqual(lo)
+      expect(b.scale, `${name}（${b.plate} 底板）`).toBeLessThanOrEqual(hi)
     }
   })
 
-  it('招行图标右侧那几条横杠必须保留——它们是标志的一部分', () => {
-    // 2026-09-04 曾误把它们当成中文字样的残留裁掉，用户一眼看出来「没有线条了」。
-    // 横杠的特征是路径末尾一串 `m…l2.3 5.1h…` 的横条，最右伸到 x=246。
+  it('银行用白底红标，微信支付宝用彩底白标——按各家官方形象来', () => {
+    // 反过来做会变成负片，认不出来
+    expect(BRANDS.BOC.plate).toBe('light')
+    expect(BRANDS.CMB.plate).toBe('light')
+    expect(BRANDS.WECHAT.plate).toBe('brand')
+    expect(BRANDS.ALIPAY.plate).toBe('brand')
+  })
+
+  it('招行图标右侧那六条横线必须保留——它们是标志的一部分', () => {
+    // 真实标志是「红圆 + 白色 M + 右侧横向渐变条」。2026-09-04 两次误判：
+    // 先当成中文字样的残留裁掉，又因为一次被截断的网络抓取以为官方没有。
+    // 横线的特征是路径末尾一串 `m…l2.3 5.1h…` 的横条，最右伸到 x=246。
     expect(BRANDS.CMB.path).toContain('H246')
     expect(box(BRANDS.CMB.viewBox)[2]).toBe(246)
     // 六条，缺一条都不行
