@@ -1,5 +1,9 @@
 @import "tailwindcss";
 
+/* docs/ 里是设计与审查文档，正文中大量引用类名（含 bottom-[calc(...)] 这种任意值）。
+   Tailwind 默认扫描整个项目，会把文档里提到的类当成真在用而生成出来。 */
+@source not "../docs";
+
 @theme {
   --color-bg: #f6f7f9;
   --color-card: #ffffff;
