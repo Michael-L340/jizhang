@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, monthSummary, sortTxs, totalOf } from '../lib/compute'
-import { fmtMonthZh, monthOf, today } from '../lib/date'
+import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -26,6 +26,24 @@ export function Home() {
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
   const recent = useMemo(() => sortTxs(txs).slice(0, 5), [txs])
+
+  const td = today()
+  const dayStat = useMemo(() => {
+    let expense = 0
+    let income = 0
+    let count = 0
+    for (const t of txs) {
+      if (t.date !== td) continue
+      if (t.type === 'expense') {
+        expense += t.amount
+        count++
+      } else if (t.type === 'income') {
+        income += t.amount
+        count++
+      }
+    }
+    return { expense, income, count }
+  }, [txs, td])
 
   const pieOption = useMemo(
     () => ({
@@ -54,6 +72,21 @@ export function Home() {
         <span className="text-xs text-muted">{syncing ? '同步中…' : ''}</span>
       </div>
 
+      <Link to={`/ledger?date=${td}`} className="card p-4 mb-3 flex items-center gap-4">
+        <span className="flex-1 min-w-0">
+          <span className="block text-xs text-muted">今天 · {fmtDateZh(td)}</span>
+          <span className="block num text-2xl font-bold leading-tight mt-0.5 text-expense">
+            {dayStat.expense ? `-${fmtYuan(dayStat.expense)}` : fmtYuan(0)}
+          </span>
+        </span>
+        <span className="text-right shrink-0">
+          {dayStat.income ? (
+            <span className="block num text-sm font-medium text-income">+{fmtYuan(dayStat.income)}</span>
+          ) : null}
+          <span className="block text-xs text-muted mt-0.5">{dayStat.count ? `${dayStat.count} 笔 ›` : '还没记账 ›'}</span>
+        </span>
+      </Link>
+
       <div className="card p-4 mb-3">
         <div className="grid grid-cols-3 gap-2 text-center">
           <div>
@@ -69,9 +102,13 @@ export function Home() {
             <div className={`num text-lg font-semibold ${sum.net < 0 ? 'text-expense' : ''}`}>{fmtYuan(sum.net)}</div>
           </div>
         </div>
-        <div className="mt-3 pt-3 border-t border-line flex justify-between text-sm">
-          <span className="text-muted">储蓄率</span>
-          <span className="num font-medium">{sum.savingRate === null ? '—' : `${(sum.savingRate * 100).toFixed(1)}%`}</span>
+        <div className="mt-3 pt-3 border-t border-line flex justify-between items-baseline text-sm">
+          <span className="text-muted">
+            储蓄率<span className="text-[11px] ml-1.5">结余 ÷ 收入</span>
+          </span>
+          <span className="num font-medium">
+            {sum.savingRate === null ? <span className="text-muted">本月没有收入</span> : `${(sum.savingRate * 100).toFixed(1)}%`}
+          </span>
         </div>
       </div>
 
