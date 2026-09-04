@@ -96,8 +96,8 @@ beforeEach(() => {
 describe('wipeAll 的删除顺序', () => {
   it('必须是 流水 → 二级分类 → 一级分类 → 账户', async () => {
     // 三处外键都是 on delete restrict：顺序反了数据库会直接拒绝。
-    // 二级和一级分开删，是因为 restrict 不能延迟到语句结束再查，
-    // 一条 delete 同时删父子会当场报错。
+    // 二级和一级分开删，是因为 PostgREST 每次调用只发一条带过滤条件的 DELETE。
+    // 这里只锁「我们发出去的顺序」，数据库真实反应由 npm run test:db 验证。
     await wipeAll()
     expect(shape()).toEqual([
       'transactions:delete:not.id.is.null',

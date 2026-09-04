@@ -9,6 +9,7 @@
     "preview": "vite preview --host",
     "check": "tsc -b",
     "test": "vitest run",
+    "test:db": "vitest run --config vitest.db.config.ts",
     "deploy": "npm run check && npm run test && VITE_BASE=/jizhang/ vite build && touch dist/.nojekyll && gh-pages -d dist --dotfiles -m \"deploy\""
   },
   "dependencies": {
@@ -20,6 +21,7 @@
     "zustand": "^5.0.0"
   },
   "devDependencies": {
+    "@electric-sql/pglite": "^0.5.8",
     "@tailwindcss/vite": "^4.3.3",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.18",

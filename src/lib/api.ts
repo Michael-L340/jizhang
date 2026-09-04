@@ -136,10 +136,15 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
 /**
  * 危险：清空当前登录账号的全部数据。只给「整库恢复」用，调用方必须先拿到完整备份。
  *
- * 顺序不能反，也不能合并成更少的语句：
- * - transactions.account_id / category_id 都是 on delete restrict，先删账户或分类会被数据库拒绝。
- * - categories.parent_id 同样是 restrict，且 restrict 不能延迟到语句结束再查，
- *   一条 delete 同时删父子会当场报错，所以必须先删二级再删一级。
+ * 顺序不能反（以下都由 npm run test:db 在真的 Postgres 上实测过）：
+ * - transactions.account_id / category_id 都是 on delete restrict，先删账户或分类会被拒绝。
+ * - categories.parent_id 也是 restrict，只删一级、留着二级同样会被拒绝。
+ *
+ * 二级和一级分两步删，是因为 PostgREST 每次调用只发一条带过滤条件的 DELETE，
+ * 顺序必须由我们显式写出来。（注：restrict 的检查发生在**语句结束时**，所以
+ * 一条不带过滤的 `delete from categories` 把父子一起删其实是能成功的；
+ * 它和 no action 的区别是能否延迟到**事务**结束，不是语句结束。分两步更保险也更好读。）
+ *
  * PostgREST 不允许无条件 delete，每条都带一个「匹配全部」的过滤条件；RLS 保证只删自己的行。
  */
 export async function wipeAll(): Promise<void> {

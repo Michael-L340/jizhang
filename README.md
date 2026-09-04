@@ -103,6 +103,10 @@ npm run deploy   # check + test + 构建 + 发布到 gh-pages 分支
 | `src/lib/compute.test.ts` | 算钱的纯函数：余额、分类汇总、时间分桶、「二级合计 = 一级合计」 |
 | `src/lib/pending.test.ts` | 在途补丁的叠加规则 |
 | `src/lib/store.test.ts` | 数据层的并发时序与本机缓存（见下） |
+| `src/lib/api.test.ts` | 发给数据库的请求长什么样：删除顺序、元↔分换算、分页键 |
+| `src/lib/csv.test.ts` | 导入文件的校验（整库恢复会先删数据，文件必须先验过） |
+| `src/lib/palette.test.ts` | 配色：相邻两级颜色必须看得出区别 |
+| `src/lib/restore.dbtest.ts` | **不在 `npm test` 里**。真 Postgres 上跑完整备份恢复，`npm run test:db` |
 
 ### 为什么 `store.test.ts` 特别重要
 
@@ -174,13 +178,37 @@ npm run deploy   # check + test + 构建 + 发布到 gh-pages 分支
 
 ### 为什么清空要分四步
 
-`wipeAll()` 的顺序是 **流水 → 二级分类 → 一级分类 → 账户**，一步都不能省、不能并：
+`wipeAll()` 的顺序是 **流水 → 二级分类 → 一级分类 → 账户**：
 
 - `transactions.account_id / category_id` 都是 `on delete restrict`，先删账户或分类会被拒绝
-- `categories.parent_id` 也是 `restrict`，而 `restrict` 不能延迟到语句结束再检查，
-  一条 delete 同时删父子会当场报错，所以二级和一级必须分开
+- `categories.parent_id` 也是 `restrict`，只删一级、留着二级同样会被拒绝
 
-这个顺序有单测锁着（`src/lib/api.test.ts`），改动 `wipeAll` 会立刻变红。
+二级和一级分两步，是因为 PostgREST 每次调用只发一条带过滤条件的 `DELETE`，顺序得由我们显式写出来。
+
+> 一处更正：早先这里写的是「`restrict` 不能延迟到语句结束再查，一条 delete 同时删父子会当场报错」。
+> `npm run test:db` 实测**推翻了这句**——不带过滤的 `delete from categories` 把父子一起删是能成功的，
+> 因为 `restrict` 的检查发生在**语句结束时**。它和 `no action` 的真正区别是能否延迟到**事务**结束。
+> 分两步仍然保留：更显式、也不依赖这个细节。
+
+### 这条路真的验过了
+
+`npm run test:db` 会在内存里启动一个**真的 Postgres**（PGlite，Postgres 编译成 WASM），
+真的执行 `supabase/migrations/` 下的建表脚本，再走一遍完整的备份与恢复。不联网、不碰任何真实数据。
+
+实测结论：
+
+| 场景 | 结果 |
+|---|---|
+| 换新库后直接「合并导入」 | ✅ 如预期失败：`23505 duplicate key ... accounts_user_id_name_key` |
+| 「整库恢复」（先清空再导入） | ✅ 账户/分类/流水逐行逐字段完全一致 |
+| 金额往返（分 → numeric → 分） | ✅ 零误差，含 4846.42、0.05、-10.84 |
+| 误删几笔后「合并导入」 | ✅ 找回来了，备份之后新记的账没动，无重复行 |
+| 同一个文件重复导入三次 | ✅ 幂等，条数不变 |
+| 先删账户 / 只删一级留二级 | ✅ 都被外键拒绝 |
+| 支出记到收入分类、转账两边同账户、三级分类 | ✅ 都被数据库自己拦住 |
+
+动了 `supabase/migrations/` 或 `api.ts` 的导入导出，就手动跑一次 `npm run test:db`（约 40 秒）。
+它**不在** `npm test` 和 `npm run deploy` 里，免得每次改代码都等。
 
 ### 还没做，但要做
 
@@ -205,7 +233,7 @@ npm run deploy   # check + test + 构建 + 发布到 gh-pages 分支
 11. **iOS 输入框 font-size < 16px 会自动放大页面**，全局已设 16px。
 12. **Supabase 免费版无自动备份**，误删无还原点。靠设置页导出 JSON，建议每月一次。
 13. **`upsert(onConflict: 'id')` 不认唯一索引**。表上除主键外还有 `unique(user_id, name)` 之类的约束时，同名不同 id 的行会直接抛 23505 而不是转成 UPDATE。备份恢复到新库整条路都栽在这上面，见第六节。
-14. **`on delete restrict` 不能延迟到语句结束再查**（和 `no action` 的区别就在这）。自引用表一条 delete 同时删父子会当场报错，必须先删子再删父。
+14. **`on delete restrict` 的检查发生在语句结束时，不是逐行立刻检查**。所以自引用表一条 `delete from categories` 把父子一起删是能成功的；它和 `no action` 的区别是能否延迟到**事务**结束。真正会被拒绝的是「只删一级、留着二级」。这条是 `npm run test:db` 实测出来的，此前文档里写反了。
 15. **免费项目 7 天无访问会休眠**，数据不丢，需去控制台唤醒。
 
 ## 八、开发历史

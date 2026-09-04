@@ -28,6 +28,8 @@
 - `store.test.ts` 的隔离手段：`vi.mock('./api')` 换掉唯一联网的那层，`vi.resetModules()` 每例重建 store 模块（避开 `pendingTx` / `persistTimer` 这些模块级单例串味），`vi.useFakeTimers()` 让 500ms 去抖和 10s 分类窗口变成确定性推进。照这个模式加新用例。
 - **新写的测试必须先证明它会红**：把对应的修复改回出 bug 前的写法，确认用例真的变红，再改回来。不会红的测试是负资产，它让人以为有保护，其实没有。
 - 单测跑在 node 环境（`vite.config.ts` 的 `test.environment`），没有 DOM。纯逻辑放 `lib/`，页面里只留渲染，这样才测得到。
+- 动了 `supabase/migrations/` 或 `api.ts` 的导入导出，跑一次 `npm run test:db`（约 40 秒）。它在内存里启动真的 Postgres 走完整备份恢复流程，`npm test` 和 `npm run deploy` 都不含它。
+- **数据库的实际行为不要凭记忆断言**，写进注释或文档前先用 `test:db` 跑一遍。曾经把「`on delete restrict` 一条语句同时删父子会报错」写进 README，实测是错的。
 
 ## Git 提交
 bug 修复类固定四段，`git log` 扫一眼就知道该回退到哪一条：
