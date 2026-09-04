@@ -41,10 +41,22 @@ export function Categories() {
   const childrenOf = (id: string) =>
     categories.filter((c) => c.parent_id === id && (showArchived || !c.is_archived)).sort((a, b) => a.sort - b.sort)
 
+  // 每个分类各有多少笔记录。原来是在 render 里对每个一级分类都全量扫一遍流水，
+  // 展开/收起分类时会重跑 O(分类数 × 流水数)。改成一次扫描建表。
+  const countById = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const t of transactions) {
+      if (!t.category_id) continue
+      m.set(t.category_id, (m.get(t.category_id) ?? 0) + 1)
+    }
+    return m
+  }, [transactions])
+
   /** 这个分类自身及其二级下共有多少笔记录 */
   const countOf = (c: Category) => {
-    const ids = new Set([c.id, ...categories.filter((x) => x.parent_id === c.id).map((x) => x.id)])
-    return transactions.filter((t) => t.category_id && ids.has(t.category_id)).length
+    let n = countById.get(c.id) ?? 0
+    for (const x of categories) if (x.parent_id === c.id) n += countById.get(x.id) ?? 0
+    return n
   }
 
   async function rename(c: Category) {
@@ -216,7 +228,7 @@ export function Categories() {
                     type="button"
                     className="flex items-center gap-2 py-3 border-b border-line text-left"
                     onClick={async () => {
-                      const n = transactions.filter((t) => t.category_id === editCat.id).length
+                      const n = countById.get(editCat.id) ?? 0
                       if (!window.confirm(`把「${editCat.name}」移到「${r.name}」下？受影响的历史记录 ${n} 笔。`)) return
                       const ok = await updateCategory(editCat.id, { parent_id: r.id })
                       if (ok) {
@@ -263,7 +275,7 @@ export function Categories() {
               }}
             />
             <div className="text-xs text-muted mt-3">
-              这个分类下现有 {transactions.filter((t) => t.category_id === editCat.id).length} 笔记录。
+              这个分类下现有 {countById.get(editCat.id) ?? 0} 笔记录。
             </div>
           </div>
         ) : null}

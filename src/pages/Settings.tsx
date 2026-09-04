@@ -10,7 +10,18 @@ import { useStore } from '../lib/store'
 
 export function Settings() {
   const nav = useNavigate()
-  const s = useStore()
+  // 按需订阅：原来 useStore() 全订阅，每次 toast/同步/记账都会重渲染整个设置页
+  const accounts = useStore((st) => st.accounts)
+  const categories = useStore((st) => st.categories)
+  const transactions = useStore((st) => st.transactions)
+  const lastSync = useStore((st) => st.lastSync)
+  const syncing = useStore((st) => st.syncing)
+  const refresh = useStore((st) => st.refresh)
+  const signOut = useStore((st) => st.signOut)
+  const updateAccount = useStore((st) => st.updateAccount)
+  const importSnapshot = useStore((st) => st.importSnapshot)
+  const showToast = useStore((st) => st.showToast)
+  const snapshot = useMemo(() => ({ accounts, categories, transactions }), [accounts, categories, transactions])
   const [busy, setBusy] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   const [pwOpen, setPwOpen] = useState(false)
@@ -19,13 +30,13 @@ export function Settings() {
   const [pwErr, setPwErr] = useState('')
 
   const stat = useMemo(() => {
-    const roots = s.categories.filter((c) => !c.parent_id && !c.is_archived)
+    const roots = categories.filter((c) => !c.parent_id && !c.is_archived)
     return {
       expenseRoots: roots.filter((c) => c.kind === 'expense').length,
-      children: s.categories.filter((c) => c.parent_id && !c.is_archived).length,
+      children: categories.filter((c) => c.parent_id && !c.is_archived).length,
       incomeRoots: roots.filter((c) => c.kind === 'income').length,
     }
-  }, [s.categories])
+  }, [categories])
 
   async function submitPassword() {
     setPwErr('')
@@ -37,7 +48,7 @@ export function Settings() {
       setPwOpen(false)
       setPw1('')
       setPw2('')
-      s.showToast('密码已修改，请记牢')
+      showToast('密码已修改，请记牢')
     } catch (e) {
       setPwErr(friendlyError(e))
     } finally {
@@ -48,8 +59,8 @@ export function Settings() {
   async function exportCsv() {
     setBusy('csv')
     try {
-      const r = await shareOrDownload(`记账-${today()}.csv`, buildCsv(s), 'text/csv')
-      s.showToast(r === 'shared' ? '已打开分享' : '已下载 CSV')
+      const r = await shareOrDownload(`记账-${today()}.csv`, buildCsv(snapshot), 'text/csv')
+      showToast(r === 'shared' ? '已打开分享' : '已下载 CSV')
     } finally {
       setBusy('')
     }
@@ -58,8 +69,8 @@ export function Settings() {
   async function exportJson() {
     setBusy('json')
     try {
-      const r = await shareOrDownload(`记账备份-${today()}.json`, buildJson(s), 'application/json')
-      s.showToast(r === 'shared' ? '已打开分享' : '已下载 JSON 备份')
+      const r = await shareOrDownload(`记账备份-${today()}.json`, buildJson(snapshot), 'application/json')
+      showToast(r === 'shared' ? '已打开分享' : '已下载 JSON 备份')
     } finally {
       setBusy('')
     }
@@ -70,10 +81,10 @@ export function Settings() {
     try {
       const snap = parseImport(await file.text())
       if (!window.confirm(`将导入 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水（同 ID 覆盖）。继续？`)) return
-      await s.importSnapshot(snap)
-      s.showToast('导入完成')
+      await importSnapshot(snap)
+      showToast('导入完成')
     } catch (e) {
-      s.showToast(`导入失败：${friendlyError(e)}`)
+      showToast(`导入失败：${friendlyError(e)}`)
     } finally {
       setBusy('')
       if (fileRef.current) fileRef.current.value = ''
@@ -98,7 +109,7 @@ export function Settings() {
         <div className="py-3 border-b border-line last:border-0">
           <div className="text-sm mb-2">账户</div>
           <div className="flex flex-col gap-1">
-            {s.accounts
+            {accounts
               .slice()
               .sort((a, b) => a.sort - b.sort)
               .map((a) => (
@@ -108,7 +119,7 @@ export function Settings() {
                   className="flex items-center gap-2.5 py-1.5 text-left"
                   onClick={async () => {
                     const name = window.prompt('账户名称', a.name)?.trim()
-                    if (name && name !== a.name) await s.updateAccount(a.id, { name })
+                    if (name && name !== a.name) await updateAccount(a.id, { name })
                   }}
                 >
                   <AccountIcon name={a.name} size={26} />
@@ -121,7 +132,7 @@ export function Settings() {
       </Section>
 
       <Section title="数据">
-        <Row label={s.lastSync ? `上次同步 ${fmtIsoZh(s.lastSync)}` : '尚未同步'} action={s.syncing ? '同步中…' : '立即同步'} onClick={() => void s.refresh()} />
+        <Row label={lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'} action={syncing ? '同步中…' : '立即同步'} onClick={() => void refresh()} />
         <Row label="导出 CSV（Excel 可打开）" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
         <Row label="导出 JSON 完整备份" action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
         <Row label="从 JSON 备份导入 / 恢复" action={busy === 'import' ? '…' : '选择文件'} onClick={() => fileRef.current?.click()} />
@@ -137,7 +148,7 @@ export function Settings() {
             setBusy('upd')
             const r = await checkForUpdate()
             setBusy('')
-            s.showToast(r === 'unsupported' ? '此浏览器不支持自动更新' : '已检查：若有新版本，顶部会出现更新条')
+            showToast(r === 'unsupported' ? '此浏览器不支持自动更新' : '已检查：若有新版本，顶部会出现更新条')
           }}
         />
         <Row
@@ -153,7 +164,7 @@ export function Settings() {
           danger
           onClick={async () => {
             if (window.confirm('退出登录？本机缓存会清除，云端数据不受影响。')) {
-              await s.signOut()
+              await signOut()
               nav('/')
             }
           }}

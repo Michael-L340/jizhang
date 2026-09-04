@@ -163,6 +163,13 @@ export function Entry() {
   }
 
   async function save() {
+    // 编辑期间这条被另一台设备删了：editing 会变 null，再保存就会生成新 id
+    // 插入一条重复记录。必须挡住并告知，不能静默改变语义。
+    if (editId && !editing) {
+      showToast('这条记录已被删除')
+      nav(-1)
+      return
+    }
     const err = validate()
     if (err) {
       showToast(err)

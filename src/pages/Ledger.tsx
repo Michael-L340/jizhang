@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
@@ -35,6 +35,7 @@ export function Ledger() {
   })
   const [target, setTarget] = useState<string | null>(() => params.get('date'))
   const scrolledFor = useRef<string | null>(null)
+  const stickyRef = useRef<HTMLDivElement>(null)
 
   // 从统计页跳过来时带着 ym / date
   useEffect(() => {
@@ -74,28 +75,39 @@ export function Ledger() {
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
 
-  // 从图表跳过来：滚到那一天并短暂高亮；那天没记录就提示一下
-  useEffect(() => {
+  // 吸顶栏的真实高度：写死的数字会随内容变化而失准，滚动就会过头
+  useLayoutEffect(() => {
+    const h = stickyRef.current?.offsetHeight
+    if (h) document.documentElement.style.setProperty('--ledger-sticky-h', `${h}px`)
+  })
+
+  // 从图表或首页跳过来：定位到那一天并短暂高亮；那天没记录就提示一下
+  useLayoutEffect(() => {
     if (!target || scrolledFor.current === target) return
     const el = document.getElementById(`day-${target}`)
     if (el) {
       scrolledFor.current = target
-      requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+      // 目标是当月第一组（点「今日开支」进来几乎总是如此）就直接回到顶部，
+      // 让吸顶栏和当天标题都完整可见，不做多余的滚动
+      if (groups[0]?.date === target) {
+        el.closest('.app-main')?.scrollTo({ top: 0, behavior: 'smooth' })
+      } else {
+        requestAnimationFrame(() => el.scrollIntoView({ behavior: 'smooth', block: 'start' }))
+      }
       const t = setTimeout(() => setTarget(null), 2400)
       return () => clearTimeout(t)
     }
-    if (groups.length) {
-      scrolledFor.current = target
-      showToast(`${fmtDateZh(target, false)} 没有记录`)
-      setTarget(null)
-    }
+    // 那个月一条记录都没有时也要收尾，否则提示永远不弹、target 永不清空
+    scrolledFor.current = target
+    showToast(`${fmtDateZh(target, false)} 没有记录`)
+    setTarget(null)
   }, [target, groups, showToast])
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const filtered = type !== 'all' || accountId !== 'all' || parentId !== 'all'
 
   return (
     <div className="pb-6">
-      <div className="sticky top-0 z-10 bg-bg px-4 pt-3 pb-2">
+      <div ref={stickyRef} className="sticky top-0 z-10 bg-bg px-4 pt-3 pb-2">
         <MonthPicker
           value={ym}
           onChange={(v) => {
@@ -118,7 +130,7 @@ export function Ledger() {
         <div className="text-center text-muted text-sm py-16">这个月没有记录</div>
       ) : (
         groups.map((g) => (
-          <div key={g.date} id={`day-${g.date}`} className="mt-3" style={{ scrollMarginTop: 92 }}>
+          <div key={g.date} id={`day-${g.date}`} className="mt-3" style={{ scrollMarginTop: 'var(--ledger-sticky-h, 92px)' }}>
             <div className="flex justify-between px-4 pb-1 text-xs text-muted">
               <span>
                 {fmtDateZh(g.date)}

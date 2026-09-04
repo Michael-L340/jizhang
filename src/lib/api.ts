@@ -70,6 +70,9 @@ export async function fetchAll(): Promise<Snapshot> {
       .select(TX_COLS)
       .order('date', { ascending: false })
       .order('created_at', { ascending: false })
+      // (date, created_at) 不唯一：导入的数据可能造出同值，跨页边界会重复或漏行。
+      // 主键做 tiebreaker 构成全序，分页才稳定。
+      .order('id', { ascending: false })
       .range(from, from + PAGE - 1)
     if (error) throw error
     transactions.push(...(data as TxRow[]).map(rowToTx))

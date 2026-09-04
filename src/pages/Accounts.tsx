@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { Sheet } from '../components/Sheet'
-import { balances, lastCheck, totalOf } from '../lib/compute'
+import { balances, totalOf } from '../lib/compute'
 import { fmtIsoZh, nowIso, today } from '../lib/date'
 import { newId } from '../lib/id'
 import { fmtYuan, parseYuan } from '../lib/money'
@@ -16,6 +16,16 @@ export function Accounts() {
   const lastSync = useStore((s) => s.lastSync)
   const accounts = useActiveAccounts()
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
+  // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页
+  const lastChecks = useMemo(() => {
+    const m = new Map<string, string>()
+    for (const t of txs) {
+      if (t.type !== 'adjust' || !t.account_id) continue
+      const cur = m.get(t.account_id)
+      if (!cur || t.created_at > cur) m.set(t.account_id, t.created_at)
+    }
+    return m
+  }, [txs])
   const [target, setTarget] = useState<Account | null>(null)
   const [input, setInput] = useState('')
   const [busy, setBusy] = useState(false)
@@ -67,7 +77,7 @@ export function Accounts() {
 
       <div className="flex flex-col gap-2">
         {accounts.map((a) => {
-          const lc = lastCheck(txs, a.id)
+          const lc = lastChecks.get(a.id) ?? null
           return (
             <button key={a.id} type="button" className="card p-4 text-left flex items-center gap-3" onClick={() => open(a)}>
               <AccountIcon name={a.name} />

@@ -47,7 +47,8 @@ export function Home() {
   const pieOption = useMemo(
     () => ({
       color: PIE_COLORS,
-      tooltip: { trigger: 'item', valueFormatter: (v: number) => `¥${fmtYuan(v)}` },
+      // series 的 value 是元，fmtYuan 只接受分，必须先折回分再格式化
+      tooltip: { trigger: 'item', valueFormatter: (v: number) => `¥${fmtYuan(Math.round(v * 100))}` },
       series: [
         {
           type: 'pie',

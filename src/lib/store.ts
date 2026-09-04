@@ -1,4 +1,5 @@
 // 全局状态。页面只从这里读数据、只调这里的动作；这里是唯一调用 api.ts 的地方。
+import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { Account, CatKind, Category, Snapshot, Transaction } from '../types'
 import * as api from './api'
@@ -15,7 +16,7 @@ function readCache(): Cache | null {
     const raw = localStorage.getItem(CACHE_KEY)
     if (!raw) return null
     const c = JSON.parse(raw) as Cache
-    if (!Array.isArray(c.accounts) || !Array.isArray(c.transactions)) return null
+    if (!Array.isArray(c.accounts) || !Array.isArray(c.categories) || !Array.isArray(c.transactions)) return null
     return c
   } catch {
     return null
@@ -244,5 +245,9 @@ export const useStore = create<State>((set, get) => ({
 // ---------- 便捷选择器 ----------
 
 export function useActiveAccounts(): Account[] {
-  return useStore((s) => s.accounts).filter((a) => !a.is_archived).sort((a, b) => a.sort - b.sort)
+  const accounts = useStore((s) => s.accounts)
+  // 不加 useMemo 的话每次 render 都产出新数组，会打穿五个页面里依赖它的 useMemo，
+  // 其中 balanceSeries 每次都要整份复制并排序全部流水。
+  // 注意：filter 必须在 sort 之前，否则 sort 会原地改 store 里的数组。
+  return useMemo(() => accounts.filter((a) => !a.is_archived).sort((a, b) => a.sort - b.sort), [accounts])
 }

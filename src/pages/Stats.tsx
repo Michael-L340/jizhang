@@ -231,8 +231,8 @@ export function Stats() {
     }
   }, [bal, accounts, keys, labels, fewPoints, unit, balMode])
 
-  const adjMonth = adjustTotal(txs, ym)
-  const adjAll = adjustTotal(txs)
+  const adjMonth = useMemo(() => adjustTotal(txs, ym), [txs, ym])
+  const adjAll = useMemo(() => adjustTotal(txs), [txs])
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const roots = useMemo(() => cats.filter((c) => !c.parent_id && c.kind === 'expense' && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
 
