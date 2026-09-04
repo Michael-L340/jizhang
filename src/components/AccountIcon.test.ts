@@ -33,10 +33,13 @@ describe('账户图标', () => {
     }
   })
 
-  it('招行图标只保留圆形主标记，右边那六条横杠已经裁掉', () => {
-    // 横杠的特征是路径末尾一串 `m…l2.3 5.1h…` 的横条，最右伸到 x=246
-    expect(BRANDS.CMB.path).not.toContain('H246')
-    expect(box(BRANDS.CMB.viewBox)[2]).toBeLessThan(246)
+  it('招行图标右侧那几条横杠必须保留——它们是标志的一部分', () => {
+    // 2026-09-04 曾误把它们当成中文字样的残留裁掉，用户一眼看出来「没有线条了」。
+    // 横杠的特征是路径末尾一串 `m…l2.3 5.1h…` 的横条，最右伸到 x=246。
+    expect(BRANDS.CMB.path).toContain('H246')
+    expect(box(BRANDS.CMB.viewBox)[2]).toBe(246)
+    // 六条，缺一条都不行
+    expect(BRANDS.CMB.path.match(/ m[\d.-]+ ?[\d.-]+l2[\d.]* 5\.1/g)?.length ?? 0).toBeGreaterThanOrEqual(5)
   })
 
   it('认得出四个账户，且颜色各不相同', () => {
