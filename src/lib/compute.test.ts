@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, monthSummary, monthTotals, monthlySeries, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf } from './compute'
+import { applyTx, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthSummary, monthTotals, monthlySeries, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -313,3 +313,241 @@ describe('月份选择器与起点', () => {
   })
 })
 
+
+// ─────────────────────────────────────────────────────────────────────
+// 修改账户余额 —— 用户的核心需求，原话：
+// 「我可以根据实时情况更改四个账户的余额，然后后续的收支会调整余额。
+//   如果我发现不对了我再更改余额。然后更改后，余额跟着收支调整。」
+//
+// 下面的 calibrate() 是 Accounts.tsx 里 confirm() 的等价复刻：
+//   推算余额 = balances(txs, accounts)[账户]
+//   差额     = 实际余额(parseYuan 解析的分) − 推算余额
+//   写一条 { type:'adjust', amount: 差额, account_id: 该账户 }，差额为 0 也照写。
+// 页面本身在 node 环境测不到（没有 DOM），所以把那条算式复制到这里锁住：
+// 只要 Accounts.tsx 的算式改了而这里没跟着改，两边就对不上了。
+// ─────────────────────────────────────────────────────────────────────
+describe('修改账户余额（校准链路）', () => {
+  /** 复刻 Accounts.tsx 的 confirm()：输入「实际余额（元）」，追加一条 adjust */
+  function calibrate(txs: Transaction[], accountId: string, realYuan: string): Transaction[] {
+    const computed = balances(txs, accounts)[accountId] ?? 0
+    const real = parseYuan(realYuan)
+    if (real === null) throw new Error(`输入 ${realYuan} 解析不了，页面上按钮会是灰的`)
+    const delta = real - computed
+    return [...txs, tx({ type: 'adjust', amount: delta, account_id: accountId, note: delta === 0 ? '余额核对' : '余额校准' })]
+  }
+  const bal = (txs: Transaction[], id: string) => balances(txs, accounts)[id] ?? 0
+  const last = (txs: Transaction[]) => txs[txs.length - 1]
+
+  it('场景1 基本四步：0 → 录 5000 → 花 80 → 4920 → 录 4800（生成 −120）→ 收 20 → 4820', () => {
+    let rows: Transaction[] = []
+    expect(bal(rows, 'boc')).toBe(0) // 一条记录都没有时是 0，没有「初始余额」字段
+
+    rows = calibrate(rows, 'boc', '5000')
+    expect(last(rows)).toMatchObject({ type: 'adjust', amount: 500000, account_id: 'boc', note: '余额校准' })
+    expect(bal(rows, 'boc')).toBe(500000)
+
+    rows = [...rows, tx({ type: 'expense', amount: 8000, account_id: 'boc', category_id: 'lunch' })]
+    expect(bal(rows, 'boc')).toBe(492000) // 4920.00
+
+    rows = calibrate(rows, 'boc', '4800')
+    expect(last(rows).amount).toBe(-12000) // 差额 = 480000 − 492000 = −120 元
+    expect(bal(rows, 'boc')).toBe(480000)
+
+    rows = [...rows, tx({ type: 'income', amount: 2000, account_id: 'boc', category_id: 'salary' })]
+    expect(bal(rows, 'boc')).toBe(482000)
+    expect(fmtYuan(bal(rows, 'boc'))).toBe('4,820.00')
+
+    // 两次校准（+5000 / −120）一分都不能漏进收支统计
+    expect(monthSummary(rows, '2026-09')).toMatchObject({ expense: 8000, income: 2000 })
+  })
+
+  it('场景2 反复改：三次校准夹着收支，每一步余额都要对', () => {
+    let rows: Transaction[] = []
+    rows = calibrate(rows, 'wx', '1000') // 第一次：+1000.00
+    expect(last(rows).amount).toBe(100000)
+    expect(bal(rows, 'wx')).toBe(100000)
+
+    rows = [...rows, tx({ type: 'expense', amount: 350, account_id: 'wx', category_id: 'lunch' })] // −3.50
+    rows = [...rows, tx({ type: 'income', amount: 12000, account_id: 'wx', category_id: 'salary' })] // +120.00
+    expect(bal(rows, 'wx')).toBe(111650) // 1116.50
+
+    rows = calibrate(rows, 'wx', '1200') // 第二次：差额为正
+    expect(last(rows).amount).toBe(8350) // +83.50
+    expect(bal(rows, 'wx')).toBe(120000)
+
+    rows = [...rows, tx({ type: 'expense', amount: 99999, account_id: 'wx', category_id: 'game' })] // −999.99
+    expect(bal(rows, 'wx')).toBe(20001) // 200.01
+
+    rows = calibrate(rows, 'wx', '150.5') // 第三次：差额为负
+    expect(last(rows).amount).toBe(-4951) // −49.51
+    expect(bal(rows, 'wx')).toBe(15050)
+
+    rows = [...rows, tx({ type: 'income', amount: 4950, account_id: 'wx', category_id: 'salary' })] // +49.50
+    expect(bal(rows, 'wx')).toBe(20000)
+    expect(fmtYuan(bal(rows, 'wx'))).toBe('200.00')
+
+    // 统计页底部的「未记录差额」= Σadjust，三次校准的和
+    const sumAdjust = rows.filter((t) => t.type === 'adjust').reduce((s, t) => s + t.amount, 0)
+    expect(sumAdjust).toBe(100000 + 8350 - 4951)
+    // 收支统计里没有任何一分校准的钱
+    expect(monthSummary(rows, '2026-09')).toMatchObject({ expense: 350 + 99999, income: 12000 + 4950 })
+  })
+
+  it('场景3 改小改大：差额为负要减、为正要加，符号不能反', () => {
+    const base = calibrate([], 'boc', '1000') // 1000.00
+    const down = calibrate(base, 'boc', '600')
+    expect(last(down).amount).toBe(-40000) // 改小 → 负差额
+    expect(bal(down, 'boc')).toBe(60000)
+
+    const up = calibrate(base, 'boc', '1600')
+    expect(last(up).amount).toBe(60000) // 改大 → 正差额
+    expect(bal(up, 'boc')).toBe(160000)
+  })
+
+  it('场景4a 改成 0：清空账户余额', () => {
+    let rows = calibrate([], 'boc', '5000')
+    rows = calibrate(rows, 'boc', '0')
+    expect(last(rows)).toMatchObject({ amount: -500000, note: '余额校准' }) // 差额不为 0，仍是「校准」
+    expect(bal(rows, 'boc')).toBe(0)
+    // 归零之后照样能继续记账
+    rows = [...rows, tx({ type: 'expense', amount: 1500, account_id: 'boc', category_id: 'lunch' })]
+    expect(bal(rows, 'boc')).toBe(-1500)
+  })
+
+  it('场景4b 改成负数：信用卡欠款 −1500.75，再记支出、再校准', () => {
+    let rows = calibrate([], 'cmb', '-1500.75')
+    expect(last(rows).amount).toBe(-150075)
+    expect(bal(rows, 'cmb')).toBe(-150075)
+    expect(fmtYuan(bal(rows, 'cmb'))).toBe('-1,500.75')
+
+    rows = [...rows, tx({ type: 'expense', amount: 20000, account_id: 'cmb', category_id: 'lunch' })] // 又刷了 200
+    expect(bal(rows, 'cmb')).toBe(-170075)
+
+    rows = calibrate(rows, 'cmb', '-1000') // 还了一部分，账单显示 −1000
+    expect(last(rows).amount).toBe(70075)
+    expect(bal(rows, 'cmb')).toBe(-100000)
+
+    // 负余额也要正确进总额
+    expect(totalOf(balances(rows, accounts))).toBe(-100000)
+  })
+
+  it('场景5 差额为 0：写一条 0 元记录，余额不变，但「上次核对」要更新', () => {
+    const before = calibrate([], 'boc', '5000')
+    const n0 = before.length
+    const check0 = lastCheck(before, 'boc')
+
+    const after = calibrate(before, 'boc', '5000')
+    expect(after).toHaveLength(n0 + 1) // 真的多写了一条
+    expect(last(after)).toMatchObject({ type: 'adjust', amount: 0, account_id: 'boc', note: '余额核对' })
+    expect(bal(after, 'boc')).toBe(500000) // 余额一分不变
+    expect(bal(before, 'boc')).toBe(bal(after, 'boc'))
+    // 0 元记录的唯一作用：把「上次核对时间」推进（能跨设备同步）
+    expect(lastCheck(after, 'boc')).toBe(last(after).created_at)
+    expect(lastCheck(after, 'boc')! > check0!).toBe(true)
+    // 0 元记录不进收支
+    expect(monthSummary(after, '2026-09')).toMatchObject({ expense: 0, income: 0 })
+  })
+
+  it('场景6 转账不影响这条链路：转完两边各自对，各自再校准一次仍然对', () => {
+    let rows = calibrate([], 'boc', '5000')
+    rows = calibrate(rows, 'cmb', '1000')
+    expect(totalOf(balances(rows, accounts))).toBe(600000)
+
+    rows = [...rows, tx({ type: 'transfer', amount: 80000, account_id: 'boc', to_account_id: 'cmb' })] // boc → cmb 800
+    expect(bal(rows, 'boc')).toBe(420000)
+    expect(bal(rows, 'cmb')).toBe(180000)
+    expect(totalOf(balances(rows, accounts))).toBe(600000) // 转账不改变总额
+    expect(monthSummary(rows, '2026-09')).toMatchObject({ expense: 0, income: 0 }) // 转账不是收支
+
+    rows = calibrate(rows, 'boc', '4150') // 转出方少了 50
+    expect(last(rows).amount).toBe(-5000)
+    expect(bal(rows, 'boc')).toBe(415000)
+    expect(bal(rows, 'cmb')).toBe(180000) // 校准 boc 不碰 cmb
+
+    rows = calibrate(rows, 'cmb', '1850') // 转入方多了 50
+    expect(last(rows).amount).toBe(5000)
+    expect(bal(rows, 'cmb')).toBe(185000)
+    expect(bal(rows, 'boc')).toBe(415000)
+    expect(totalOf(balances(rows, accounts))).toBe(600000)
+  })
+
+  it('场景7 不指定账户的收支：一分钱都不进任何账户余额，也不制造差额', () => {
+    let rows = calibrate([], 'boc', '5000')
+    rows = [...rows, tx({ type: 'expense', amount: 8000, account_id: null, category_id: 'lunch' })]
+    rows = [...rows, tx({ type: 'income', amount: 3000, account_id: null, category_id: 'salary' })]
+
+    expect(bal(rows, 'boc')).toBe(500000)
+    expect(totalOf(balances(rows, accounts))).toBe(500000)
+    expect(monthSummary(rows, '2026-09')).toMatchObject({ expense: 8000, income: 3000 }) // 但要进收支统计
+
+    // 再核对一次实际余额 5000：差额必须是 0，不能被那两笔无账户流水带偏
+    rows = calibrate(rows, 'boc', '5000')
+    expect(last(rows).amount).toBe(0)
+  })
+
+  it('场景8 多账户互不干扰：给中国银行校准，微信一分不变', () => {
+    let rows = calibrate([], 'boc', '5000')
+    rows = calibrate(rows, 'wx', '200')
+    const wxBefore = bal(rows, 'wx')
+
+    rows = calibrate(rows, 'boc', '4321.09')
+    expect(bal(rows, 'boc')).toBe(432109)
+    expect(bal(rows, 'wx')).toBe(wxBefore)
+    expect(bal(rows, 'wx')).toBe(20000)
+    expect(bal(rows, 'cmb')).toBe(0) // 从没动过的账户还是 0
+
+    // 反过来校准微信，中国银行也不能动
+    rows = calibrate(rows, 'wx', '0.01')
+    expect(bal(rows, 'wx')).toBe(1)
+    expect(bal(rows, 'boc')).toBe(432109)
+    expect(totalOf(balances(rows, accounts))).toBe(432109 + 1)
+  })
+
+  it('场景9 金额边界：0.01 / 4846.42 / 负数，元→分→numeric→分 往返零误差', () => {
+    for (const [input, cents] of [['0.01', 1], ['4846.42', 484642], ['-10.84', -1084], ['0', 0], ['999999.99', 99999999]] as const) {
+      expect(parseYuan(input)).toBe(cents)
+      expect(centsFromDb(centsToDb(cents))).toBe(cents) // 存进 numeric(12,2) 再读回来
+    }
+
+    // 整条链路走一遍：每一步的 adjust 金额都过一次数据库往返
+    let rows = calibrate([], 'wx', '0.01')
+    expect(last(rows).amount).toBe(1)
+    rows = calibrate(rows, 'wx', '4846.42')
+    expect(last(rows).amount).toBe(484641) // 484642 − 1
+    expect(centsFromDb(centsToDb(last(rows).amount))).toBe(484641)
+    rows = [...rows, tx({ type: 'expense', amount: 1084, account_id: 'wx', category_id: 'lunch' })]
+    rows = calibrate(rows, 'wx', '4800')
+    expect(last(rows).amount).toBe(480000 - (484642 - 1084))
+    expect(bal(rows, 'wx')).toBe(480000)
+
+    // 所有校准记录往返后余额必须一模一样
+    const roundTripped = rows.map((t) => ({ ...t, amount: centsFromDb(centsToDb(t.amount)) }))
+    expect(balances(roundTripped, accounts)).toEqual(balances(rows, accounts))
+  })
+
+  it('applyTx：adjust 是加不是减，负数和 0 都要按原样累加，没账户的直接跳过', () => {
+    const out: Record<string, number> = { boc: 100000 }
+    applyTx(tx({ type: 'adjust', amount: 5000, account_id: 'boc' }), out)
+    expect(out.boc).toBe(105000) // 正差额往上加
+    applyTx(tx({ type: 'adjust', amount: -7000, account_id: 'boc' }), out)
+    expect(out.boc).toBe(98000) // 负差额往下减
+    applyTx(tx({ type: 'adjust', amount: 0, account_id: 'boc' }), out)
+    expect(out.boc).toBe(98000) // 0 差额不动
+    applyTx(tx({ type: 'adjust', amount: 999, account_id: null }), out)
+    expect(out.boc).toBe(98000) // 没有账户的直接跳过
+    applyTx(tx({ type: 'adjust', amount: 3000, account_id: 'newacc' }), out)
+    expect(out.newacc).toBe(3000) // 之前没出现过的账户从 0 起算
+  })
+
+  it('lastCheck：只认 adjust，只认这个账户，取最新一条', () => {
+    const rows = [
+      tx({ type: 'adjust', amount: 100, account_id: 'boc' }),
+      tx({ type: 'adjust', amount: 200, account_id: 'wx' }),
+      tx({ type: 'adjust', amount: 0, account_id: 'boc' }), // 0 元核对也算核对过
+      tx({ type: 'expense', amount: 300, account_id: 'boc', category_id: 'lunch' }), // 收支不算核对
+    ]
+    expect(lastCheck(rows, 'boc')).toBe(rows[2].created_at)
+    expect(lastCheck(rows, 'wx')).toBe(rows[1].created_at)
+    expect(lastCheck(rows, 'cmb')).toBeNull()
+  })
+})

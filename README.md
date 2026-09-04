@@ -100,13 +100,14 @@ npm run deploy   # check + test + 构建 + 发布到 gh-pages 分支
 
 | 文件 | 守住什么 |
 |---|---|
-| `src/lib/compute.test.ts` | 算钱的纯函数：余额、分类汇总、时间分桶、「二级合计 = 一级合计」 |
+| `src/lib/compute.test.ts` | 算钱的纯函数：余额、**改余额（校准）全链路**、分类汇总、时间分桶、「二级合计 = 一级合计」 |
 | `src/lib/pending.test.ts` | 在途补丁的叠加规则 |
 | `src/lib/store.test.ts` | 数据层的并发时序与本机缓存（见下） |
 | `src/lib/api.test.ts` | 发给数据库的请求长什么样：删除顺序、元↔分换算、分页键 |
 | `src/lib/csv.test.ts` | 导入文件的校验（整库恢复会先删数据，文件必须先验过） |
 | `src/lib/palette.test.ts` | 配色：相邻两级颜色必须看得出区别 |
 | `src/lib/restore.dbtest.ts` | **不在 `npm test` 里**。真 Postgres 上跑完整备份恢复，`npm run test:db` |
+| `src/lib/balance.dbtest.ts` | **不在 `npm test` 里**。真 Postgres 上跑「改余额」全链路，并逐分校验 `account_balances` 视图 = 前端 `balances()` |
 
 ### 为什么 `store.test.ts` 特别重要
 
