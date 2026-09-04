@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { adjustTotal, balanceHistory, balances, byCategory, dailyCumulative, monthSummary, monthlySeries, recentChildOrder, totalOf } from './compute'
+import { adjustTotal, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, monthSummary, monthlySeries, recentChildOrder, totalOf } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -172,18 +172,30 @@ describe('month stats exclude transfer and adjust', () => {
   })
 })
 
-describe('balanceHistory', () => {
+describe('balanceSeries', () => {
   it('walks day by day', () => {
     const txs = [
       tx({ type: 'adjust', amount: 10000, account_id: 'wx', date: '2026-08-01' }),
       tx({ type: 'expense', amount: 1000, account_id: 'wx', category_id: 'lunch', date: '2026-09-02' }),
       tx({ type: 'income', amount: 5000, account_id: 'cmb', category_id: 'salary', date: '2026-09-03' }),
     ]
-    const h = balanceHistory(txs, accounts, 3, '2026-09-03')
-    expect(h.dates).toEqual(['2026-09-01', '2026-09-02', '2026-09-03'])
-    expect(h.series.wx).toEqual([10000, 9000, 9000])
-    expect(h.series.cmb).toEqual([0, 0, 5000])
+    const keys = bucketKeys('2026-09-01', '2026-09-03', 'day')
+    const h = balanceSeries(txs, accounts, keys, 'day')
+    expect(keys).toEqual(['2026-09-01', '2026-09-02', '2026-09-03'])
+    expect(h.byAccount.wx).toEqual([10000, 9000, 9000])
+    expect(h.byAccount.cmb).toEqual([0, 0, 5000])
     expect(h.total).toEqual([10000, 9000, 14000])
+  })
+
+  it('month buckets close at month end and carry earlier balances', () => {
+    const txs = [
+      tx({ type: 'adjust', amount: 10000, account_id: 'wx', date: '2026-07-15' }),
+      tx({ type: 'expense', amount: 3000, account_id: 'wx', category_id: 'lunch', date: '2026-08-20' }),
+    ]
+    const keys = bucketKeys('2026-08-01', '2026-09-30', 'month')
+    const h = balanceSeries(txs, accounts, keys, 'month')
+    expect(keys).toEqual(['2026-08', '2026-09'])
+    expect(h.byAccount.wx).toEqual([7000, 7000])
   })
 })
 

@@ -34,7 +34,7 @@ function writeCache(s: Snapshot) {
 export interface Toast {
   id: number
   msg: string
-  undo?: () => void
+  undo?: () => void | Promise<void>
 }
 
 export interface State extends Snapshot {
@@ -59,7 +59,7 @@ export interface State extends Snapshot {
   updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived'>>) => Promise<boolean>
   importSnapshot: (snap: Snapshot) => Promise<void>
 
-  showToast: (msg: string, undo?: () => void) => void
+  showToast: (msg: string, undo?: () => void | Promise<void>) => void
   hideToast: () => void
 }
 

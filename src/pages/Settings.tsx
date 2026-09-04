@@ -8,6 +8,13 @@ import { checkForUpdate, hardReload } from '../lib/sw'
 import { useStore } from '../lib/store'
 import type { CatKind, Category } from '../types'
 
+const ICONS = [
+  '🧾', '🍚', '🍜', '🍽️', '🥤', '☕', '🍎', '🛒',
+  '🎮', '🎬', '🎧', '🎤', '🎯', '🏀', '✈️', '🎁',
+  '🏠', '💡', '🚇', '🚌', '🚗', '📱', '💻', '👕',
+  '👟', '💊', '📚', '✂️', '⚡', '🔧', '💰', '🏷️',
+]
+
 export function Settings() {
   const nav = useNavigate()
   const s = useStore()
@@ -20,6 +27,7 @@ export function Settings() {
   const [pwErr, setPwErr] = useState('')
   const [editCat, setEditCat] = useState<Category | null>(null)
   const [moving, setMoving] = useState(false)
+  const [iconFor, setIconFor] = useState<Category | null>(null)
 
   async function submitPassword() {
     setPwErr('')
@@ -135,7 +143,10 @@ export function Settings() {
               <div className="flex items-start justify-between gap-2">
                 <span className="min-w-0">
                   <span className="block font-medium">
-                    {p.icon} {p.name}
+                    <button type="button" className="mr-1 active:opacity-60" onClick={() => setIconFor(p)} title="换图标">
+                      {p.icon || '🏷️'}
+                    </button>
+                    {p.name}
                   </span>
                   <button
                     type="button"
@@ -279,6 +290,24 @@ export function Settings() {
             </div>
           </div>
         ) : null}
+      </Sheet>
+
+      <Sheet open={Boolean(iconFor)} onClose={() => setIconFor(null)} title={iconFor ? `${iconFor.name} 的图标` : ''}>
+        <div className="grid grid-cols-8 gap-1.5">
+          {ICONS.map((e) => (
+            <button
+              key={e}
+              type="button"
+              className={`h-11 rounded-xl text-xl ${iconFor?.icon === e ? 'bg-brand-soft ring-2 ring-brand' : 'bg-bg'}`}
+              onClick={async () => {
+                if (iconFor) await s.updateCategory(iconFor.id, { icon: e })
+                setIconFor(null)
+              }}
+            >
+              {e}
+            </button>
+          ))}
+        </div>
       </Sheet>
 
       <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">

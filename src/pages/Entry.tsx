@@ -214,7 +214,10 @@ export function Entry() {
           ? incomeCats.find((c) => c.id === incomeCatId)?.name ?? ''
           : '转账'
     const accName = accounts.find((a) => a.id === (type === 'transfer' ? fromId : accountId))?.name ?? '未指定账户'
-    showToast(`已记 ¥${fmtYuan(Math.abs(cents))} · ${catName} · ${accName}`, () => void removeTx(tx.id))
+    showToast(`已记 ¥${fmtYuan(Math.abs(cents))} · ${catName} · ${accName}`, async () => {
+      const removed = await removeTx(tx.id)
+      if (removed) showToast(`已撤销 ¥${fmtYuan(Math.abs(cents))} · ${catName}`)
+    })
     setAmount('')
     setNote('')
     setDate(today())

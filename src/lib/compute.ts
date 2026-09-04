@@ -12,28 +12,28 @@ export function inMonth(t: Transaction, ym: string): boolean {
 }
 
 /** 每个账户的当前余额（分） */
+/** 把一笔流水累加进余额表。未指定账户的流水计入收支统计，但不影响任何账户余额。 */
+export function applyTx(t: Transaction, out: Record<string, number>): void {
+  if (!t.account_id) return
+  switch (t.type) {
+    case 'income':
+    case 'adjust':
+      out[t.account_id] = (out[t.account_id] ?? 0) + t.amount
+      break
+    case 'expense':
+      out[t.account_id] = (out[t.account_id] ?? 0) - t.amount
+      break
+    case 'transfer':
+      out[t.account_id] = (out[t.account_id] ?? 0) - t.amount
+      if (t.to_account_id) out[t.to_account_id] = (out[t.to_account_id] ?? 0) + t.amount
+      break
+  }
+}
+
 export function balances(txs: Transaction[], accounts: Account[]): Record<string, number> {
   const out: Record<string, number> = {}
   for (const a of accounts) out[a.id] = 0
-  for (const t of txs) {
-    // 未指定账户的流水计入收支统计，但不影响任何账户余额
-    if (!t.account_id) continue
-    switch (t.type) {
-      case 'income':
-        out[t.account_id] = (out[t.account_id] ?? 0) + t.amount
-        break
-      case 'expense':
-        out[t.account_id] = (out[t.account_id] ?? 0) - t.amount
-        break
-      case 'adjust':
-        out[t.account_id] = (out[t.account_id] ?? 0) + t.amount
-        break
-      case 'transfer':
-        out[t.account_id] = (out[t.account_id] ?? 0) - t.amount
-        if (t.to_account_id) out[t.to_account_id] = (out[t.to_account_id] ?? 0) + t.amount
-        break
-    }
-  }
+  for (const t of txs) applyTx(t, out)
   return out
 }
 
@@ -242,34 +242,37 @@ export function monthlySeries(txs: Transaction[], endYm: string, n = 12): { ym: 
   return months.map((ym) => map.get(ym)!)
 }
 
-/** 最近 days 天，每天收盘时各账户余额（含总额） */
-export function balanceHistory(
+/** 时间桶的结束日期：按日就是当天，按月是当月最后一天 */
+export function bucketEnd(key: string, unit: Unit): string {
+  return unit === 'day' ? key : monthRange(key).end
+}
+
+/** 每个时间桶结束时的各账户余额与总额（从有记录以来累计，不受区间起点影响） */
+export function balanceSeries(
   txs: Transaction[],
   accounts: Account[],
-  days = 90,
-  ref: string = today(),
-): { dates: string[]; series: Record<string, number[]>; total: number[] } {
-  const startDay = addDays(ref, -(days - 1))
+  keys: string[],
+  unit: Unit,
+): { total: number[]; byAccount: Record<string, number[]> } {
   const sorted = [...txs].sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0))
-  // 起点：startDay 之前的全部流水
-  const before = sorted.filter((t) => t.date < startDay)
-  const running = balances(before, accounts)
-  let i = before.length
-  const dates: string[] = []
-  const series: Record<string, number[]> = {}
-  for (const a of accounts) series[a.id] = []
+  const running: Record<string, number> = {}
+  const byAccount: Record<string, number[]> = {}
+  for (const a of accounts) {
+    running[a.id] = 0
+    byAccount[a.id] = []
+  }
   const total: number[] = []
-  for (let d = startDay; d <= ref; d = addDays(d, 1)) {
-    while (i < sorted.length && sorted[i].date <= d) {
-      const delta = balances([sorted[i]], accounts)
-      for (const k of Object.keys(delta)) running[k] = (running[k] ?? 0) + delta[k]
+  let i = 0
+  for (const k of keys) {
+    const end = bucketEnd(k, unit)
+    while (i < sorted.length && sorted[i].date <= end) {
+      applyTx(sorted[i], running)
       i++
     }
-    dates.push(d)
-    for (const a of accounts) series[a.id].push(running[a.id] ?? 0)
+    for (const a of accounts) byAccount[a.id].push(running[a.id] ?? 0)
     total.push(totalOf(running))
   }
-  return { dates, series, total }
+  return { total, byAccount }
 }
 
 /** 某个一级分类下的二级，按最近使用倒序，从未用过的按 sort */
