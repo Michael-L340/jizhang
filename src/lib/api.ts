@@ -45,7 +45,7 @@ export function friendlyError(e: unknown): string {
   if (/Invalid login credentials/i.test(msg)) return '邮箱或密码错误'
   if (/Email not confirmed/i.test(msg)) return '邮箱未确认，请联系管理员'
   if (/Failed to fetch|NetworkError|Load failed|network/i.test(msg)) return '网络不通，请稍后再试'
-  if (code === '23505' || /duplicate key/i.test(msg)) return '已有同名分类'
+  if (code === '23505' || /duplicate key/i.test(msg)) return '已有同名的账户或分类'
   if (code === '23514' || /violates check constraint/i.test(msg)) return '数据不合法（类型与字段不匹配）'
   if (/New password should be different/i.test(msg)) return '新密码不能和旧密码相同'
   if (/Password should be at least/i.test(msg)) return '密码太短，至少 6 位'
@@ -119,8 +119,33 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
   if (error) throw error
 }
 
-// ---------- 导入（备份恢复 / 换库迁移） ----------
+// ---------- 导入与恢复（备份还原 / 换库迁移） ----------
 
+/**
+ * 危险：清空当前登录账号的全部数据。只给「整库恢复」用，调用方必须先拿到完整备份。
+ *
+ * 顺序不能反，也不能合并成更少的语句：
+ * - transactions.account_id / category_id 都是 on delete restrict，先删账户或分类会被数据库拒绝。
+ * - categories.parent_id 同样是 restrict，且 restrict 不能延迟到语句结束再查，
+ *   一条 delete 同时删父子会当场报错，所以必须先删二级再删一级。
+ * PostgREST 不允许无条件 delete，每条都带一个「匹配全部」的过滤条件；RLS 保证只删自己的行。
+ */
+export async function wipeAll(): Promise<void> {
+  const tx = await supabase.from('transactions').delete().not('id', 'is', null)
+  if (tx.error) throw tx.error
+  const child = await supabase.from('categories').delete().not('parent_id', 'is', null)
+  if (child.error) throw child.error
+  const root = await supabase.from('categories').delete().is('parent_id', null)
+  if (root.error) throw root.error
+  const acc = await supabase.from('accounts').delete().not('id', 'is', null)
+  if (acc.error) throw acc.error
+}
+
+/**
+ * 按 id 合并写入（同 id 覆盖，不删任何东西）。不是事务：每 500 条一批逐批提交，
+ * 中途失败前面的批次已经在云端，重跑同一个文件是安全的（upsert 幂等）。
+ * 金额在 txToRow 里过 centsToDb，整数「分」→ numeric 字符串，这是全项目唯一的转换点。
+ */
 export async function importAll(snap: Snapshot): Promise<void> {
   const acc = await supabase.from('accounts').upsert(snap.accounts, { onConflict: 'id' })
   if (acc.error) throw acc.error

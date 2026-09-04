@@ -73,7 +73,10 @@ export interface State extends Snapshot {
   addCategory: (kind: CatKind, parentId: string | null, name: string) => Promise<Category | null>
   updateCategory: (id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note' | 'parent_id'>>) => Promise<boolean>
   updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived'>>) => Promise<boolean>
+  /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
+  /** 整库恢复：先清空云端再整份写入。不可撤销，调用方必须已经跟用户确认过 */
+  restoreSnapshot: (snap: Snapshot) => Promise<void>
 
   showToast: (msg: string, undo?: () => void | Promise<void>) => void
   hideToast: () => void
@@ -90,6 +93,16 @@ const pendingCat: Pending<Category> = new Map()
 // 每次增删改都同步 JSON.stringify 全量流水，数据多了会让「保存」明显卡顿，
 // 而撤销路径还会连着触发两次。尾部去抖 500ms。
 let persistTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 导入 / 恢复之后把界面拉到云端真实状态。
+ * refresh() 在 syncing 时会静默早退（手机上选文件会把 App 切后台，回来那次同步可能还在飞），
+ * 直接调用有概率什么都不做，所以先等上一次同步落地，最多等 10 秒。
+ */
+async function pullAfterWrite(get: () => State): Promise<void> {
+  for (let i = 0; i < 40 && get().syncing; i++) await new Promise((r) => setTimeout(r, 250))
+  await get().refresh()
+}
 
 let toastSeq = 0
 let toastTimer: ReturnType<typeof setTimeout> | null = null
@@ -306,8 +319,22 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async importSnapshot(snap) {
-    await api.importAll(snap)
-    await get().refresh()
+    try {
+      await api.importAll(snap)
+    } finally {
+      // importAll 每 500 条一批逐批提交，失败时前面的批次已经在云端了。
+      // 不管成败都把界面拉到云端真实状态，否则用户看到的是「什么都没发生」。
+      await pullAfterWrite(get)
+    }
+  },
+
+  async restoreSnapshot(snap) {
+    try {
+      await api.wipeAll()
+      await api.importAll(snap)
+    } finally {
+      await pullAfterWrite(get)
+    }
   },
 
   showToast(msg, undo) {

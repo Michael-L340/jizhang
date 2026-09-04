@@ -20,6 +20,7 @@ export function Settings() {
   const signOut = useStore((st) => st.signOut)
   const updateAccount = useStore((st) => st.updateAccount)
   const importSnapshot = useStore((st) => st.importSnapshot)
+  const restoreSnapshot = useStore((st) => st.restoreSnapshot)
   const showToast = useStore((st) => st.showToast)
   const syncFailed = useStore((st) => st.syncFailed)
   const cacheBytes = useStore((st) => st.cacheBytes)
@@ -27,6 +28,10 @@ export function Settings() {
   const snapshot = useMemo(() => ({ accounts, categories, transactions }), [accounts, categories, transactions])
   const [busy, setBusy] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  // 用 ref 不用 state：setMode 之后要立刻 click()，ref 是同步的，不用等重渲染
+  const modeRef = useRef<'merge' | 'restore'>('merge')
+  // 导入失败的信息要留在屏幕上。toast 只有 5 秒，而这段话用户需要读完并照着做
+  const [importErr, setImportErr] = useState('')
   const [pwOpen, setPwOpen] = useState(false)
   const [pw1, setPw1] = useState('')
   const [pw2, setPw2] = useState('')
@@ -79,15 +84,45 @@ export function Settings() {
     }
   }
 
+  function pickFile(mode: 'merge' | 'restore') {
+    modeRef.current = mode
+    setImportErr('')
+    fileRef.current?.click()
+  }
+
   async function importJson(file: File) {
+    const restore = modeRef.current === 'restore'
     setBusy('import')
+    setImportErr('')
     try {
+      // 先解析并逐条校验，再动云端。整库恢复会先删数据，文件坏了就真没了
       const snap = parseImport(await file.text())
-      if (!window.confirm(`将导入 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水（同 ID 覆盖）。继续？`)) return
-      await importSnapshot(snap)
-      showToast('导入完成')
+      if (restore) {
+        if (!snap.accounts.length || !snap.categories.length) {
+          throw new Error('这个文件里没有账户或分类，不像是完整备份，已停止，云端数据一条没动')
+        }
+        const ok = window.confirm(
+          `整库恢复会先删掉云端现在的 ${accounts.length} 个账户、${categories.length} 个分类、${transactions.length} 条流水，` +
+            `再按这个文件重建成 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水。\n\n` +
+            '不可撤销。请先确认这个备份文件还在手机或电脑里。继续？',
+        )
+        if (!ok) return
+        await restoreSnapshot(snap)
+        showToast('整库恢复完成')
+      } else {
+        const ok = window.confirm(
+          `合并导入 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水。` +
+            '同 ID 的会被覆盖，现有数据不会被删除。继续？',
+        )
+        if (!ok) return
+        await importSnapshot(snap)
+        showToast('导入完成')
+      }
     } catch (e) {
-      showToast(`导入失败：${friendlyError(e)}`)
+      setImportErr(
+        `${restore ? '整库恢复' : '导入'}失败：${friendlyError(e)}。` +
+          '已经写进去的部分不会自动撤销，用同一个文件再走一遍是安全的（同 ID 覆盖）。',
+      )
     } finally {
       setBusy('')
       if (fileRef.current) fileRef.current.value = ''
@@ -165,7 +200,12 @@ export function Settings() {
         </div>
         <Row label="导出 CSV（Excel 可打开）" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
         <Row label="导出 JSON 完整备份" action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
-        <Row label="从 JSON 备份导入 / 恢复" action={busy === 'import' ? '…' : '选择文件'} onClick={() => fileRef.current?.click()} />
+        <Row label="从备份合并导入（同 ID 覆盖，不删数据）" action={busy === 'import' ? '…' : '选择文件'} onClick={() => pickFile('merge')} />
+        <Row label="整库恢复（先清空，再按备份重建）" action={busy === 'import' ? '…' : '选择文件'} danger onClick={() => pickFile('restore')} />
+        {importErr ? <div className="text-xs text-expense leading-relaxed py-2 border-b border-line last:border-0">{importErr}</div> : null}
+        <div className="text-xs text-muted leading-relaxed py-2">
+          换了新的数据库、或者想回到备份那一刻的样子，用「整库恢复」。只是想把误删的几笔找回来，用「合并导入」——它不会删掉备份之后新记的账。
+        </div>
         <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
       </Section>
 

@@ -17,6 +17,7 @@ const api = vi.hoisted(() => ({
   updateCategory: vi.fn(),
   updateAccount: vi.fn(),
   importAll: vi.fn(),
+  wipeAll: vi.fn(),
   signIn: vi.fn(),
   changePassword: vi.fn(),
   signOut: vi.fn(),
@@ -368,5 +369,59 @@ describe('同步失败留痕', () => {
     store.useStore.setState({ auth: 'out' })
     await st().refresh()
     expect(api.fetchAll).not.toHaveBeenCalled()
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 导入与整库恢复
+//   「合并导入」只覆盖同 id 的行；「整库恢复」先清空再重建。
+//   恢复是唯一会主动删数据的路径，顺序错一步就是删了没导回来。
+// ══════════════════════════════════════════════════════════════
+describe('导入与整库恢复', () => {
+  const snapshot = { accounts: [], categories: [], transactions: [tx('t1')] }
+
+  it('整库恢复必须先清空再导入，最后把界面拉到云端', async () => {
+    const order: string[] = []
+    api.wipeAll.mockImplementationOnce(async () => {
+      order.push('wipe')
+    })
+    api.importAll.mockImplementationOnce(async () => {
+      order.push('import')
+    })
+    api.fetchAll.mockImplementationOnce(async () => {
+      order.push('fetch')
+      return snap([tx('t1')])
+    })
+    await st().restoreSnapshot(snapshot)
+    expect(order).toEqual(['wipe', 'import', 'fetch'])
+    expect(ids()).toEqual(['t1'])
+  })
+
+  it('清空失败就不要再导入了，否则可能删了一半又写一半', async () => {
+    api.wipeAll.mockRejectedValueOnce(new Error('网络不通'))
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow('网络不通')
+    expect(api.importAll).not.toHaveBeenCalled()
+  })
+
+  it('导入中途失败，界面也要拉到云端真实状态，不能停在「什么都没发生」', async () => {
+    // 不是事务：失败时前面的批次已经进了云端，用户必须看得见实际进了多少
+    api.wipeAll.mockResolvedValueOnce(undefined)
+    api.importAll.mockRejectedValueOnce(new Error('网络不通'))
+    api.fetchAll.mockResolvedValueOnce(snap([tx('half')]))
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow('网络不通')
+    expect(ids()).toEqual(['half'])
+  })
+
+  it('合并导入绝不能碰清空', async () => {
+    api.importAll.mockResolvedValueOnce(undefined)
+    await st().importSnapshot(snapshot)
+    expect(api.wipeAll).not.toHaveBeenCalled()
+  })
+
+  it('合并导入失败也要拉一次，让用户看见实际进了多少', async () => {
+    api.importAll.mockRejectedValueOnce(new Error('网络不通'))
+    api.fetchAll.mockResolvedValueOnce(snap([tx('half')]))
+    await expect(st().importSnapshot(snapshot)).rejects.toThrow('网络不通')
+    expect(ids()).toEqual(['half'])
   })
 })
