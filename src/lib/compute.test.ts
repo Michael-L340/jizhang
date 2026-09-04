@@ -139,6 +139,20 @@ describe('month stats exclude transfer and adjust', () => {
     expect(agg[1].children[0]).toMatchObject({ name: '午餐', amount: 2800 })
     expect(agg.reduce((s, a) => s + a.amount, 0)).toBe(monthSummary(txs, '2026-09').expense)
   })
+  it('keeps parent-level spending visible as 未细分 when drilling', () => {
+    const mixed = [
+      tx({ type: 'expense', amount: 53800, account_id: null, category_id: 'food' }), // 直接记在一级
+      tx({ type: 'expense', amount: 8990, account_id: 'wx', category_id: 'lunch' }), // 记在二级
+    ]
+    const agg = byCategory(mixed, cats, '2026-09', 'expense')
+    expect(agg).toHaveLength(1)
+    expect(agg[0].amount).toBe(62790)
+    expect(agg[0].count).toBe(2)
+    // 二级合计必须等于一级合计，否则下钻时会漏钱
+    expect(agg[0].children.reduce((s, c) => s + c.amount, 0)).toBe(agg[0].amount)
+    expect(agg[0].children.map((c) => c.name).sort()).toEqual(['未细分', '午餐'].sort())
+  })
+
   it('adjustTotal reports unrecorded delta', () => {
     expect(adjustTotal(txs, '2026-09')).toBe(-99999)
   })

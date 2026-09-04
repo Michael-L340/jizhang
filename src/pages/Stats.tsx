@@ -1,9 +1,10 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
 import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
+import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
-import { adjustTotal, balanceHistory, byCategory, monthSummary, monthTotals, monthlyByCategory, monthlySeries, monthsWithFlow } from '../lib/compute'
-import { monthOf, shiftMonth, today } from '../lib/date'
+import { adjustTotal, balanceHistory, bucketKeys, byCategory, firstFlowDate, monthTotals, monthlySeries, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
+import { addDays, fmtDateZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { categoryColor, childColors } from '../lib/palette'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -20,9 +21,11 @@ export function Stats() {
   const [kind, setKind] = useState<'expense' | 'income'>('expense')
   const [drill, setDrill] = useState<string | null>(null)
   const [lineMode, setLineMode] = useState<'total' | 'category'>('total')
+  const [unit, setUnit] = useState<Unit>('month')
+  const [range, setRange] = useState<RangeValue>({ kind: 'year' })
+  const [rangeOpen, setRangeOpen] = useState(false)
   const [help, setHelp] = useState(false)
 
-  const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const agg = useMemo(() => byCategory(txs, cats, ym, kind), [txs, cats, ym, kind])
   const rootColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
 
@@ -79,36 +82,67 @@ export function Stats() {
     [series12],
   )
 
-  // 趋势图的月份区间：从有数据的第一个月起，最多 12 个月，止于当前选中月
-  const trendMonths = useMemo(() => {
-    const withData = monthsWithFlow(txs)
-    const earliest = withData.find((m) => m <= ym) ? withData[0] : ym
-    const lowerBound = shiftMonth(ym, -11)
-    let start = earliest > lowerBound ? earliest : lowerBound
-    if (start > ym) start = ym
-    const out: string[] = []
-    for (let m = start; m <= ym; m = shiftMonth(m, 1)) out.push(m)
-    return out.length ? out : [ym]
-  }, [txs, ym])
+  const earliest = useMemo(() => firstFlowDate(txs), [txs])
 
-  const trendTotal = useMemo(
-    () => trendMonths.map((m) => monthSummary(txs, m).expense),
-    [txs, trendMonths],
+  // 趋势区间：终点跟随顶部选中的月份（当月则到今天），起点由范围选项决定
+  const { start: tStart, end: tEnd } = useMemo(() => {
+    if (range.kind === 'custom' && range.start && range.end) return { start: range.start, end: range.end }
+    const monthEnd = monthRange(ym).end
+    const t = today()
+    const end = monthEnd > t ? t : monthEnd
+    if (range.kind === 'all') return { start: earliest < end ? earliest : end, end }
+    const back = range.kind === 'quarter' ? 3 : range.kind === 'half' ? 6 : 12
+    const start = addDays(monthRange(shiftMonth(monthOf(end), -(back - 1))).start, 0)
+    return { start, end }
+  }, [range, ym, earliest])
+
+  const keys = useMemo(() => bucketKeys(tStart, tEnd, unit), [tStart, tEnd, unit])
+  const trendTotal = useMemo(() => seriesTotals(txs, keys, unit, 'expense'), [txs, keys, unit])
+  const trendByCat = useMemo(() => seriesByCategory(txs, cats, keys, unit, 'expense'), [txs, cats, keys, unit])
+  const trendSum = useMemo(() => trendTotal.reduce((a, b) => a + b, 0), [trendTotal])
+  const fewPoints = keys.length <= 3
+  const crossYear = keys.length > 0 && keys[0].slice(0, 4) !== keys[keys.length - 1].slice(0, 4)
+
+  const labels = useMemo(
+    () =>
+      keys.map((k) =>
+        unit === 'day'
+          ? `${+k.slice(5, 7)}/${+k.slice(8, 10)}`
+          : crossYear
+            ? `${k.slice(2, 4)}.${+k.slice(5)}`
+            : `${+k.slice(5)}月`,
+      ),
+    [keys, unit, crossYear],
   )
-  const trendByCat = useMemo(() => monthlyByCategory(txs, cats, trendMonths, 'expense'), [txs, cats, trendMonths])
-  const fewPoints = trendMonths.length <= 3
 
   const trendOption = useMemo(() => {
+    const full = (i: number) => (unit === 'day' ? fmtDateZh(keys[i], false) : `${+keys[i].slice(0, 4)}年${+keys[i].slice(5)}月`)
     const base = {
-      tooltip: { trigger: 'axis', valueFormatter: yuan, confine: true, order: 'valueDesc' },
+      tooltip: {
+        trigger: 'axis',
+        confine: true,
+        order: 'valueDesc',
+        formatter: (ps: { dataIndex: number; marker: string; seriesName: string; value: number }[]) => {
+          if (!ps.length) return ''
+          const head = full(ps[0].dataIndex)
+          const rows = ps
+            .filter((p) => p.value > 0)
+            .map((p) => `${p.marker}${p.seriesName}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)
+          return [head, ...(rows.length ? rows : ['无支出'])].join('<br/>')
+        },
+      },
       grid: { left: 4, right: 14, top: 34, bottom: 0, containLabel: true },
       xAxis: {
         type: 'category',
-        data: trendMonths.map((m) => `${+m.slice(5)}月`),
+        data: labels,
         boundaryGap: fewPoints,
         axisTick: { show: false },
         axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10, color: '#7a808c', interval: 0 },
+        axisLabel: {
+          fontSize: 10,
+          color: '#7a808c',
+          interval: keys.length <= 14 ? 0 : Math.ceil(keys.length / 8) - 1,
+        },
       },
       yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f1f4' } }, axisLabel: { fontSize: 10, color: '#7a808c', formatter: axisMoney } },
     }
@@ -123,7 +157,7 @@ export function Stats() {
             name: '支出',
             type: 'line',
             smooth: true,
-            showSymbol: true,
+            showSymbol: keys.length <= 40,
             symbolSize: 7,
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
@@ -141,13 +175,13 @@ export function Stats() {
         name: c.name,
         type: 'line',
         smooth: true,
-        showSymbol: true,
+        showSymbol: keys.length <= 40,
         symbolSize: 6,
         lineStyle: { width: 2 },
         data: c.data.map((v) => v / 100),
       })),
     }
-  }, [lineMode, trendMonths, trendTotal, trendByCat, fewPoints])
+  }, [lineMode, keys, labels, trendTotal, trendByCat, fewPoints, unit])
 
   const hist = useMemo(() => balanceHistory(txs, accounts, 90), [txs, accounts])
   const balOption = useMemo(
@@ -252,10 +286,10 @@ export function Stats() {
 
       {/* 支出趋势 */}
       <div className="card p-4 mb-3">
-        <div className="flex items-center justify-between mb-2">
+        <div className="flex items-start justify-between mb-2">
           <div>
             <div className="text-sm text-muted">支出趋势</div>
-            <div className="num text-lg font-semibold leading-tight">{fmtYuan(sum.expense, { symbol: true })}</div>
+            <div className="num text-lg font-semibold leading-tight">{fmtYuan(trendSum, { symbol: true })}</div>
           </div>
           <div className="inline-flex rounded-full bg-bg p-0.5">
             {(['total', 'category'] as const).map((m) => (
@@ -270,6 +304,28 @@ export function Stats() {
             ))}
           </div>
         </div>
+
+        <div className="flex items-center gap-2 mb-2">
+          <div className="inline-flex rounded-full bg-bg p-0.5">
+            {(['day', 'month'] as const).map((u) => (
+              <button
+                key={u}
+                type="button"
+                className={`px-3 py-1 rounded-full text-xs ${unit === u ? 'bg-ink text-white' : 'text-muted'}`}
+                onClick={() => setUnit(u)}
+              >
+                {u === 'day' ? '按日' : '按月'}
+              </button>
+            ))}
+          </div>
+          <button type="button" className="chip flex items-center gap-1" style={{ padding: '5px 12px' }} onClick={() => setRangeOpen(true)}>
+            {range.kind === 'custom' ? `${fmtDateZh(tStart, false)} - ${fmtDateZh(tEnd, false)}` : RANGE_LABEL[range.kind]}
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round" className="text-muted">
+              <path d="M6 9l6 6 6-6" />
+            </svg>
+          </button>
+        </div>
+
         {lineMode === 'category' && trendByCat.length === 0 ? (
           <div className="text-sm text-muted py-12 text-center">这段时间没有支出</div>
         ) : (
@@ -278,8 +334,8 @@ export function Stats() {
           </Suspense>
         )}
         <div className="text-[11px] text-muted mt-1">
-          每个点是该月支出总额{lineMode === 'category' ? '，按用途分开' : ''}。
-          {ym === monthOf(today()) ? '本月还没结束，显示的是目前的总计。' : ''}
+          每个点是{unit === 'day' ? '当天' : '当月'}支出总额{lineMode === 'category' ? '，按用途分开' : ''}。
+          {unit === 'month' && monthOf(tEnd) === monthOf(today()) ? '本月还没结束，显示的是目前的总计。' : ''}
         </div>
       </div>
 
@@ -308,6 +364,8 @@ export function Stats() {
         </div>
         <div className="text-xs text-muted mt-1">来自余额校准：负数说明有支出没记，正数说明有收入没记。</div>
       </div>
+
+      <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />
 
       <Sheet open={help} onClose={() => setHelp(false)} title="五大类的含义">
         <div className="flex flex-col gap-3">

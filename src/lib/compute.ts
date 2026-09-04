@@ -1,6 +1,6 @@
 // 所有余额与统计的纯函数。不依赖任何其他模块（date.ts 除外），方便单测。
 import type { Account, Category, Transaction, TxType } from '../types'
-import { addDays, lastMonths, monthOf, monthRange, today } from './date'
+import { addDays, lastMonths, monthOf, monthRange, shiftMonth, today } from './date'
 
 /** 收支统计只看这两种类型；transfer / adjust 永远不进收支 */
 export function isFlow(t: Transaction): t is Transaction & { type: 'expense' | 'income' } {
@@ -95,15 +95,16 @@ export function byCategory(
     const a = ensure(parent)
     a.amount += t.amount
     a.count += 1
-    if (c.id !== parent.id) {
-      let ch = a.children.find((x) => x.id === c.id)
-      if (!ch) {
-        ch = { id: c.id, name: c.name, amount: 0, count: 0 }
-        a.children.push(ch)
-      }
-      ch.amount += t.amount
-      ch.count += 1
+    // 直接记在一级上（没选二级）的，归入「未细分」，否则下钻时会漏掉这部分钱
+    const childId = c.id !== parent.id ? c.id : `${parent.id}:none`
+    const childName = c.id !== parent.id ? c.name : '未细分'
+    let ch = a.children.find((x) => x.id === childId)
+    if (!ch) {
+      ch = { id: childId, name: childName, amount: 0, count: 0 }
+      a.children.push(ch)
     }
+    ch.amount += t.amount
+    ch.count += 1
   }
   const list = [...agg.values()]
   for (const a of list) a.children.sort((x, y) => y.amount - x.amount)
@@ -131,26 +132,61 @@ export function dailyCumulative(txs: Transaction[], ym: string, ref: string = to
   return out
 }
 
-/** 一段月份区间内，按一级分类汇总每月总额；只返回区间内有金额的分类 */
-export function monthlyByCategory(
+export type Unit = 'day' | 'month'
+
+/** 生成时间桶：day 用 YYYY-MM-DD，month 用 YYYY-MM */
+export function bucketKeys(start: string, end: string, unit: Unit): string[] {
+  const out: string[] = []
+  if (unit === 'day') {
+    if (start > end) return [end]
+    for (let d = start; d <= end; d = addDays(d, 1)) out.push(d)
+  } else {
+    const s0 = monthOf(start)
+    const e0 = monthOf(end)
+    if (s0 > e0) return [e0]
+    for (let m = s0; m <= e0; m = shiftMonth(m, 1)) out.push(m)
+  }
+  return out
+}
+
+function keyOf(t: Transaction, unit: Unit): string {
+  return unit === 'day' ? t.date : monthOf(t.date)
+}
+
+/** 每个时间桶的收入或支出合计 */
+export function seriesTotals(txs: Transaction[], keys: string[], unit: Unit, type: 'expense' | 'income' = 'expense'): number[] {
+  const idx = new Map(keys.map((k, i) => [k, i]))
+  const out = new Array(keys.length).fill(0)
+  for (const t of txs) {
+    if (t.type !== type) continue
+    const at = idx.get(keyOf(t, unit))
+    if (at === undefined) continue
+    out[at] += t.amount
+  }
+  return out
+}
+
+/** 每个时间桶、按一级分类拆分的合计；只返回区间内有金额的分类，按总额降序 */
+export function seriesByCategory(
   txs: Transaction[],
   cats: Category[],
-  months: string[],
+  keys: string[],
+  unit: Unit,
   type: 'expense' | 'income' = 'expense',
 ): { id: string; name: string; total: number; data: number[] }[] {
   const byId = new Map(cats.map((c) => [c.id, c]))
-  const idx = new Map(months.map((m, i) => [m, i]))
-  const acc = new Map<string, { name: string; sort: number; data: number[]; total: number }>()
+  const idx = new Map(keys.map((k, i) => [k, i]))
+  const acc = new Map<string, { name: string; data: number[]; total: number }>()
   for (const t of txs) {
     if (t.type !== type || !t.category_id) continue
-    const at = idx.get(monthOf(t.date))
+    const at = idx.get(keyOf(t, unit))
     if (at === undefined) continue
     const c = byId.get(t.category_id)
     if (!c) continue
     const root = c.parent_id ? byId.get(c.parent_id) ?? c : c
     let e = acc.get(root.id)
     if (!e) {
-      e = { name: root.name, sort: root.sort, data: new Array(months.length).fill(0), total: 0 }
+      e = { name: root.name, data: new Array(keys.length).fill(0), total: 0 }
       acc.set(root.id, e)
     }
     e.data[at] += t.amount
@@ -159,6 +195,13 @@ export function monthlyByCategory(
   return [...acc.entries()]
     .map(([id, e]) => ({ id, name: e.name, total: e.total, data: e.data }))
     .sort((a, b) => b.total - a.total)
+}
+
+/** 最早一笔收支的日期，没有记录时返回今天 */
+export function firstFlowDate(txs: Transaction[], ref: string = today()): string {
+  let min: string | null = null
+  for (const t of txs) if (isFlow(t) && (!min || t.date < min)) min = t.date
+  return min ?? ref
 }
 
 /** 每个月的收入/支出合计，供月份选择器显示 */
