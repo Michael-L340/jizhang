@@ -17,7 +17,10 @@ export default defineConfig({
     tailwindcss(),
     VitePWA({
       registerType: 'prompt',
-      includeAssets: ['favicon.ico', 'apple-touch-icon-180x180.png'],
+      // ★ 图标文件名带 -v2：图标不像 JS 那样自动带哈希，名字不变的话 Safari 会一直用缓存里那张，
+      // 连「从主屏删掉再重新添加」都救不回来（实测：换成暖色图标后主屏还是蓝的）。
+      // 以后再换图标，把后缀 +1，别原地覆盖。
+      includeAssets: ['favicon.ico', 'apple-touch-icon-180x180-v2.png'],
       manifest: {
         id: base,
         name: '记账',
@@ -31,10 +34,10 @@ export default defineConfig({
         background_color: '#faf7f2',
         theme_color: '#faf7f2',
         icons: [
-          { src: 'pwa-64x64.png', sizes: '64x64', type: 'image/png' },
-          { src: 'pwa-192x192.png', sizes: '192x192', type: 'image/png' },
-          { src: 'pwa-512x512.png', sizes: '512x512', type: 'image/png' },
-          { src: 'maskable-icon-512x512.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+          { src: 'pwa-64x64-v2.png', sizes: '64x64', type: 'image/png' },
+          { src: 'pwa-192x192-v2.png', sizes: '192x192', type: 'image/png' },
+          { src: 'pwa-512x512-v2.png', sizes: '512x512', type: 'image/png' },
+          { src: 'maskable-icon-512x512-v2.png', sizes: '512x512', type: 'image/png', purpose: 'maskable' },
         ],
       },
       workbox: {
