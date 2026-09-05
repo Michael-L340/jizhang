@@ -330,11 +330,12 @@ export function Entry() {
               {neg ? '−' : '+'}
             </button>
           ) : null}
-          <span className={`num text-4xl font-semibold ${amountColor}`}>
+          {/* 没输入时整个数字是灰的（占位），一输入就变成这一类型的颜色。
+              原来是「0 用类型色 + .00 用灰色」，看起来像一个数字被涂了两种颜色。 */}
+          <span className={`num text-4xl font-semibold ${amount === '' ? 'text-muted' : amountColor}`}>
             <span className="text-2xl mr-1">¥</span>
             {neg ? '-' : ''}
-            {amount || '0'}
-            {amount === '' ? <span className="text-muted">.00</span> : null}
+            {amount || '0.00'}
           </span>
         </div>
 
