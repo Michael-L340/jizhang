@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { applyTx, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthSummary, monthTotals, monthlySeries, pickCategoryId, recentChildOrder, seriesByCategory, seriesTotals, sortTxs, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { applyTx, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -241,14 +241,42 @@ describe('balanceSeries', () => {
   })
 })
 
-describe('recentChildOrder', () => {
-  it('puts most recently used first, unused by sort', () => {
-    const txs = [
-      tx({ type: 'expense', amount: 1, account_id: 'wx', category_id: 'dinner', date: '2026-09-01' }),
-      tx({ type: 'expense', amount: 1, account_id: 'wx', category_id: 'lunch', date: '2026-08-01' }),
-    ]
-    expect(recentChildOrder(txs, cats, 'food').map((c) => c.name)).toEqual(['晚餐', '午餐'])
-    expect(recentChildOrder([], cats, 'food').map((c) => c.name)).toEqual(['午餐', '晚餐'])
+describe('二级分类的排序：按用得多少，不是按最近用过谁', () => {
+  const mk = (cat: string, n: number, day = '2026-09-01') =>
+    Array.from({ length: n }, () => tx({ type: 'expense', amount: 100, account_id: 'wx', category_id: cat, date: day }))
+
+  it('用得多的排前面', () => {
+    const rows = [...mk('lunch', 5), ...mk('dinner', 2)]
+    expect(childOrderByUse(rows, cats, 'food').map((c) => c.name)).toEqual(['午餐', '晚餐'])
+  })
+
+  it('偶尔用一次不常用的，不会把它顶到第一——这正是用户反馈的那个问题', () => {
+    // 午餐用了 5 次，晚餐用了 1 次但就在刚才
+    const rows = [...mk('lunch', 5, '2026-09-01'), ...mk('dinner', 1, '2026-09-05')]
+    expect(childOrderByUse(rows, cats, 'food').map((c) => c.name)).toEqual(['午餐', '晚餐'])
+  })
+
+  it('用得一样多时，最近用过的排前面', () => {
+    const rows = [...mk('lunch', 2, '2026-09-01'), ...mk('dinner', 2, '2026-09-05')]
+    expect(childOrderByUse(rows, cats, 'food').map((c) => c.name)).toEqual(['晚餐', '午餐'])
+  })
+
+  it('一次都没用过的，按分类管理页里的原有顺序', () => {
+    expect(childOrderByUse([], cats, 'food').map((c) => c.name)).toEqual(['午餐', '晚餐'])
+  })
+
+  it('用过的一律排在没用过的前面', () => {
+    expect(childOrderByUse(mk('dinner', 1), cats, 'food').map((c) => c.name)).toEqual(['晚餐', '午餐'])
+  })
+
+  it('归档的二级不出现在记账页', () => {
+    const withArchived = [...cats, { id: 'gone', kind: 'expense' as const, parent_id: 'food', name: '已归档', icon: null, sort: 0, is_archived: true, note: null }]
+    expect(childOrderByUse(mk('gone', 99), withArchived, 'food').map((c) => c.name)).not.toContain('已归档')
+  })
+
+  it('别的大类下的记录不影响这个大类的排序', () => {
+    const rows = [...mk('game', 99), ...mk('dinner', 1)]
+    expect(childOrderByUse(rows, cats, 'food').map((c) => c.name)).toEqual(['晚餐', '午餐'])
   })
 })
 

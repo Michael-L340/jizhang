@@ -298,21 +298,40 @@ export function balanceSeries(
 }
 
 /** 某个一级分类下的二级，按最近使用倒序，从未用过的按 sort */
-export function recentChildOrder(txs: Transaction[], cats: Category[], parentId: string): Category[] {
+/**
+ * 某个一级分类下的二级，按**用得多少**排，不是按最近用过谁。
+ *
+ * 原来按最近使用排，用户的反馈是「上一次用了一个不常用的，这一次那个就排第一」——
+ * 偶尔记一笔夜宵，第二天早餐就被挤到后面去了，每次都要重新找。
+ * 按次数排就稳定：一笔只让次数 +1，蹿不到用了几十次的前面。
+ *
+ * 三级排序，都能一句话说清：
+ *   1. 用得多的在前
+ *   2. 用得一样多的，最近用过的在前
+ *   3. 一次都没用过的，按分类管理页里的原有顺序
+ *
+ * 注意不看日期只看条数：补记一笔上个月的账，和今天记一笔，对顺序的影响是一样的。
+ */
+export function childOrderByUse(txs: Transaction[], cats: Category[], parentId: string): Category[] {
   const children = cats.filter((c) => c.parent_id === parentId && !c.is_archived)
+  const uses = new Map<string, number>()
   const lastUse = new Map<string, string>()
   for (const t of txs) {
     if (!t.category_id) continue
-    const prev = lastUse.get(t.category_id)
+    uses.set(t.category_id, (uses.get(t.category_id) ?? 0) + 1)
     const key = `${t.date}T${t.created_at}`
+    const prev = lastUse.get(t.category_id)
     if (!prev || key > prev) lastUse.set(t.category_id, key)
   }
   return children.sort((a, b) => {
+    const na = uses.get(a.id) ?? 0
+    const nb = uses.get(b.id) ?? 0
+    if (na !== nb) return nb - na
+    // 走到这里两边次数相同。次数相同就意味着「都用过」或「都没用过」，
+    // 所以不必再判断「一个用过一个没用过」——那种情况上面一行已经分出胜负了。
     const ua = lastUse.get(a.id)
     const ub = lastUse.get(b.id)
-    if (ua && ub) return ua < ub ? 1 : -1
-    if (ua) return -1
-    if (ub) return 1
+    if (ua && ub && ua !== ub) return ua < ub ? 1 : -1
     return a.sort - b.sort
   })
 }

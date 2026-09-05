@@ -5,7 +5,7 @@ import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { DatePicker } from '../components/DatePicker'
 import { Keypad } from '../components/Keypad'
-import { pickCategoryId, recentChildOrder } from '../lib/compute'
+import { childOrderByUse, pickCategoryId } from '../lib/compute'
 import { fmtDateRel, nowIso, today } from '../lib/date'
 import { loadLocal, saveLocal, useOnline } from '../lib/hooks'
 import { newId } from '../lib/id'
@@ -111,7 +111,7 @@ export function Entry() {
   }, [editing, cats])
 
   const parents = useMemo(() => cats.filter((c) => c.kind === 'expense' && !c.parent_id && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
-  const children = useMemo(() => (parentId ? recentChildOrder(txs, cats, parentId) : []), [txs, cats, parentId])
+  const children = useMemo(() => (parentId ? childOrderByUse(txs, cats, parentId) : []), [txs, cats, parentId])
   const incomeCats = useMemo(() => cats.filter((c) => c.kind === 'income' && !c.parent_id && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
 
   // 默认值兜底：账户 / 大类 / 二级 没有记忆时取第一个。
@@ -170,7 +170,7 @@ export function Entry() {
     setParentId(id)
     setAdding(false)
     const remembered = mem.childByParent[id]
-    const kids = recentChildOrder(txs, cats, id)
+    const kids = childOrderByUse(txs, cats, id)
     setChildId(remembered && kids.some((c) => c.id === remembered) ? remembered : kids[0]?.id ?? null)
   }
 
