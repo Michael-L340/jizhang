@@ -1,22 +1,19 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
-  <defs>
-    <linearGradient id="g" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#3d8bff"/>
-      <stop offset="1" stop-color="#1f4fd8"/>
-    </linearGradient>
-  </defs>
-  <rect width="512" height="512" rx="118" fill="url(#g)"/>
+  <!-- 2026-09-05 从蓝色渐变换成奶底焦糖账本，配合 App 的暖色主题。
+       浅底深图形：底色和 index.css 里那个底色变量同源，点进 App 没有色差；
+       深浅两种壁纸上都能立住（深底方案在深色壁纸上会糊成一团，试过了）。 -->
+  <rect width="512" height="512" rx="118" fill="#f7f0e4"/>
   <!-- 账本 -->
-  <rect x="126" y="112" width="260" height="288" rx="26" fill="#fff"/>
-  <rect x="126" y="112" width="46" height="288" rx="26" fill="#dbe7ff"/>
-  <circle cx="149" cy="176" r="9" fill="#9fb9ee"/>
-  <circle cx="149" cy="256" r="9" fill="#9fb9ee"/>
-  <circle cx="149" cy="336" r="9" fill="#9fb9ee"/>
+  <rect x="126" y="112" width="260" height="288" rx="26" fill="#c98b4b"/>
+  <rect x="126" y="112" width="46" height="288" rx="26" fill="#a86c33"/>
+  <circle cx="149" cy="176" r="9" fill="#f2ddc0"/>
+  <circle cx="149" cy="256" r="9" fill="#f2ddc0"/>
+  <circle cx="149" cy="336" r="9" fill="#f2ddc0"/>
   <!-- 金额条 -->
-  <rect x="206" y="164" width="140" height="20" rx="10" fill="#c9d9f7"/>
-  <rect x="206" y="206" width="96" height="20" rx="10" fill="#e0e9fb"/>
+  <rect x="206" y="164" width="140" height="20" rx="10" fill="#e0b078"/>
+  <rect x="206" y="206" width="96" height="20" rx="10" fill="#d9a469"/>
   <!-- ¥ -->
-  <g fill="none" stroke="#1f4fd8" stroke-width="24" stroke-linecap="round">
+  <g fill="none" stroke="#fffdf9" stroke-width="24" stroke-linecap="round">
     <path d="M232 264 L276 312 L320 264"/>
     <path d="M276 312 L276 366"/>
     <path d="M240 322 H312"/>
