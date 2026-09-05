@@ -18,6 +18,7 @@ const api = vi.hoisted(() => ({
   updateAccount: vi.fn(),
   importAll: vi.fn(),
   wipeAll: vi.fn(),
+  fetchBackupStatus: vi.fn(),
   signIn: vi.fn(),
   changePassword: vi.fn(),
   signOut: vi.fn(),
@@ -103,6 +104,7 @@ beforeEach(async () => {
   api.onAuthChange.mockReturnValue(() => {})
   api.hasSession.mockResolvedValue(false)
   api.fetchAll.mockResolvedValue(snap())
+  api.fetchBackupStatus.mockResolvedValue(null)
 
   // 每个用例拿一份全新的 store 模块：pendingTx / persistTimer 都是模块级单例
   vi.resetModules()
@@ -691,5 +693,62 @@ describe('新增分类', () => {
     expect((await st().addCategory('expense', null, '午餐'))?.id).toBe('c9')
     expect(st().categories[0].is_archived).toBe(false)
     expect(st().toast?.msg).toContain('已经恢复')
+  })
+})
+
+
+// ══════════════════════════════════════════════════════════════
+// 每日自动备份的状态（另一个私有仓库跑完写进 user_metadata）
+// ══════════════════════════════════════════════════════════════
+describe('loadBackupStatus', () => {
+  const good = { at: '2026-09-04T17:37:00.000Z', transactions: 1234 }
+
+  it('读到就放进 store', async () => {
+    api.fetchBackupStatus.mockResolvedValueOnce(good)
+    await st().loadBackupStatus()
+    expect(st().backup).toEqual(good)
+    expect(st().backupFailed).toBe(false)
+  })
+
+  it('读失败要留痕：「读不到」和「从来没备份过」显示的话完全不同', async () => {
+    // 两种情况 api 都返回 null。不记这一笔的话，断网时设置页会说「还没有过自动备份」，
+    // 而备份其实每天都在跑——用户会跑去重配一遍
+    api.fetchBackupStatus.mockImplementationOnce((onFail?: (e: unknown) => void) => {
+      onFail?.(new Error('Failed to fetch'))
+      return Promise.resolve(null)
+    })
+    await st().loadBackupStatus()
+    expect(st().backup).toBeNull()
+    expect(st().backupFailed).toBe(true)
+  })
+
+  it('「没备份过」不算失败', async () => {
+    store.useStore.setState({ backupFailed: true })
+    api.fetchBackupStatus.mockResolvedValueOnce(null)
+    await st().loadBackupStatus()
+    expect(st().backupFailed).toBe(false)
+  })
+
+  it('不碰同步那套时序：不发 fetchAll、不动 syncing / lastSync', async () => {
+    // 故意不走 refresh() 的 fetchSeq / 在途补丁机制。混进去只会让那套本来就难的
+    // 时序更难，而它连账本都不改
+    api.fetchBackupStatus.mockResolvedValueOnce(good)
+    const before = { syncing: st().syncing, lastSync: st().lastSync }
+    await st().loadBackupStatus()
+    expect(api.fetchAll).not.toHaveBeenCalled()
+    expect(st().syncing).toBe(before.syncing)
+    expect(st().lastSync).toBe(before.lastSync)
+  })
+
+  it('同步（refresh）不会顺手去读备份状态', async () => {
+    await st().refresh()
+    expect(api.fetchBackupStatus).not.toHaveBeenCalled()
+  })
+
+  it('退出登录要清掉，否则换账号后显示的是上一个账号的备份时间', async () => {
+    store.useStore.setState({ backup: good, backupFailed: true })
+    await st().signOut()
+    expect(st().backup).toBeNull()
+    expect(st().backupFailed).toBe(false)
   })
 })

@@ -53,5 +53,8 @@ export default defineConfig({
     watch: { usePolling: true, interval: 300 },
   },
   build: { chunkSizeWarningLimit: 1500 },
-  test: { environment: 'node', include: ['src/**/*.test.ts'] },
+  // TZ=UTC 是故意的：开发机在 +08，和北京时间同一个偏移，
+  // 「忘了写 timeZone: 'Asia/Shanghai'」这类 bug 在本机跑测试时会全绿，到不了任何人手上才发作。
+  // 把测试机拧到 UTC，日期/时间的用例才真的在验时区。
+  test: { environment: 'node', include: ['src/**/*.test.ts'], env: { TZ: 'UTC' } },
 })

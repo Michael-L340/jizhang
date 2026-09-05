@@ -85,3 +85,11 @@ export function fmtIsoZh(iso: string): string {
   })
   return f.format(d)
 }
+
+/** ISO 时间 → 北京时间的 'HH:mm'。hourCycle 写死 h23，否则零点会变成「24:00」 */
+export function fmtIsoTimeZh(iso: string): string {
+  const f = new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+  })
+  return f.format(new Date(iso))
+}

@@ -1,6 +1,7 @@
 // ★ 全项目唯一接触 Supabase 的文件。换数据库只改这里。
 // 对外只暴露业务函数；金额在这里完成 分 ↔ numeric 的转换。
 import type { Account, Category, CatKind, Snapshot, Transaction, TxType } from '../types'
+import type { BackupStatus } from './backup'
 import { centsFromDb, centsToDb } from './money'
 import { supabase } from './supabase'
 
@@ -223,6 +224,41 @@ export async function changePassword(newPassword: string): Promise<void> {
 
 export async function signOut(): Promise<void> {
   await supabase.auth.signOut()
+}
+
+/**
+ * 读每日自动备份的状态。备份脚本（另一个私有仓库）推送成功后，用同一个账号把
+ * `{ at, transactions, accounts, categories }` 写进 Supabase Auth 的 user_metadata.backup。
+ *
+ * ★ 必须用 `auth.getUser()`，不能用 `auth.getSession()`。
+ *   getSession() 读的是本机存着的那份 JWT，metadata 是**签发那一刻**烤进去的；
+ *   备份脚本在服务端改了 user_metadata 之后，本机这份要等 token 刷新（默认一小时，
+ *   而且 App 长时间不打开根本不会刷）才会变。用 getSession() 的话，页面上会长期显示
+ *   昨天甚至上周的备份时间——恰恰是「备份停了」时最不能骗人的那个数字。
+ *   getUser() 走一次网络问服务端要最新的 user，慢一点，但一天只调一次。
+ *
+ * 读不到（网络不通、登录过期）返回 null 并把错误交给 onFail：页面不该因为这个崩，
+ * 但「读不到状态」和「从来没备份过」要显示两句完全不同的话，所以失败得留个痕。
+ */
+export async function fetchBackupStatus(onFail?: (e: unknown) => void): Promise<BackupStatus | null> {
+  try {
+    const { data, error } = await supabase.auth.getUser()
+    if (error) {
+      onFail?.(error)
+      return null
+    }
+    const raw = (data?.user?.user_metadata as { backup?: unknown } | null | undefined)?.backup
+    if (!raw || typeof raw !== 'object') return null
+    const { at, transactions } = raw as { at?: unknown; transactions?: unknown }
+    // 字段不合法就当没有：宁可显示「还没有过自动备份」，也不能把 NaN 或者
+    // 「Invalid Date」摆到设置页上，那会让人以为备份坏了而去乱操作。
+    if (typeof at !== 'string' || Number.isNaN(Date.parse(at))) return null
+    if (typeof transactions !== 'number' || !Number.isFinite(transactions) || transactions < 0) return null
+    return { at, transactions }
+  } catch (e) {
+    onFail?.(e)
+    return null
+  }
 }
 
 export async function hasSession(): Promise<boolean> {

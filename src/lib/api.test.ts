@@ -18,7 +18,21 @@ interface Call {
 const h = vi.hoisted(() => {
   const calls: Call[] = []
   const results: { data?: unknown; error?: unknown }[] = []
+  // auth 这边单独记：备份状态必须走 getUser（联网拿最新的 user），
+  // 走 getSession（读本机旧 JWT）会长期显示过期的备份时间
+  const auth = { calls: [] as string[], user: null as unknown, error: null as unknown, throws: null as unknown }
   const client = {
+    auth: {
+      async getUser() {
+        auth.calls.push('getUser')
+        if (auth.throws) throw auth.throws
+        return { data: { user: auth.user }, error: auth.error }
+      },
+      async getSession() {
+        auth.calls.push('getSession')
+        return { data: { session: { user: auth.user } }, error: null }
+      },
+    },
     from(table: string) {
       const rec: Call = { table, op: '', filters: [] }
       const b = {
@@ -65,11 +79,11 @@ const h = vi.hoisted(() => {
       return b
     },
   }
-  return { calls, results, client }
+  return { calls, results, client, auth }
 })
 vi.mock('./supabase', () => ({ supabase: h.client, configured: true }))
 
-const { fetchAll, friendlyError, importAll, wipeAll } = await import('./api')
+const { fetchAll, fetchBackupStatus, friendlyError, importAll, wipeAll } = await import('./api')
 
 const shape = () => h.calls.map((c) => `${c.table}:${c.op}${c.filters.length ? ':' + c.filters.join('+') : ''}`)
 
@@ -91,6 +105,64 @@ function tx(over: Partial<Transaction> = {}): Transaction {
 beforeEach(() => {
   h.calls.length = 0
   h.results.length = 0
+  h.auth.calls.length = 0
+  h.auth.user = null
+  h.auth.error = null
+  h.auth.throws = null
+})
+
+/** 造一个「服务端返回的 user」，user_metadata.backup 由备份脚本写 */
+function userWithBackup(backup: unknown): unknown {
+  return { id: 'u1', user_metadata: { backup } }
+}
+
+describe('fetchBackupStatus', () => {
+  const good = { at: '2026-09-04T17:37:00.000Z', transactions: 1234, accounts: 4, categories: 30 }
+
+  it('必须走 getUser（联网拿最新 metadata），绝不能用 getSession', async () => {
+    // getSession 读的是本机存着的那份 JWT，metadata 是签发那一刻烤进去的。
+    // 备份脚本在服务端改了 user_metadata，本机这份要等 token 刷新才变——
+    // 用 getSession 的话页面会长期显示昨天甚至上周的备份时间，
+    // 恰恰在「备份停了」的时候骗人说「正常」
+    h.auth.user = userWithBackup(good)
+    await fetchBackupStatus()
+    expect(h.auth.calls).toEqual(['getUser'])
+    expect(h.auth.calls).not.toContain('getSession')
+  })
+
+  it('读到就只取 at 和 transactions', async () => {
+    h.auth.user = userWithBackup(good)
+    expect(await fetchBackupStatus()).toEqual({ at: '2026-09-04T17:37:00.000Z', transactions: 1234 })
+  })
+
+  it('从来没备份过（没有 backup 字段）返回 null，不算失败', async () => {
+    const onFail = vi.fn()
+    h.auth.user = { id: 'u1', user_metadata: {} }
+    expect(await fetchBackupStatus(onFail)).toBeNull()
+    expect(onFail).not.toHaveBeenCalled()
+  })
+
+  it('字段不合法一律当没有，不能把 NaN 或 Invalid Date 摆到设置页上', async () => {
+    for (const bad of [{ at: '不是时间', transactions: 1 }, { at: '2026-09-04T17:37:00.000Z', transactions: '1234' }, { at: 123, transactions: 1 }, { at: '2026-09-04T17:37:00.000Z' }, { at: '2026-09-04T17:37:00.000Z', transactions: -1 }, 'backup', 42]) {
+      h.auth.user = userWithBackup(bad)
+      expect(await fetchBackupStatus()).toBeNull()
+    }
+  })
+
+  it('读失败返回 null 但要把错误交出去——「读不到」和「没备份过」得显示两句话', async () => {
+    const onFail = vi.fn()
+    h.auth.error = { message: 'Failed to fetch' }
+    expect(await fetchBackupStatus(onFail)).toBeNull()
+    expect(onFail).toHaveBeenCalledTimes(1)
+  })
+
+  it('抛异常也不许扔到页面上', async () => {
+    // 设置页只是想显示一行字，为这个白屏（ErrorBoundary）完全不值
+    const onFail = vi.fn()
+    h.auth.throws = new Error('boom')
+    await expect(fetchBackupStatus(onFail)).resolves.toBeNull()
+    expect(onFail).toHaveBeenCalledTimes(1)
+  })
 })
 
 describe('wipeAll 的删除顺序', () => {

@@ -3,6 +3,7 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { Account, CatKind, Category, Snapshot, Transaction } from '../types'
 import * as api from './api'
+import { cacheBytes, type BackupStatus } from './backup'
 import { nowIso } from './date'
 import { applyPending, DELETED, type Pending } from './pending'
 
@@ -26,18 +27,15 @@ function readCache(): Cache | null {
 
 /**
  * 写缓存。只写三张表，不要把整个 store 展开进来（否则 auth/syncing/toast 也会被写）。
- * 返回写入的字符数；浏览器按 UTF-16 计配额，字节数 = 字符数 × 2。
+ * 返回占用的字节数（口径见 backup.ts 的 cacheBytes：UTF-16，键也算）。
  * 抛错交给调用方处理，不再静默吞掉。
  */
 function writeCache(s: Snapshot): number {
   const c: Cache = { accounts: s.accounts, categories: s.categories, transactions: s.transactions, at: nowIso() }
   const json = JSON.stringify(c)
   localStorage.setItem(CACHE_KEY, json)
-  return CACHE_KEY.length + json.length
+  return cacheBytes([[CACHE_KEY, json]])
 }
-
-/** localStorage 的大致上限（5 MiB，按 UTF-16 字节算） */
-export const CACHE_LIMIT_BYTES = 5 * 1024 * 1024
 
 export interface Toast {
   id: number
@@ -60,11 +58,20 @@ export interface State extends Snapshot {
   cacheBytes: number
   /** 缓存写不进去了（配额满或被禁用），离线看到的数据可能是旧的 */
   cacheDegraded: boolean
+  /** 每日自动备份的状态（另一个私有仓库跑的，见 backup.ts）。null = 没备份过或还没读到 */
+  backup: BackupStatus | null
+  /** 备份状态读失败（网络不通 / 登录过期）。和「从来没备份过」要分开显示 */
+  backupFailed: boolean
 
   init: () => Promise<void>
   refresh: () => Promise<void>
   /** 去抖写入本机缓存，从当前 state 现读，不接受外部快照 */
   persist: () => void
+  /**
+   * 读每日自动备份的状态。故意**不**走 refresh() 那套 fetchSeq / 在途补丁的时序机制：
+   * 它不改账本、没有并发写，一天看一次就够，由设置页挂载时调用。
+   */
+  loadBackupStatus: () => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
   signOut: () => Promise<void>
 
@@ -189,13 +196,15 @@ export const useStore = create<State>((set, get) => ({
   toast: null,
   cacheBytes: 0,
   cacheDegraded: false,
+  backup: null,
+  backupFailed: false,
 
   async init() {
     const cache = readCache()
     if (cache) {
       set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, lastSync: cache.at })
       try {
-        set({ cacheBytes: (CACHE_KEY.length + (localStorage.getItem(CACHE_KEY)?.length ?? 0)) * 2 })
+        set({ cacheBytes: cacheBytes([[CACHE_KEY, localStorage.getItem(CACHE_KEY) ?? '']]) })
       } catch {
         /* 读不到就当没有 */
       }
@@ -250,8 +259,7 @@ export const useStore = create<State>((set, get) => ({
       persistTimer = null
       const { accounts, categories, transactions } = get()
       try {
-        const bytes = writeCache({ accounts, categories, transactions }) * 2
-        set({ cacheBytes: bytes, cacheDegraded: false })
+        set({ cacheBytes: writeCache({ accounts, categories, transactions }), cacheDegraded: false })
       } catch {
         // 配额满或被禁用。云端数据不受影响，但离线看到的会是旧的，必须让用户知道
         if (!get().cacheDegraded) {
@@ -260,6 +268,14 @@ export const useStore = create<State>((set, get) => ({
         }
       }
     }, 500)
+  },
+
+  async loadBackupStatus() {
+    let failed = false
+    const b = await api.fetchBackupStatus(() => {
+      failed = true
+    })
+    set({ backup: b, backupFailed: failed })
   },
 
   async signIn(email, password) {
@@ -284,7 +300,7 @@ export const useStore = create<State>((set, get) => ({
     } catch {
       /* ignore */
     }
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncing: false, syncingSince: null })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncing: false, syncingSince: null, backup: null, backupFailed: false })
   },
 
   async addTx(t) {

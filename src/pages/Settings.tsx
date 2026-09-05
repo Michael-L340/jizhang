@@ -1,12 +1,13 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { Sheet } from '../components/Sheet'
 import { changePassword, friendlyError } from '../lib/api'
+import { backupHealth, backupLine, CACHE_LIMIT_BYTES, CACHE_WARN_BYTES } from '../lib/backup'
 import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta, shareOrDownload, STALE_EXPORT_WARNING } from '../lib/csv'
-import { fmtIsoZh, today } from '../lib/date'
+import { fmtIsoZh, nowIso, today } from '../lib/date'
 import { checkForUpdate, hardReload } from '../lib/sw'
-import { CACHE_LIMIT_BYTES, RestoreFailed, useStore } from '../lib/store'
+import { RestoreFailed, useStore } from '../lib/store'
 import type { Snapshot } from '../types'
 
 export function Settings() {
@@ -27,6 +28,17 @@ export function Settings() {
   const loaded = useStore((st) => st.loaded)
   const cacheBytes = useStore((st) => st.cacheBytes)
   const cacheDegraded = useStore((st) => st.cacheDegraded)
+  const backup = useStore((st) => st.backup)
+  const backupFailed = useStore((st) => st.backupFailed)
+  const loadBackupStatus = useStore((st) => st.loadBackupStatus)
+  // 备份状态一天才变一次，进这一页时读一次就够。它走 auth.getUser()，是一次真正的网络请求，
+  // 不要塞进 refresh() 那套时序机制里跟着每次同步跑。
+  // checked 是为了别在那半秒里先显示「还没有过自动备份」——备份好好的，闪一句这个会吓人。
+  const [backupChecked, setBackupChecked] = useState(false)
+  useEffect(() => {
+    void loadBackupStatus().finally(() => setBackupChecked(true))
+  }, [loadBackupStatus])
+  const health = backupHealth(backup?.at ?? null, nowIso())
   /** 这次导出的东西信不信得过：本次会话成功同步过、且最近一次没失败 */
   const trustworthy = exportTrustworthy({ loaded, syncFailed })
   const snapshot = useMemo(() => ({ accounts, categories, transactions }), [accounts, categories, transactions])
@@ -209,6 +221,21 @@ export function Settings() {
         />
         <div className="py-3 border-b border-line last:border-0">
           <div className="flex items-center justify-between text-sm">
+            <span>每天自动备份</span>
+            <span className={`text-xs ${!backupChecked || backupFailed || health === 'none' ? 'text-muted' : health === 'stale' ? 'text-adjust' : 'text-income'}`}>
+              {!backupChecked ? '读取中…' : backupFailed ? '读不到' : health === 'ok' ? '正常' : health === 'stale' ? '好像停了' : '未启用'}
+            </span>
+          </div>
+          <div className={`text-xs mt-1.5 ${backupChecked && !backupFailed && health === 'stale' ? 'text-adjust' : 'text-muted'}`}>
+            {!backupChecked
+              ? '正在读取备份状态…'
+              : backupFailed
+                ? '读不到备份状态：网络不通或登录过期，先点上面的「立即同步」试试。'
+                : backupLine(backup, nowIso())}
+          </div>
+        </div>
+        <div className="py-3 border-b border-line last:border-0">
+          <div className="flex items-center justify-between text-sm">
             <span>本机缓存</span>
             <span className="num text-muted">
               {fmtBytes(cacheBytes)} / {fmtBytes(CACHE_LIMIT_BYTES)}
@@ -219,15 +246,18 @@ export function Settings() {
               className="h-full rounded-full"
               style={{
                 width: `${Math.min(100, Math.round((cacheBytes / CACHE_LIMIT_BYTES) * 100))}%`,
-                background: cacheDegraded ? 'var(--color-expense)' : cacheBytes / CACHE_LIMIT_BYTES > 0.7 ? 'var(--color-adjust)' : 'var(--color-brand)',
+                background: cacheDegraded ? 'var(--color-expense)' : cacheBytes > CACHE_WARN_BYTES ? 'var(--color-adjust)' : 'var(--color-brand)',
               }}
             />
           </div>
-          <div className={`text-xs mt-1.5 ${cacheDegraded ? 'text-expense' : 'text-muted'}`}>
+          <div className={`text-xs mt-1.5 ${cacheDegraded || cacheBytes > CACHE_WARN_BYTES ? 'text-expense' : 'text-muted'}`}>
             {cacheDegraded
               ? '缓存已满，离线时看到的可能是旧数据。云端数据不受影响，请告诉我处理。'
-              : `${transactions.length} 条记录。缓存是为了打开快和离线可看，写满后会提示。`}
+              : cacheBytes > CACHE_WARN_BYTES
+                ? '缓存快满了，没网时看到的可能是旧账本。云端数据不受影响，请告诉我处理。'
+                : '缓存是为了打开快和离线可看，写满后会提示。'}
           </div>
+          <div className="text-xs text-muted mt-1">共 {transactions.length} 条记录</div>
         </div>
         {trustworthy ? null : (
           <div className="text-xs text-expense leading-relaxed py-2 border-b border-line last:border-0">
@@ -306,7 +336,7 @@ export function Settings() {
         <div className="text-xs text-muted mb-3">
           改完之后其他设备上已登录的状态不受影响，下次重新登录才需要新密码。
           <br />
-          如果已经配了自动备份，改完请告诉我同步更新备份用的密码，否则备份第二天起会失败。
+          改完请同步更新 GitHub 备份仓库里的 BACKUP_PASSWORD，否则第二天起自动备份会失败。
         </div>
         <button type="button" disabled={busy === 'pw'} className="w-full rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-40" onClick={submitPassword}>
           {busy === 'pw' ? '提交中…' : '确认修改'}
