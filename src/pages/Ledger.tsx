@@ -51,6 +51,7 @@ export function Ledger() {
     setParams({}, { replace: true })
   }, [params, setParams])
   const [q, setQ] = useState('')
+  const [searchOpen, setSearchOpen] = useState(false)
   // 搜索是跨月的——要找三个月前那笔窗帘钱，不该先翻到那个月。
   // 所以一旦输入内容，月份就不参与过滤了，顶上的月份选择器也收起来。
   const searching = q.trim() !== ''
@@ -132,23 +133,32 @@ export function Ledger() {
   return (
     <div className="pb-6">
       <div ref={stickyRef} className="sticky top-0 z-10 bg-bg px-4 pt-3 pb-2">
-        <div className="flex items-center gap-2 rounded-xl bg-card border border-line px-3 py-2 mb-2">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
-            <circle cx="11" cy="11" r="7" />
-            <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
-          </svg>
-          <input
-            className="flex-1 min-w-0 bg-transparent outline-none text-sm"
-            placeholder="搜备注、分类、账户、金额"
-            value={q}
-            onChange={(e) => setQ(e.target.value)}
-          />
-          {searching ? (
-            <button type="button" className="text-muted text-lg leading-none px-1" aria-label="清空搜索" onClick={() => setQ('')}>
-              ×
+        {searchOpen ? (
+          <div className="flex items-center gap-2 rounded-xl bg-card border border-line px-3 py-2 mb-2">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="text-muted shrink-0">
+              <circle cx="11" cy="11" r="7" />
+              <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
+            </svg>
+            <input
+              autoFocus
+              className="flex-1 min-w-0 bg-transparent outline-none text-sm"
+              placeholder="搜备注、分类、账户、金额"
+              value={q}
+              onChange={(e) => setQ(e.target.value)}
+            />
+            <button
+              type="button"
+              className="text-muted text-sm px-1"
+              aria-label="关闭搜索"
+              onClick={() => {
+                setQ('')
+                setSearchOpen(false)
+              }}
+            >
+              取消
             </button>
-          ) : null}
-        </div>
+          </div>
+        ) : null}
         {searching ? null : (
         <MonthPicker
           value={ym}
@@ -204,9 +214,19 @@ export function Ledger() {
               </>
             )}
           </span>
-          <button type="button" className={`chip ${filtered ? 'on' : ''}`} style={{ padding: '5px 10px' }} onClick={() => setOpen(true)}>
-            筛选{filtered ? ' ·' : ''}
-          </button>
+          <span className="flex items-center gap-1.5">
+            {searchOpen ? null : (
+              <button type="button" className="chip" style={{ padding: '5px 9px' }} aria-label="搜索" onClick={() => setSearchOpen(true)}>
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2">
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M20 20l-3.5-3.5" strokeLinecap="round" />
+                </svg>
+              </button>
+            )}
+            <button type="button" className={`chip ${filtered ? 'on' : ''}`} style={{ padding: '5px 10px' }} onClick={() => setOpen(true)}>
+              筛选{filtered ? ' ·' : ''}
+            </button>
+          </span>
         </div>
       </div>
 

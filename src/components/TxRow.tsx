@@ -3,6 +3,7 @@ import { AccountIcon } from './AccountIcon'
 import { categoryColor, childShade } from '../lib/palette'
 import { guessIcon } from '../lib/icons'
 import { fmtYuan } from '../lib/money'
+import { enteredLabel } from '../lib/date'
 
 interface Props {
   tx: Transaction
@@ -71,7 +72,12 @@ export function TxRow({ tx, accounts, categories, onClick, showDate }: Props) {
           {tx.note ? ` · ${tx.note}` : ''}
         </span>
       </span>
-      <span className={`num text-[15px] font-medium ${amountClass(tx)}`}>{amountText(tx)}</span>
+      <span className="text-right shrink-0">
+        <span className={`block num text-[15px] font-medium ${amountClass(tx)}`}>{amountText(tx)}</span>
+        {/* created_at 是录入时刻，改一笔不会刷新它（updateTx 显式排除了这一列）。
+            同一天只显示时分，跨天补记的才带上月日。 */}
+        <span className="block num text-[10px] text-muted leading-tight">{enteredLabel(tx.created_at, tx.date)}</span>
+      </span>
     </button>
   )
 }

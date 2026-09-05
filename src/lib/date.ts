@@ -93,3 +93,18 @@ export function fmtIsoTimeZh(iso: string): string {
   })
   return f.format(new Date(iso))
 }
+
+/**
+ * 一笔流水的「录入时间」标签。created_at 是**录入**时刻，不是修改时刻——
+ * `api.ts` 的 updateTx 显式把 created_at 排除在更新字段之外，改一笔不会刷新它。
+ *
+ * 和这笔的日期同一天就只显示时分（日期在分组标题上已经有了），
+ * 不同天才带上月日——「9月1日的账，9月5日才补记」这种情况值得看见。
+ */
+export function enteredLabel(createdAt: string, txDate: string): string {
+  const day = fmtCN.format(new Date(createdAt))
+  const time = fmtIsoTimeZh(createdAt)
+  if (day === txDate) return time
+  const [, m, d] = day.split('-')
+  return `${Number(m)}/${Number(d)} ${time}`
+}

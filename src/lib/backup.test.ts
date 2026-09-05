@@ -4,7 +4,7 @@
 // 或者缓存明明快满了进度条还剩一半。所以口径全部锁在这里。
 import { describe, expect, it } from 'vitest'
 import { backupHealth, backupLine, cacheBytes, CACHE_LIMIT_BYTES, CACHE_WARN_BYTES } from './backup'
-import { fmtIsoZh } from './date'
+import { enteredLabel, fmtIsoZh } from './date'
 
 const H = 3600_000
 
@@ -107,5 +107,23 @@ describe('fmtIsoZh 按北京时间显示', () => {
   })
   it('跨年也对', () => {
     expect(fmtIsoZh('2026-12-31T16:00:00.000Z')).toBe('1/1 00:00')
+  })
+})
+
+// 录入时间标签。created_at 是录入时刻（updateTx 显式不更新这一列），
+// 这几条同时压住「北京时间」和「跨天补记要带月日」两件事。
+describe('enteredLabel', () => {
+  it('同一天只显示时分', () => {
+    expect(enteredLabel('2026-09-05T11:03:00.000Z', '2026-09-05')).toBe('19:03')
+  })
+  it('9月1日的账 9月5日才补记，要带上月日', () => {
+    expect(enteredLabel('2026-09-05T11:03:00.000Z', '2026-09-01')).toBe('9/5 19:03')
+  })
+  it('按北京时间判断是不是同一天：UTC 16:00 已经是北京第二天', () => {
+    expect(enteredLabel('2026-09-04T16:00:00.000Z', '2026-09-05')).toBe('00:00')
+    expect(enteredLabel('2026-09-04T16:00:00.000Z', '2026-09-04')).toBe('9/5 00:00')
+  })
+  it('月日不补零', () => {
+    expect(enteredLabel('2026-01-02T03:00:00.000Z', '2026-01-01')).toBe('1/2 11:00')
   })
 })
