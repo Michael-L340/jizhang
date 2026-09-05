@@ -7,6 +7,7 @@ import { Sheet } from '../components/Sheet'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
+import { gridTopFor, legendRows } from '../lib/chart'
 import { categoryColor, childColors } from '../lib/palette'
 import { usePersistedState } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -30,6 +31,11 @@ export function Stats() {
   const [trendKind, setTrendKind] = usePersistedState<'expense' | 'income'>('jz_stats_trendKind', 'expense')
   const [balMode, setBalMode] = usePersistedState<'total' | 'account'>('jz_stats_balMode', 'total')
   const [help, setHelp] = useState(false)
+
+  // 折线图图例改成换行显示（原来是 type:'scroll'，五个分类会变成「1/2」要翻页）。
+  // ECharts 会自己换行，但不会告诉你换了几行，grid.top 得自己算：留少了线盖住图例，
+  // 留多了上面一片空白。宽度按整页最宽 430 减去页面和卡片的左右内边距估。
+  const chartW = Math.min(typeof window === 'undefined' ? 393 : window.innerWidth, 430) - 64
 
   // 底部「统计」标签被再点一次时退出分类下钻（TabBar 会原地 replace 并换一个 resetAt）。
   // 只退下钻：月份、收支、时间范围都是用户刚挑的，一起清掉反而烦人。
@@ -174,7 +180,8 @@ export function Stats() {
     return {
       ...base,
       color: trendByCat.map((c, i) => categoryColor(c.name, i)),
-      legend: { data: trendByCat.map((c) => c.name), top: 0, type: 'scroll', itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+      grid: { ...base.grid, top: gridTopFor(legendRows(trendByCat.map((c) => c.name), chartW)) },
+      legend: { data: trendByCat.map((c) => c.name), top: 0, width: chartW, itemWidth: 14, itemHeight: 8, itemGap: 10, textStyle: { fontSize: 11 } },
       series: trendByCat.map((c) => ({
         name: c.name,
         type: 'line',
@@ -203,7 +210,7 @@ export function Stats() {
             ? ''
             : [full(ps[0].dataIndex), ...ps.map((p) => `${p.marker}${p.seriesName}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)].join('<br/>'),
       },
-      grid: { left: 4, right: 14, top: balMode === 'total' ? 16 : 34, bottom: 0, containLabel: true },
+      grid: { left: 4, right: 14, top: 16, bottom: 0, containLabel: true },
       xAxis: {
         type: 'category',
         data: labels,
@@ -237,7 +244,8 @@ export function Stats() {
     return {
       ...common,
       color: accounts.map((a) => accountColor(a.name)),
-      legend: { data: accounts.map((a) => a.name), top: 0, type: 'scroll', itemWidth: 14, itemHeight: 8, textStyle: { fontSize: 11 } },
+      grid: { ...common.grid, top: gridTopFor(legendRows(accounts.map((a) => a.name), chartW)) },
+      legend: { data: accounts.map((a) => a.name), top: 0, width: chartW, itemWidth: 14, itemHeight: 8, itemGap: 10, textStyle: { fontSize: 11 } },
       series: accounts.map((a) => ({
         name: a.name,
         type: 'line',
