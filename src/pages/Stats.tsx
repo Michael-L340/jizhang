@@ -1,5 +1,5 @@
-import { lazy, Suspense, useMemo, useState } from 'react'
-import { useNavigate } from 'react-router-dom'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
 import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
@@ -30,6 +30,13 @@ export function Stats() {
   const [trendKind, setTrendKind] = usePersistedState<'expense' | 'income'>('jz_stats_trendKind', 'expense')
   const [balMode, setBalMode] = usePersistedState<'total' | 'account'>('jz_stats_balMode', 'total')
   const [help, setHelp] = useState(false)
+
+  // 底部「统计」标签被再点一次时退出分类下钻（TabBar 会原地 replace 并换一个 resetAt）。
+  // 只退下钻：月份、收支、时间范围都是用户刚挑的，一起清掉反而烦人。
+  const resetAt = (useLocation().state as { resetAt?: number } | null)?.resetAt
+  useEffect(() => {
+    if (resetAt) setDrill(null)
+  }, [resetAt])
 
   const agg = useMemo(() => byCategory(txs, cats, ym, kind), [txs, cats, ym, kind])
   const rootColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
