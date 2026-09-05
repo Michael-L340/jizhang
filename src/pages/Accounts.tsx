@@ -73,7 +73,7 @@ export function Accounts() {
     <div className="px-4 pb-6">
       <div className="flex items-center justify-between pt-4 pb-3">
         <span className="text-2xl font-bold">账户</span>
-        <Link to="/settings" className="text-sm text-brand px-2 py-1">
+        <Link to="/settings" className="text-sm text-brand-ink px-2 py-1">
           设置
         </Link>
       </div>
@@ -135,7 +135,7 @@ export function Accounts() {
             </span>
           </div>
         </div>
-        <button type="button" disabled={busy || delta === null} className="w-full rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-40" onClick={confirm}>
+        <button type="button" disabled={busy || delta === null} className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold disabled:opacity-40" onClick={confirm}>
           {delta === 0 ? '无差异，直接关闭' : '生成校准记录'}
         </button>
       </Sheet>

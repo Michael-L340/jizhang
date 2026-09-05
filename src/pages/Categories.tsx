@@ -67,7 +67,7 @@ export function Categories() {
   return (
     <div className="px-4 pb-8">
       <div className="flex items-center justify-between pt-4 pb-3">
-        <button type="button" className="text-brand text-sm -ml-1 px-1 py-1" onClick={() => nav(-1)}>
+        <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1" onClick={() => nav(-1)}>
           ‹ 设置
         </button>
         <span className="text-lg font-bold">分类管理</span>
@@ -164,7 +164,7 @@ export function Categories() {
                           ＋ 新增
                         </button>
                       </div>
-                      <div className="flex gap-4 mt-3 text-xs text-brand">
+                      <div className="flex gap-4 mt-3 text-xs text-brand-ink">
                         <button type="button" onClick={() => rename(p)}>
                           改名
                         </button>
@@ -184,7 +184,7 @@ export function Categories() {
         })}
 
         {kind === 'income' ? (
-          <button type="button" className="w-full px-4 py-3 border-t border-line text-left text-sm text-brand" onClick={() => addChild(null)}>
+          <button type="button" className="w-full px-4 py-3 border-t border-line text-left text-sm text-brand-ink" onClick={() => addChild(null)}>
             ＋ 新增收入分类
           </button>
         ) : null}
@@ -288,7 +288,7 @@ export function Categories() {
         {iconFor?.parent_id ? (
           <button
             type="button"
-            className={`w-full mb-2 py-2.5 rounded-xl text-sm ${iconFor.icon ? 'bg-bg' : 'bg-brand-soft ring-2 ring-brand'}`}
+            className={`w-full mb-2 py-2.5 rounded-xl text-sm ${iconFor.icon ? 'bg-bg' : 'bg-brand-soft ring-2 ring-brand-ink'}`}
             onClick={async () => {
               if (iconFor.icon) await updateCategory(iconFor.id, { icon: null })
               setIconFor(null)
@@ -305,7 +305,7 @@ export function Categories() {
                 <button
                   key={e}
                   type="button"
-                  className={`h-11 rounded-xl text-xl ${iconFor?.icon === e ? 'bg-brand-soft ring-2 ring-brand' : 'bg-bg'}`}
+                  className={`h-11 rounded-xl text-xl ${iconFor?.icon === e ? 'bg-brand-soft ring-2 ring-brand-ink' : 'bg-bg'}`}
                   onClick={async () => {
                     if (iconFor) await updateCategory(iconFor.id, { icon: e })
                     setIconFor(null)

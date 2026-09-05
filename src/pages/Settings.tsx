@@ -177,7 +177,7 @@ export function Settings() {
     <div className="px-4 pb-8">
       <div className="flex items-center justify-between pt-4 pb-3">
         <span className="text-2xl font-bold">设置</span>
-        <button type="button" className="text-sm text-brand px-2 py-1" onClick={() => nav(-1)}>
+        <button type="button" className="text-sm text-brand-ink px-2 py-1" onClick={() => nav(-1)}>
           返回
         </button>
       </div>
@@ -247,7 +247,7 @@ export function Settings() {
               className="h-full rounded-full"
               style={{
                 width: `${Math.min(100, Math.round((cacheBytes / CACHE_LIMIT_BYTES) * 100))}%`,
-                background: cacheDegraded ? 'var(--color-expense)' : cacheBytes > CACHE_WARN_BYTES ? 'var(--color-adjust)' : 'var(--color-brand)',
+                background: cacheDegraded ? 'var(--color-expense)' : cacheBytes > CACHE_WARN_BYTES ? 'var(--color-adjust)' : 'var(--color-brand-ink)',
               }}
             />
           </div>
@@ -339,7 +339,7 @@ export function Settings() {
           <br />
           改完在电脑上跑一下 npm run backup:password 把新密码同步给自动备份，否则第二天起备份会失败。
         </div>
-        <button type="button" disabled={busy === 'pw'} className="w-full rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-40" onClick={submitPassword}>
+        <button type="button" disabled={busy === 'pw'} className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold disabled:opacity-40" onClick={submitPassword}>
           {busy === 'pw' ? '提交中…' : '确认修改'}
         </button>
       </Sheet>
@@ -379,7 +379,7 @@ function Row(props: { label: string; action: string; onClick: () => void; danger
   return (
     <div className="flex items-center justify-between py-3 border-b border-line last:border-0">
       <span className="text-sm">{props.label}</span>
-      <button type="button" className={`text-sm ${props.danger ? 'text-expense' : 'text-brand'}`} onClick={props.onClick}>
+      <button type="button" className={`text-sm ${props.danger ? 'text-expense' : 'text-brand-ink'}`} onClick={props.onClick}>
         {props.action}
       </button>
     </div>

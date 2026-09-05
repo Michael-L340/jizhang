@@ -51,7 +51,7 @@ export function Login() {
               required
             />
             {err ? <div className="text-sm text-expense px-1">{err}</div> : null}
-            <button type="submit" disabled={busy} className="rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-50">
+            <button type="submit" disabled={busy} className="rounded-2xl bg-brand text-on-brand py-3 font-semibold disabled:opacity-50">
               {busy ? '登录中…' : '登录'}
             </button>
           </form>

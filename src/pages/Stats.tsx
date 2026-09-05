@@ -291,7 +291,7 @@ export function Stats() {
             ))}
           </div>
           {drilled ? (
-            <button type="button" className="text-sm text-brand px-1" onClick={() => setDrill(null)}>
+            <button type="button" className="text-sm text-brand-ink px-1" onClick={() => setDrill(null)}>
               ‹ 返回
             </button>
           ) : (

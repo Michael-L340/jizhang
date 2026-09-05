@@ -29,7 +29,7 @@ function UpdateBanner() {
   return (
     <button
       type="button"
-      className="w-full bg-brand text-white text-sm py-3 px-4 flex items-center justify-center gap-2 safe-top"
+      className="w-full bg-brand text-on-brand text-sm py-3 px-4 flex items-center justify-center gap-2 safe-top"
       onClick={() => void updateServiceWorker(true)}
     >
       <span>有新版本</span>

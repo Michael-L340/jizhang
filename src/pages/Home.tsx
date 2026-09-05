@@ -113,12 +113,15 @@ export function Home() {
       </div>
 
       <div className="card p-4 mb-3">
-        <div className="flex justify-between items-baseline mb-3">
-          <span className="text-sm text-muted">账户</span>
-          <Link to="/accounts" className="num text-sm font-semibold">
-            合计 {fmtYuan(totalOf(bal), { symbol: true })}
+        <div className="flex justify-between items-baseline">
+          <span className="text-xs text-muted">总资产</span>
+          <Link to="/accounts" className="text-xs text-brand-ink">
+            账户 ›
           </Link>
         </div>
+        {/* 合计原来是右上角一行小字，和「账户」二字一样大，容易滑过去。
+            升成大数字打头，四张明细卡退到下面：先看总数，再看拆分。 */}
+        <div className="num text-3xl font-semibold tracking-tight mb-3">{fmtYuan(totalOf(bal), { symbol: true })}</div>
         <div className="grid grid-cols-2 gap-2">
           {accounts.map((a) => (
             <Link key={a.id} to="/accounts" className="rounded-xl bg-bg px-3 py-2.5 flex items-center gap-2">
@@ -135,7 +138,7 @@ export function Home() {
       <div className="card p-4 mb-3">
         <div className="flex justify-between items-baseline mb-2">
           <span className="text-sm text-muted">本月支出用途</span>
-          <Link to="/stats" className="text-xs text-brand">
+          <Link to="/stats" className="text-xs text-brand-ink">
             统计 ›
           </Link>
         </div>
@@ -165,7 +168,7 @@ export function Home() {
       <div className="card mb-3">
         <div className="flex justify-between items-baseline px-4 pt-4 pb-1">
           <span className="text-sm text-muted">最近流水</span>
-          <Link to="/ledger" className="text-xs text-brand">
+          <Link to="/ledger" className="text-xs text-brand-ink">
             全部 ›
           </Link>
         </div>

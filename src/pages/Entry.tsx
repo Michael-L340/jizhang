@@ -292,7 +292,7 @@ export function Entry() {
   return (
     <div className="flex-1 min-h-0 flex flex-col safe-top">
       <div className="flex items-center justify-between px-2 h-12">
-        <button type="button" className="px-3 py-2 text-brand" onClick={() => nav(-1)}>
+        <button type="button" className="px-3 py-2 text-brand-ink" onClick={() => nav(-1)}>
           {editing ? '返回' : '取消'}
         </button>
         <span className="font-semibold">{editing ? '编辑' : '记一笔'}</span>

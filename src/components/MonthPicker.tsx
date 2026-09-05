@@ -98,7 +98,7 @@ export function MonthPicker({ value, onChange, totals }: Props) {
                 type="button"
                 disabled={future}
                 className={`flex flex-col items-center justify-center gap-0.5 h-[58px] rounded-2xl transition-colors ${
-                  on ? 'bg-brand text-white' : future ? 'text-line' : amt > 0 ? 'bg-brand-soft text-ink' : 'bg-bg text-ink'
+                  on ? 'bg-brand text-on-brand' : future ? 'text-line' : amt > 0 ? 'bg-brand-soft text-ink' : 'bg-bg text-ink'
                 }`}
                 onClick={() => {
                   onChange(ym)

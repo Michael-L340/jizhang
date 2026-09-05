@@ -4,18 +4,26 @@
    Tailwind 默认扫描整个项目，会把文档里提到的类当成真在用而生成出来。 */
 @source not "../docs";
 
+/* 2026-09-05 换成暖色：奶咖底 + 浅焦糖主色（用户在效果图上选的 6 号 + B）。
+   主色浅到白字读不出来了，所以拆成三个：
+     --color-brand      填充色（记账按钮、选中的胶囊、主按钮的底）
+     --color-on-brand   压在填充色上面的字和图标（深棕，不是白）
+     --color-brand-ink  浅色底上的主色文字（链接、选中的标签），比填充色深得多
+   收支的红绿只往暖里挪了一点，语义不动。分类饼图的颜色在 lib/palette.ts，另一套。 */
 @theme {
-  --color-bg: #f6f7f9;
+  --color-bg: #faf7f2;
   --color-card: #ffffff;
-  --color-ink: #16181d;
-  --color-muted: #7a808c;
-  --color-line: #e6e8ec;
-  --color-brand: #2f6fed;
-  --color-brand-soft: #e8f0ff;
-  --color-expense: #e5484d;
-  --color-income: #1f9d55;
-  --color-transfer: #7c5cff;
-  --color-adjust: #b8860b;
+  --color-ink: #33302b;
+  --color-muted: #918a80;
+  --color-line: #ece6dd;
+  --color-brand: #e8b77c;
+  --color-on-brand: #4a3418;
+  --color-brand-ink: #8a6026;
+  --color-brand-soft: #fdf2e4;
+  --color-expense: #c95a4e;
+  --color-income: #4d8a5e;
+  --color-transfer: #8a6bb5;
+  --color-adjust: #b07d1e;
 }
 
 html, body, #root { height: 100%; }

@@ -34,7 +34,7 @@ export function Keypad({ onInput, onSave, saveLabel = '保存', disabled }: Prop
         </button>
         <button
           type="button"
-          className="row-span-3 rounded-xl bg-brand text-white text-lg font-semibold disabled:opacity-40"
+          className="row-span-3 rounded-xl bg-brand text-on-brand text-lg font-semibold disabled:opacity-40"
           disabled={disabled}
           onClick={onSave}
         >

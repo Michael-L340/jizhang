@@ -72,7 +72,7 @@ export function DatePicker({ open, value, onPick, onClose, max }: Props) {
             >
               <span
                 className={`num w-9 h-9 flex items-center justify-center rounded-full text-[15px] ${
-                  on ? 'bg-brand text-white font-semibold' : disabled ? 'text-line' : isToday ? 'text-brand font-semibold' : 'text-ink'
+                  on ? 'bg-brand text-on-brand font-semibold' : disabled ? 'text-line' : isToday ? 'text-brand-ink font-semibold' : 'text-ink'
                 }`}
               >
                 {i + 1}
@@ -85,7 +85,7 @@ export function DatePicker({ open, value, onPick, onClose, max }: Props) {
       <div className="flex gap-2 mt-4">
         <button
           type="button"
-          className={`flex-1 py-2.5 rounded-xl text-sm ${value === todayStr ? 'bg-brand text-white' : 'bg-bg'}`}
+          className={`flex-1 py-2.5 rounded-xl text-sm ${value === todayStr ? 'bg-brand text-on-brand' : 'bg-bg'}`}
           onClick={() => {
             onPick(todayStr)
             onClose()
@@ -95,7 +95,7 @@ export function DatePicker({ open, value, onPick, onClose, max }: Props) {
         </button>
         <button
           type="button"
-          className={`flex-1 py-2.5 rounded-xl text-sm ${value === addDays(todayStr, -1) ? 'bg-brand text-white' : 'bg-bg'}`}
+          className={`flex-1 py-2.5 rounded-xl text-sm ${value === addDays(todayStr, -1) ? 'bg-brand text-on-brand' : 'bg-bg'}`}
           onClick={() => {
             onPick(addDays(todayStr, -1))
             onClose()
