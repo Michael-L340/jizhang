@@ -4,6 +4,7 @@
 // 或者缓存明明快满了进度条还剩一半。所以口径全部锁在这里。
 import { describe, expect, it } from 'vitest'
 import { backupHealth, backupLine, cacheBytes, CACHE_LIMIT_BYTES, CACHE_WARN_BYTES } from './backup'
+import { fmtIsoZh } from './date'
 
 const H = 3600_000
 
@@ -90,5 +91,21 @@ describe('阈值', () => {
     expect(CACHE_LIMIT_BYTES).toBe(5 * 1024 * 1024)
     expect(CACHE_WARN_BYTES).toBe(3.5 * 1024 * 1024)
     expect(CACHE_WARN_BYTES).toBeLessThan(CACHE_LIMIT_BYTES)
+  })
+})
+
+// 设置页「上次同步 X月X日 HH:mm」用的是 fmtIsoZh，它一直没有任何用例护着。
+// 补在这里而不是新建文件：它和 fmtIsoTimeZh 是一对孪生函数，一起改一起坏。
+// 这条只在 TZ=UTC 下才有约束力（见 vite.config.ts）——在东八区的机器上，
+// 就算把 timeZone: 'Asia/Shanghai' 整个删掉也照样是绿的。
+describe('fmtIsoZh 按北京时间显示', () => {
+  it('UTC 16:00 是北京第二天 00:00', () => {
+    expect(fmtIsoZh('2026-09-04T16:00:00.000Z')).toBe('9/5 00:00')
+  })
+  it('UTC 15:59 还是北京同一天的 23:59', () => {
+    expect(fmtIsoZh('2026-09-04T15:59:59.999Z')).toBe('9/4 23:59')
+  })
+  it('跨年也对', () => {
+    expect(fmtIsoZh('2026-12-31T16:00:00.000Z')).toBe('1/1 00:00')
   })
 })

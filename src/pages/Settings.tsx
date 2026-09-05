@@ -34,7 +34,8 @@ export function Settings() {
   // 备份状态一天才变一次，进这一页时读一次就够。它走 auth.getUser()，是一次真正的网络请求，
   // 不要塞进 refresh() 那套时序机制里跟着每次同步跑。
   // checked 是为了别在那半秒里先显示「还没有过自动备份」——备份好好的，闪一句这个会吓人。
-  const [backupChecked, setBackupChecked] = useState(false)
+  // 初值看 store 里有没有现成结果：来回切页面时不该再闪一次「读取中」。
+  const [backupChecked, setBackupChecked] = useState(() => backup !== null || backupFailed)
   useEffect(() => {
     void loadBackupStatus().finally(() => setBackupChecked(true))
   }, [loadBackupStatus])
