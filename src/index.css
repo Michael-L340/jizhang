@@ -4,18 +4,21 @@
    Tailwind 默认扫描整个项目，会把文档里提到的类当成真在用而生成出来。 */
 @source not "../docs";
 
+/* 2026-09-05 从冷灰蓝换成暖色：底色米、卡片暖白、主色焦糖棕。
+   收支的红绿不动——那两个颜色是有含义的，跟着审美走会看错账。
+   分类饼图的颜色由 lib/palette.ts 按名字算出来，不在这里，也没动。 */
 @theme {
-  --color-bg: #f6f7f9;
-  --color-card: #ffffff;
-  --color-ink: #16181d;
-  --color-muted: #7a808c;
-  --color-line: #e6e8ec;
-  --color-brand: #2f6fed;
-  --color-brand-soft: #e8f0ff;
-  --color-expense: #e5484d;
-  --color-income: #1f9d55;
-  --color-transfer: #7c5cff;
-  --color-adjust: #b8860b;
+  --color-bg: #f5f1ea;
+  --color-card: #fffdf9;
+  --color-ink: #2a2420;
+  --color-muted: #8a8178;
+  --color-line: #e9e1d6;
+  --color-brand: #a06a42;
+  --color-brand-soft: #f4e8dc;
+  --color-expense: #cf4a42;
+  --color-income: #3f8b57;
+  --color-transfer: #8a6bb5;
+  --color-adjust: #b07d1e;
 }
 
 html, body, #root { height: 100%; }
