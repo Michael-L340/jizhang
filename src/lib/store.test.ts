@@ -751,4 +751,51 @@ describe('loadBackupStatus', () => {
     expect(st().backup).toBeNull()
     expect(st().backupFailed).toBe(false)
   })
+
+  it('慢的旧请求晚回来，不许把刚读到的「正常」覆盖成「读不到」', async () => {
+    // 设置页每次挂载都发一次。来回切一下页就有两次在飞，网差时先发的可能后回来。
+    // 第一次慢且最后失败、第二次快且成功 —— 没有编号的话用户会看着「正常」跳成
+    // 「读不到备份状态」，而备份其实好好的，他会跑去重配一遍
+    let failFirst!: () => void
+    let endFirst!: () => void
+    api.fetchBackupStatus.mockImplementationOnce(
+      (onFail?: (e: unknown) => void) =>
+        new Promise<null>((res) => {
+          failFirst = () => onFail?.(new Error('Failed to fetch'))
+          endFirst = () => res(null)
+        }),
+    )
+    api.fetchBackupStatus.mockResolvedValueOnce(good)
+
+    const first = st().loadBackupStatus()
+    const second = st().loadBackupStatus()
+    await second
+    expect(st().backup).toEqual(good)
+
+    failFirst()
+    endFirst()
+    await first
+    expect(st().backup).toEqual(good)
+    expect(st().backupFailed).toBe(false)
+  })
+
+  it('退出登录时还在飞的那次回来，不许把备份时间写回来', async () => {
+    // signOut 特意清了 backup（换账号不能看到上一个账号的备份时间），
+    // 但在途的那次回来会把它原样写回去，等于那行清理没发生过
+    let land!: () => void
+    api.fetchBackupStatus.mockImplementationOnce(
+      () =>
+        new Promise((res) => {
+          land = () => res(good)
+        }),
+    )
+    const flying = st().loadBackupStatus()
+    await st().signOut()
+    expect(st().backup).toBeNull()
+
+    land()
+    await flying
+    expect(st().backup).toBeNull()
+    expect(st().backupFailed).toBe(false)
+  })
 })

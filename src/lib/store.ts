@@ -68,8 +68,9 @@ export interface State extends Snapshot {
   /** 去抖写入本机缓存，从当前 state 现读，不接受外部快照 */
   persist: () => void
   /**
-   * 读每日自动备份的状态。故意**不**走 refresh() 那套 fetchSeq / 在途补丁的时序机制：
-   * 它不改账本、没有并发写，一天看一次就够，由设置页挂载时调用。
+   * 读每日自动备份的状态。故意**不**走 refresh() 那套在途补丁 / 超时锁的机制：
+   * 它不改账本，一天看一次就够，由设置页挂载时调用。
+   * 但「只有最后一次的答案算数」这条必须有（backupSeq），设置页来回切就会有两次在飞。
    */
   loadBackupStatus: () => Promise<void>
   signIn: (email: string, password: string) => Promise<void>
@@ -111,6 +112,13 @@ const pendingCat: Pending<Category> = new Map()
 let fetchSeq = 0
 const settledTx = new Map<string, number>()
 const settledCat = new Map<string, number>()
+
+// 备份状态这一路也编号，理由同类但简单得多：只有「最后一次问的答案」算数。
+// 设置页每次挂载都发一次，来回切页就有两次在飞；退出登录也算改朝换代。
+// 不编号有两种翻车：
+//   1. 第一次慢且最后失败、第二次快且成功 —— 慢的那次晚回来，把「正常」覆盖成「读不到」；
+//   2. 在途那次落在 signOut 之后 —— signOut 刚清掉的备份时间又被写回来。
+let backupSeq = 0
 
 /** 快照落地前淘汰已经被这次 GET 覆盖到的补丁。g < my 意味着这次 GET 出门时该写入已经落库 */
 function retirePatches(my: number): void {
@@ -271,10 +279,13 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async loadBackupStatus() {
+    const my = ++backupSeq
     let failed = false
     const b = await api.fetchBackupStatus(() => {
       failed = true
     })
+    // 已被更新的一轮（或一次 signOut）取代，这份旧答案不许落地
+    if (my !== backupSeq) return
     set({ backup: b, backupFailed: failed })
   },
 
@@ -295,6 +306,9 @@ export const useStore = create<State>((set, get) => ({
     pendingCat.clear()
     settledTx.clear()
     settledCat.clear()
+    // 推进号码，让还在飞的那次 loadBackupStatus 回来时自己作废，
+    // 否则下面刚清掉的 backup 会被它写回来
+    backupSeq++
     try {
       localStorage.removeItem(CACHE_KEY)
     } catch {
