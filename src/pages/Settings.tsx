@@ -336,7 +336,7 @@ export function Settings() {
         <div className="text-xs text-muted mb-3">
           改完之后其他设备上已登录的状态不受影响，下次重新登录才需要新密码。
           <br />
-          改完请同步更新 GitHub 备份仓库里的 BACKUP_PASSWORD，否则第二天起自动备份会失败。
+          改完在电脑上跑一下 npm run backup:password 把新密码同步给自动备份，否则第二天起备份会失败。
         </div>
         <button type="button" disabled={busy === 'pw'} className="w-full rounded-2xl bg-brand text-white py-3 font-semibold disabled:opacity-40" onClick={submitPassword}>
           {busy === 'pw' ? '提交中…' : '确认修改'}
