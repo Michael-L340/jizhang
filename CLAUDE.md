@@ -21,7 +21,7 @@
 1. `npm run dev` 本地看效果（手机同 WiFi 访问终端打印的地址）。
 2. `npm run check`（类型检查）和 `npm test`（单测）必须全绿。**测试红了就是改坏了**，不要用「发到手机上看看」代替它。
 3. 一个功能一个 commit。
-4. `npm run deploy` 发布（内含 check + test）。改坏了 `git revert` 回退再 deploy。
+4. `npm run deploy` 发布。它按顺序做：check → test → **版本号第三位自动 +1 并打 tag**（v1.0.1、v1.0.2……可到两位数如 v1.0.12）→ 构建 → 发到 gh-pages → 推 main 和 tag。所以**先 commit 再 deploy**（工作区不干净会被拒），**不要手改 `package.json` 的 version**。改坏了 `git revert` 回退再 deploy，版本号照常 +1。
 
 ## 测试纪律
 - 动了 `lib/store.ts` / `lib/compute.ts` / `lib/pending.ts` 就要补测试。这三个文件的 bug 大多是时序或边界问题，肉眼和手动操作都很难稳定复现。

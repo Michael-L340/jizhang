@@ -88,10 +88,10 @@ docs/logo-sources.md          四个品牌标志的来源与授权
 npm run dev      # 本地开发，--host 已开，手机同 WiFi 可直接访问
 npm run check    # tsc -b 类型检查
 npm test         # vitest
-npm run deploy   # check + test + 构建 + 发布到 gh-pages 分支
+npm run deploy   # check + test + 版本号第三位 +1 并打 tag + 构建 + 发布到 gh-pages + 推 main
 ```
 
-`npm run deploy` 用 `VITE_BASE=/jizhang/` 构建（Pages 子路径），发布后 GitHub CDN 可能缓存几分钟。验证是否上线：比对本地 `dist/assets/index-*.js` 的文件名和线上 `index.html` 引用的是否一致。
+`npm run deploy` 先跑 `npm version patch`：把 `package.json` 的第三位 +1、生成一条 `vX.Y.Z` 提交和同名 tag（要求工作区干净，所以先 commit 再 deploy），再用 `VITE_BASE=/jizhang/` 构建（Pages 子路径），最后把 main 和 tag 一起推到 GitHub。发布后 GitHub CDN 可能缓存几分钟。验证是否上线：比对本地 `dist/assets/index-*.js` 的文件名和线上 `index.html` 引用的是否一致。
 
 数据库改动：新增 `supabase/migrations/000N_*.sql`，**不改旧文件**。执行方式二选一：Supabase 控制台 SQL Editor 粘贴，或用 Management API（需要用户临时生成 `sbp_` 令牌，用完删）。
 
@@ -377,7 +377,7 @@ Supabase 免费项目休眠、登录过期，或另一台设备记了账而本�
 ## 十一、v1.0.0（2026-09-05 截稿）
 
 到这一版为止，「出事有后路、改动有护栏」这两件事都成立了，所以从 0.1.0 提到 1.0.0。
-版本号显示在设置页底部，只在这里手动提；想确认手机上是不是最新版就看它。
+版本号显示在设置页底部。v1.0.0 之后每次 `npm run deploy` 自动把第三位 +1（v1.0.1、v1.0.2……可以到两位数），并打同名 git tag，`git tag` 就是发布历史；想确认手机上是不是最新版就看它。前两位只在大改时手动提。
 
 **v1 包含什么**
 - 记账：五大类支出用途 + 二级分类、收入、四个账户、转账、余额校准

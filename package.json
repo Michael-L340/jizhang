@@ -10,7 +10,7 @@
     "check": "tsc -b",
     "test": "vitest run",
     "test:db": "vitest run --config vitest.db.config.ts",
-    "deploy": "npm run check && npm run test && VITE_BASE=/jizhang/ vite build && touch dist/.nojekyll && gh-pages -d dist --dotfiles -m \"deploy\""
+    "deploy": "npm run check && npm run test && npm version patch -m \"v%s\" && VITE_BASE=/jizhang/ vite build && touch dist/.nojekyll && gh-pages -d dist --dotfiles -m \"deploy\" && git push --follow-tags origin main"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.114.0",
