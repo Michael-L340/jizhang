@@ -43,5 +43,8 @@ bug 修复类固定四段，`git log` 扫一眼就知道该回退到哪一条：
 ```
 功能类保持要点列表即可。
 
+## 备份脚本在另一个仓库，改这几处要同步改它
+`api.ts` 的列常量（`ACC_COLS` / `CAT_COLS` / `TX_COLS`）、或备份文件的格式（`csv.ts` 的 `ExportFile`、`validate.ts` 的校验规则）改了，**私有仓库 `Michael-L340/jizhang-backup` 里的 `backup.mjs` 必须同步改**。不改的现象不是「备份失败」而是更坏的「备份天天在跑，等真要用的时候导不回来」——文件少一列或多一列，`parseImport` 直接整份拒绝。改完顺手在设置页用最新的 `latest.json` 走一次「合并导入」验一下。
+
 ## 密钥
 - `.env.local` 存 Supabase URL 和 anon key（模板见 `env.example`），不入库。anon key 是公开级别的；service_role key 永远不写进任何文件。
