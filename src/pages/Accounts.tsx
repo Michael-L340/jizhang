@@ -100,13 +100,7 @@ export function Accounts() {
               <AccountIcon name={a.name} />
               <span className="flex-1 min-w-0">
                 <span className="block font-medium">{a.name}</span>
-                <span className="block text-xs text-muted">
-                  {(() => {
-                    const m = byAcc.get(a.id)
-                    if (m) return `本月 ${m.count} 笔`
-                    return lc ? `上次校准 ${fmtIsoZh(lc)}` : '点此输入实际余额核对'
-                  })()}
-                </span>
+                <span className="block text-xs text-muted">{lc ? `上次校准 ${fmtIsoZh(lc)}` : '点此输入实际余额核对'}</span>
               </span>
               <span className="text-right">
                 <span className={`block num text-lg font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
