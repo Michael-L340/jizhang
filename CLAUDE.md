@@ -43,8 +43,25 @@ bug 修复类固定四段，`git log` 扫一眼就知道该回退到哪一条：
 ```
 功能类保持要点列表即可。
 
-## 备份脚本在另一个仓库，改这几处要同步改它
-`api.ts` 的列常量（`ACC_COLS` / `CAT_COLS` / `TX_COLS`）、或备份文件的格式（`csv.ts` 的 `ExportFile`、`validate.ts` 的校验规则）改了，**私有仓库 `Michael-L340/jizhang-backup` 里的 `backup.mjs` 必须同步改**。不改的现象不是「备份失败」而是更坏的「备份天天在跑，等真要用的时候导不回来」——文件少一列或多一列，`parseImport` 直接整份拒绝。改完顺手在设置页用最新的 `latest.json` 走一次「合并导入」验一下。
+## 加数据库字段要同时改三处（备份脚本在另一个仓库）
+
+「哪些列要备份」这个约定同时写在三个文件里，其中一个在私有仓库 `Michael-L340/jizhang-backup`：
+
+| 文件 | 里面是什么 |
+|---|---|
+| `src/lib/api.ts` | `ACC_COLS` / `CAT_COLS` / `TX_COLS` |
+| `src/lib/csv.ts` + `src/lib/validate.ts` | 导出格式 `ExportFile`、校验规则 `readAccount` / `readCategory` / `readTransaction` |
+| `jizhang-backup/backup.mjs` | `SELECT_ACC` / `SELECT_CAT` / `SELECT_TX` |
+
+加一列（比如计划中的「微信/支付宝交易单号」）时三处一起改，顺序：先跑 migration → 改 `backup.mjs` → 改 `validate.ts`/`csv.ts`/`api.ts`。
+
+**漏改的后果都是静默的**（2026-09-05 在内存版真 Postgres 上逐条实测，不是推测）：
+
+- 只改数据库，没改 `backup.mjs` → 备份文件里根本没有这一列，恢复后**整列是空的，零报错**。现在有第 5 道闸（`assertColumns`）挡着：数据库冒出脚本不认识的列，当晚备份直接失败并发邮件。**这是唯一一道自动防线，别把它删了。**
+- 改了 `backup.mjs`，没改 `validate.ts` → 文件里有这一列，但校验器是显式构造对象的，多出来的键在发给数据库之前就被丢掉，同样静默。**这一步没有任何自动防护，只有这条规矩。**
+- 曾经以为「列对不上 `parseImport` 会整份拒绝」——**实测不会**。只有「文件里有、数据库里没有」才会报 42703（少跑了一条 migration 才走这条路）。
+
+改完验一遍：让备份跑一次（`gh workflow run backup.yml -R Michael-L340/jizhang-backup`），拿新的 `data/latest.json` 在设置页走一次「整库恢复」，确认新列的值真的回来了。
 
 ## 密钥
 - `.env.local` 存 Supabase URL 和 anon key（模板见 `env.example`），不入库。anon key 是公开级别的；service_role key 永远不写进任何文件。
