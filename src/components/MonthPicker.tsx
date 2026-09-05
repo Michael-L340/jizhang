@@ -106,7 +106,7 @@ export function MonthPicker({ value, onChange, totals }: Props) {
                 }}
               >
                 <span className={`text-[15px] ${on || amt > 0 ? 'font-semibold' : ''}`}>{i + 1} 月</span>
-                <span className={`num text-[11px] leading-none ${on ? 'text-white/80' : 'text-muted'}`}>{amt > 0 ? shortAmount(amt) : future ? '' : '·'}</span>
+                <span className={`num text-[11px] leading-none ${on ? 'text-on-brand/70' : 'text-muted'}`}>{amt > 0 ? shortAmount(amt) : future ? '' : '·'}</span>
               </button>
             )
           })}
