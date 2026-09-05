@@ -1,9 +1,9 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AccountIcon } from '../components/AccountIcon'
+import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { Sheet } from '../components/Sheet'
-import { balances, totalOf } from '../lib/compute'
-import { fmtIsoZh, nowIso, today } from '../lib/date'
+import { balances, totalOf, balanceShares, monthByAccount } from '../lib/compute'
+import { fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
 import { newId } from '../lib/id'
 import { calcDelta, fmtYuan, parseYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -69,6 +69,11 @@ export function Accounts() {
     }
   }
 
+  const ym = monthOf(today())
+  const byAcc = useMemo(() => monthByAccount(txs, ym), [txs, ym])
+  const nameOf = (id: string): string => accounts.find((a) => a.id === id)?.name ?? ''
+  const shares = useMemo(() => balanceShares(bal, accounts.map((a) => a.id)), [bal, accounts])
+
   return (
     <div className="px-4 pb-6">
       <div className="flex items-center justify-between pt-4 pb-3">
@@ -95,13 +100,50 @@ export function Accounts() {
               <AccountIcon name={a.name} />
               <span className="flex-1 min-w-0">
                 <span className="block font-medium">{a.name}</span>
-                <span className="block text-xs text-muted">{lc ? `上次校准 ${fmtIsoZh(lc)}` : '点此输入实际余额核对'}</span>
+                <span className="block text-xs text-muted">
+                  {(() => {
+                    const m = byAcc.get(a.id)
+                    if (m) return `本月 ${m.count} 笔`
+                    return lc ? `上次校准 ${fmtIsoZh(lc)}` : '点此输入实际余额核对'
+                  })()}
+                </span>
               </span>
-              <span className={`num text-lg font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
+              <span className="text-right">
+                <span className={`block num text-lg font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
+                {/* 本月这个账户进出了多少。转账两头都算、校准也算，所以它和余额的变化能对上。 */}
+                {(() => {
+                  const m = byAcc.get(a.id)
+                  if (!m || m.delta === 0) return <span className="block text-[11px] text-muted">本月没动</span>
+                  return (
+                    <span className={`block num text-[11px] ${m.delta < 0 ? 'text-expense' : 'text-income'}`}>
+                      本月 {fmtYuan(m.delta, { sign: true })}
+                    </span>
+                  )
+                })()}
+              </span>
             </button>
           )
         })}
       </div>
+
+      {shares.length ? (
+        <div className="card p-4 mt-3">
+          <div className="text-xs text-muted mb-2">钱放在哪儿</div>
+          <div className="flex h-2.5 rounded-full overflow-hidden bg-line">
+            {shares.map((s) => (
+              <span key={s.id} style={{ width: `${s.ratio * 100}%`, background: accountColor(nameOf(s.id)) }} />
+            ))}
+          </div>
+          <div className="flex flex-wrap gap-x-4 gap-y-1 mt-2.5 text-[11px] text-muted">
+            {shares.map((s) => (
+              <span key={s.id} className="flex items-center gap-1.5">
+                <i className="w-2 h-2 rounded-full" style={{ background: accountColor(nameOf(s.id)) }} />
+                {nameOf(s.id)} {Math.round(s.ratio * 100)}%
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="text-xs text-muted mt-4 leading-relaxed">
         点账户输入实际余额。一致就什么都不记；不一致时，差额会记成一条「余额校准」，出现在流水里但不计入收入支出，随时可以删除或改成一笔正常收支。

@@ -406,3 +406,37 @@ export function pickCategoryId(o: {
   if (has(o.remembered)) return o.remembered
   return o.options[0]?.id ?? null
 }
+
+/**
+ * 每个账户「本月进出多少、几笔」。给账户页每张卡的副标题用。
+ *
+ * 转账两头都算：从中行转到微信，中行是流出、微信是流入，两边都动了这个月的余额。
+ * 校准（adjust）也算——它同样改变了余额，用户看到「本月 -1,271」应该能和余额变化对上。
+ */
+export function monthByAccount(txs: Transaction[], ym: string): Map<string, { delta: number; count: number }> {
+  const out = new Map<string, { delta: number; count: number }>()
+  const add = (id: string | null, delta: number): void => {
+    if (!id) return
+    const cur = out.get(id) ?? { delta: 0, count: 0 }
+    out.set(id, { delta: cur.delta + delta, count: cur.count + 1 })
+  }
+  for (const t of txs) {
+    if (!inMonth(t, ym)) continue
+    if (t.type === 'income') add(t.account_id, t.amount)
+    else if (t.type === 'expense') add(t.account_id, -t.amount)
+    else if (t.type === 'adjust') add(t.account_id, t.amount)
+    else if (t.type === 'transfer') {
+      add(t.account_id, -t.amount)
+      add(t.to_account_id, t.amount)
+    }
+  }
+  return out
+}
+
+/** 各账户占总额的比例，只算正余额的部分（负余额画不进占比条）。合计为 0 时返回空数组。 */
+export function balanceShares(bal: Record<string, number>, ids: string[]): { id: string; ratio: number }[] {
+  const positives = ids.map((id) => ({ id, v: Math.max(0, bal[id] ?? 0) }))
+  const total = positives.reduce((s, x) => s + x.v, 0)
+  if (total <= 0) return []
+  return positives.map(({ id, v }) => ({ id, ratio: v / total }))
+}

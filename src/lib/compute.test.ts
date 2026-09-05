@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { applyTx, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { applyTx, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -726,5 +726,57 @@ describe('分类查不到时的「未分类」兜底', () => {
     expect(byCategory(rows, cats, '2026-09', 'expense').map((a) => a.id)).not.toContain(UNCATEGORIZED_ID)
     const keys = bucketKeys('2026-09-01', '2026-09-30', 'month')
     expect(seriesByCategory(rows, cats, keys, 'month').map((s) => s.id)).not.toContain(UNCATEGORIZED_ID)
+  })
+})
+
+describe('monthByAccount', () => {
+  const A = 'boc'
+  const B = 'wx'
+  const mk = (date: string, type: Transaction['type'], amount: number, account_id: string, to_account_id: string | null = null) =>
+    tx({ date, type, amount, account_id, to_account_id, category_id: type === 'expense' || type === 'income' ? 'lunch' : null })
+  it('收入加、支出减，笔数一起数', () => {
+    const m = monthByAccount(
+      [
+        mk('2026-09-01', 'income', 90000, A),
+        mk('2026-09-02', 'expense', 2540, A),
+        mk('2026-09-03', 'expense', 1800, A),
+      ],
+      '2026-09',
+    )
+    expect(m.get(A)).toEqual({ delta: 90000 - 2540 - 1800, count: 3 })
+  })
+  it('转账两头都算：转出方减、转入方加', () => {
+    const m = monthByAccount([mk('2026-09-02', 'transfer', 5000, A, B)], '2026-09')
+    expect(m.get(A)).toEqual({ delta: -5000, count: 1 })
+    expect(m.get(B)).toEqual({ delta: 5000, count: 1 })
+  })
+  it('校准也算，否则「本月进出」和余额变化对不上', () => {
+    expect(monthByAccount([mk('2026-09-02', 'adjust', -300, A)], '2026-09').get(A)).toEqual({ delta: -300, count: 1 })
+  })
+  it('别的月份不算进来', () => {
+    expect(monthByAccount([mk('2026-08-31', 'expense', 100, A)], '2026-09').get(A)).toBeUndefined()
+  })
+})
+
+describe('balanceShares', () => {
+  it('按余额占比', () => {
+    const r = balanceShares({ a: 6000, b: 4000 }, ['a', 'b'])
+    expect(r).toEqual([
+      { id: 'a', ratio: 0.6 },
+      { id: 'b', ratio: 0.4 },
+    ])
+  })
+  it('余额为 0 的账户占比是 0，不会消失', () => {
+    expect(balanceShares({ a: 100, b: 0 }, ['a', 'b'])).toEqual([
+      { id: 'a', ratio: 1 },
+      { id: 'b', ratio: 0 },
+    ])
+  })
+  it('负余额按 0 算，不会把占比条撑坏', () => {
+    const r = balanceShares({ a: 100, b: -50 }, ['a', 'b'])
+    expect(r.map((x) => x.ratio)).toEqual([1, 0])
+  })
+  it('全是 0 时返回空数组，让调用方自己决定不画', () => {
+    expect(balanceShares({ a: 0 }, ['a'])).toEqual([])
   })
 })
