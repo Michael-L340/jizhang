@@ -63,4 +63,12 @@ describe('账户图标', () => {
     expect(brandOf('随便什么').scale).toBeGreaterThan(0)
     expect(accountColor('')).toMatch(/^#[0-9a-f]{6}$/i)
   })
+
+  it('白条平台各有各的颜色，「白条」两个字本身也认得出', () => {
+    const names = ['京东白条', '花呗', '拼多多', '美团月付', '白条']
+    const colors = names.map(accountColor)
+    expect(new Set(colors).size).toBe(5)
+    expect(brandOf('京东白条').path).toBe(brandOf('白条').path) // 同一张卡的形状
+    expect(brandOf('京东白条').path).not.toBe(brandOf('招商银行').path)
+  })
 })

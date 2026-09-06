@@ -2,7 +2,7 @@ import { lazy, Suspense, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
-import { balances, byCategory, monthSummary, sortTxs, totalOf } from '../lib/compute'
+import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts, totalOf } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
@@ -17,6 +17,7 @@ export function Home() {
   const cats = useStore((s) => s.categories)
   const syncing = useStore((s) => s.syncing)
   const accounts = useActiveAccounts()
+  const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const accMap = useAccountMap()
   const catMap = useCategoryMap()
   const nav = useNavigate()
@@ -24,6 +25,9 @@ export function Home() {
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
+  // 白条：总资产已经是净值（余额为负的白条算在里面），这里只补一行「待还 / 本月应还」
+  const debt = debtOf(bal, credits)
+  const dueTotal = useMemo(() => [...dueInMonth(txs, new Set(credits.map((c) => c.id)), ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
   const recent = useMemo(() => sortTxs(txs).slice(0, 5), [txs])
 
@@ -124,7 +128,7 @@ export function Home() {
             升成大数字打头，四张明细卡退到下面：先看总数，再看拆分。 */}
         <div className="num text-3xl font-semibold tracking-tight mb-3">{fmtYuan(totalOf(bal), { symbol: true })}</div>
         <div className="grid grid-cols-2 gap-2">
-          {accounts.map((a) => (
+          {assets.map((a) => (
             <Link key={a.id} to="/accounts" className="rounded-xl bg-bg px-3 py-2.5 flex items-center gap-2">
               <AccountIcon name={a.name} size={28} />
               <span className="min-w-0">
@@ -134,6 +138,16 @@ export function Home() {
             </Link>
           ))}
         </div>
+        {credits.length && (debt > 0 || dueTotal > 0) ? (
+          <Link to="/accounts" className="mt-2.5 pt-2.5 border-t border-line flex justify-between items-baseline text-xs">
+            <span className="text-muted">白条待还</span>
+            <span className="num">
+              <span className="text-expense font-medium">{fmtYuan(-debt)}</span>
+              {dueTotal > 0 ? <span className="text-muted"> · 本月应还 {fmtYuan(dueTotal)}</span> : null}
+              <span className="text-brand-ink"> ›</span>
+            </span>
+          </Link>
+        ) : null}
       </div>
 
       <div className="card p-4 mb-3">

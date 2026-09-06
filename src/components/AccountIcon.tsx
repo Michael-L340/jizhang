@@ -51,8 +51,18 @@ const GENERIC_WALLET: Brand = {
   path: 'M4 6h13a2 2 0 0 1 2 2v1h-2.5a3 3 0 0 0 0 6H21v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm12.5 5H22v2h-5.5a1 1 0 0 1 0-2Z',
 }
 
+// 白条 / 先用后付：统一用一张卡的形状，只换平台色。两段矩形中间留一道空隙当磁条，
+// 用底色透出来，不用第二种颜色。
+const GENERIC_CREDIT: Brand = {
+  color: '#8a6026',
+  plate: 'brand',
+  scale: 0.56,
+  viewBox: '0 0 24 24',
+  path: 'M2 6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.5H2V6Zm0 4.5h20V18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7.5Zm3 4h6v1.8H5v-1.8Z',
+}
+
 /** 全部品牌，供测试逐个检查形状与大小是否统一 */
-export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, GENERIC_BANK, GENERIC_WALLET }
+export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, GENERIC_BANK, GENERIC_WALLET, GENERIC_CREDIT }
 
 export function brandOf(name: string): Brand {
   const n = name.trim()
@@ -65,6 +75,12 @@ export function brandOf(name: string): Brand {
   if (n.includes('农业') || n.includes('农行')) return { ...GENERIC_BANK, color: '#009944' }
   if (n.includes('交通') || n.includes('交行')) return { ...GENERIC_BANK, color: '#005bac' }
   if (n.includes('邮储') || n.includes('邮政')) return { ...GENERIC_BANK, color: '#00703c' }
+  // 白条平台要排在「卡 / 信用」那条之前，否则「信用购」之类会落到银行图标
+  if (n.includes('京东')) return { ...GENERIC_CREDIT, color: '#c8161d' }
+  if (n.includes('花呗') || n.includes('淘宝')) return { ...GENERIC_CREDIT, color: '#4a90e2' }
+  if (n.includes('拼多多')) return { ...GENERIC_CREDIT, color: '#e8432e' }
+  if (n.includes('美团')) return { ...GENERIC_CREDIT, color: '#e6a100' }
+  if (n.includes('白条') || n.includes('分期') || n.includes('月付') || n.includes('先用后付')) return GENERIC_CREDIT
   if (n.includes('银行') || n.includes('卡') || n.includes('信用')) return GENERIC_BANK
   if (n.includes('现金')) return { ...GENERIC_WALLET, color: '#f5a524' }
   return GENERIC_WALLET
