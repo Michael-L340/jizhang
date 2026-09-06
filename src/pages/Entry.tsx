@@ -5,16 +5,27 @@ import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { DatePicker } from '../components/DatePicker'
 import { Keypad } from '../components/Keypad'
-import { childOrderByUse, pickCategoryId } from '../lib/compute'
+import { childOrderByUse, installmentPlan, pickCategoryId, splitAccounts } from '../lib/compute'
 import { fmtDateRel, nowIso, today } from '../lib/date'
 import { loadLocal, saveLocal, useOnline } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { fmtYuan, parseYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
-import type { Transaction, TxType } from '../types'
+import type { Account, Transaction, TxType } from '../types'
 
 const MEM_KEY = 'jz_entry_memory_v1'
 const NO_ACCOUNT = '__none__'
+const CREDIT_GROUP = '__credit__'
+
+/** 分期选项。'1' = 下个月一次还清；custom 时期数从输入框读 */
+const INST_OPTS: { id: string; label: string }[] = [
+  { id: '1', label: '下月一次还' },
+  { id: '3', label: '3 期' },
+  { id: '6', label: '6 期' },
+  { id: '12', label: '12 期' },
+  { id: 'custom', label: '自定义' },
+]
+const INST_MAX = 60
 
 interface Memory {
   type: 'expense' | 'income' | 'transfer'
@@ -38,6 +49,61 @@ function nextAmount(cur: string, key: string): string {
   return int.length + 1 <= 9 ? cur + key : cur
 }
 
+/**
+ * 账户胶囊分两级：第一排是资产账户 + 一个「白条」+（可选的）「不指定」，
+ * 点「白条」才展开第二排四个平台。八个胶囊平铺要折三行，而且白条和真账户混在一起容易手滑。
+ */
+function AccountPicker({
+  assets,
+  credits,
+  value,
+  onChange,
+  exclude,
+  preferred,
+  allowNone,
+}: {
+  assets: Account[]
+  credits: Account[]
+  value: string | null
+  onChange: (id: string) => void
+  /** 转账的「到」要排除「从」 */
+  exclude?: string | null
+  /** 点「白条」时优先选中的平台（上次用的） */
+  preferred?: string | null
+  allowNone?: boolean
+}) {
+  const onCredit = value !== null && credits.some((c) => c.id === value)
+  const [open, setOpen] = useState(onCredit)
+  useEffect(() => {
+    if (onCredit) setOpen(true)
+  }, [onCredit])
+  const chip = (a: Account) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> })
+  const kids = credits.filter((c) => c.id !== exclude)
+  const top = [
+    ...assets.filter((a) => a.id !== exclude).map(chip),
+    ...(kids.length ? [{ id: CREDIT_GROUP, label: '白条', node: <AccountIcon name="白条" size={18} /> }] : []),
+    ...(allowNone ? [{ id: NO_ACCOUNT, label: '不指定' }] : []),
+  ]
+  return (
+    <>
+      <ChipGroup
+        options={top}
+        value={onCredit ? CREDIT_GROUP : value ?? NO_ACCOUNT}
+        onChange={(id) => {
+          if (id !== CREDIT_GROUP) {
+            setOpen(false)
+            onChange(id)
+            return
+          }
+          setOpen(true)
+          if (!onCredit) onChange(kids.find((c) => c.id === preferred)?.id ?? kids[0].id)
+        }}
+      />
+      {open && kids.length ? <ChipGroup className="mt-2 pl-2.5 border-l-2 border-brand" options={kids.map(chip)} value={value ?? ''} onChange={onChange} /> : null}
+    </>
+  )
+}
+
 export function Entry() {
   const nav = useNavigate()
   const [params] = useSearchParams()
@@ -46,6 +112,7 @@ export function Entry() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
+  const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const addTx = useStore((s) => s.addTx)
   const editTx = useStore((s) => s.editTx)
   const removeTx = useStore((s) => s.removeTx)
@@ -69,6 +136,9 @@ export function Entry() {
   const [toId, setToId] = useState<string | null>(mem.toId)
   const [date, setDate] = useState(today())
   const [note, setNote] = useState('')
+  // 白条分期：只在「支出 + 账户是白条」时出现并生效
+  const [inst, setInst] = useState('1')
+  const [customInst, setCustomInst] = useState('')
   const [more, setMore] = useState(false)
   const [dateOpen, setDateOpen] = useState(false)
   const [adding, setAdding] = useState(false)
@@ -92,6 +162,14 @@ export function Entry() {
     setDate(editing.date)
     setNote(editing.note ?? '')
     setMore(Boolean(editing.note) || editing.date !== today())
+    if (editing.installments) {
+      const n = String(editing.installments)
+      if (INST_OPTS.some((o) => o.id === n)) setInst(n)
+      else {
+        setInst('custom')
+        setCustomInst(n)
+      }
+    }
     if (editing.type === 'transfer') {
       setFromId(editing.account_id)
       setToId(editing.to_account_id)
@@ -123,10 +201,10 @@ export function Entry() {
   // 打开一笔微信的支出会显示成中国银行，哪怕只改个备注点更新，这笔钱就被挪走了。
   useEffect(() => {
     if (!backfilled) return
-    if (!accountId && !accountTouched && accounts.length) setAccountId(accounts[0].id)
-    if (!fromId && accounts.length) setFromId(accounts[0].id)
-    if (!toId && accounts.length > 1) setToId(accounts[1].id)
-  }, [backfilled, accounts, accountId, accountTouched, fromId, toId])
+    if (!accountId && !accountTouched && assets.length) setAccountId(assets[0].id)
+    if (!fromId && assets.length) setFromId(assets[0].id)
+    if (!toId && assets.length > 1) setToId(assets[1].id)
+  }, [backfilled, assets, accountId, accountTouched, fromId, toId])
 
   // 挂起过夜后回到前台，把没被手动改过的日期滚到新的今天。
   //
@@ -190,6 +268,11 @@ export function Entry() {
   }
 
   const cents = (parseYuan(amount) ?? 0) * (neg ? -1 : 1)
+  const onCredit = type === 'expense' && accountId !== null && credits.some((c) => c.id === accountId)
+  const instN = inst === 'custom' ? Number(customInst) : Number(inst)
+  const instOk = Number.isInteger(instN) && instN >= 1 && instN <= INST_MAX
+  // 分期提示：每期多少、哪几个月。用一笔临时记录算，和保存后账户页看到的完全一致
+  const plan = onCredit && cents > 0 && instOk ? installmentPlan({ date, amount: cents, installments: instN }) : null
 
   function validate(): string | null {
     if (type !== 'adjust' && cents <= 0) return '请输入金额'
@@ -198,6 +281,7 @@ export function Entry() {
     if (type === 'income' && !incomeCatId) return '请选择收入分类'
     if (type === 'transfer' && (!fromId || !toId)) return '请选择账户'
     if (type === 'transfer' && fromId === toId) return '转出和转入账户不能相同'
+    if (onCredit && !instOk) return `分期期数要是 1 到 ${INST_MAX} 的整数`
     return null
   }
 
@@ -228,6 +312,7 @@ export function Entry() {
       to_account_id: type === 'transfer' ? toId : null,
       category_id: type === 'expense' ? childId ?? parentId : type === 'income' ? incomeCatId : null,
       note: note.trim() || null,
+      installments: onCredit ? instN : null,
       created_at: editing?.created_at ?? nowIso(),
     }
     const ok = editing ? await editTx(tx) : await addTx(tx)
@@ -287,7 +372,6 @@ export function Entry() {
     ...(editing?.type === 'adjust' ? [{ id: 'adjust' as TxType, label: '校准' }] : []),
   ]
   const amountColor = type === 'expense' ? 'text-expense' : type === 'income' ? 'text-income' : type === 'transfer' ? 'text-transfer' : 'text-adjust'
-  const accountOpts = accounts.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> }))
 
   return (
     <div className="flex-1 min-h-0 flex flex-col safe-top">
@@ -375,21 +459,50 @@ export function Entry() {
         {type === 'transfer' ? (
           <div className="mb-3">
             <div className="text-xs text-muted mb-1">从</div>
-            <ChipGroup options={accountOpts} value={fromId} onChange={setFromId} className="mb-2" />
+            <div className="mb-2">
+              <AccountPicker assets={assets} credits={credits} value={fromId} onChange={setFromId} />
+            </div>
             <div className="text-xs text-muted mb-1">到</div>
-            <ChipGroup options={accountOpts.filter((a) => a.id !== fromId)} value={toId} onChange={setToId} />
+            <AccountPicker assets={assets} credits={credits} value={toId} onChange={setToId} exclude={fromId} preferred={mem.toId} />
           </div>
         ) : (
           <div className="mb-3">
             <div className="text-xs text-muted mb-1">账户</div>
-            <ChipGroup
-              options={[...accountOpts, { id: NO_ACCOUNT, label: '不指定' }]}
-              value={accountId ?? NO_ACCOUNT}
+            <AccountPicker
+              assets={assets}
+              credits={credits}
+              value={accountId}
+              allowNone
+              preferred={mem.accountId}
               onChange={(id) => {
                 setAccountTouched(true)
                 setAccountId(id === NO_ACCOUNT ? null : id)
               }}
             />
+            {onCredit ? (
+              <div className="mt-3">
+                <div className="text-xs text-muted mb-1">分期 · 从下个月起每月还一期</div>
+                <ChipGroup options={INST_OPTS} value={inst} onChange={setInst} />
+                {inst === 'custom' ? (
+                  <input
+                    inputMode="numeric"
+                    autoFocus
+                    className="mt-2 w-28 bg-bg rounded-xl px-3 py-2 text-sm num"
+                    placeholder={`期数 2–${INST_MAX}`}
+                    value={customInst}
+                    onChange={(e) => setCustomInst(e.target.value.replace(/\D/g, ''))}
+                  />
+                ) : null}
+                {plan ? (
+                  <div className="text-[11px] text-muted mt-1.5 num">
+                    每期 ¥{fmtYuan(plan[0].amount)}
+                    {plan.length > 1 && plan[plan.length - 1].amount !== plan[0].amount ? `，最后一期 ¥${fmtYuan(plan[plan.length - 1].amount)}` : ''}
+                    {' · '}
+                    {plan.length <= 3 ? plan.map((x) => `${Number(x.ym.slice(5))} 月`).join('、') : `${Number(plan[0].ym.slice(5))} 月起，到 ${plan[plan.length - 1].ym.replace('-', ' 年 ')} 月`}
+                  </div>
+                ) : null}
+              </div>
+            ) : null}
           </div>
         )}
 
