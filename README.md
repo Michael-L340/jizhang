@@ -110,7 +110,7 @@ npm run deploy   # check + test + 版本号第三位 +1 并打 tag + 构建 + �
 | `src/lib/api.test.ts` | 发给数据库的请求长什么样：删除顺序、元↔分换算、分页键、`wipeAll` 失败时的 `step` 标记 |
 | `src/lib/validate.test.ts` | **落地前校验的每一条规则**：日期真伪、`tx_shape`、外键、唯一索引、两级分类、`numeric(12,2)` 量级（整库恢复会先删数据，文件必须先验过） |
 | `src/lib/csv.test.ts` | 文件的外壳与导出自查：版本兼容、只留数据库有的列、导出可不可信 |
-| `src/lib/palette.test.ts` | 配色：相邻两级颜色必须看得出区别 |
+| `src/lib/palette.test.ts` | 配色：相邻两级颜色必须看得出区别；五个一级支出色相 72° 等分、且不占用支出红/收入绿/品牌蓝 |
 | `src/lib/backup.test.ts` | 自动备份状态的口径：48 小时算停、北京时间显示、缓存占用按 UTF-16 |
 | `src/lib/restore.dbtest.ts` | **不在 `npm test` 里**。真 Postgres 上跑完整备份恢复，`npm run test:db` |
 | `src/lib/balance.dbtest.ts` | **不在 `npm test` 里**。真 Postgres 上跑「改余额」全链路，并逐分校验 `account_balances` 视图 = 前端 `balances()` |

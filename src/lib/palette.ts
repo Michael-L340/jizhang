@@ -1,18 +1,34 @@
 // 分类配色。同一个分类在饼图、图例、折线图里永远是同一个颜色。
+//
+// 五个一级支出分类的色相是刻意做成 72° 等分的（38 / 110 / 182 / 254 / 326）。
+// 不是为了好看：childColors 生成二级分类时把色相往左右各摆 28°，等于每个大类
+// 独占 56° 的色轮，两个大类靠得太近，它们的二级颜色就会互相撞。旧配色里
+// 蓝(219) 和紫(253) 只差 34°，「经常生活开支」和「娱乐消费」下钻后是真的分不清。
+//
+// 另外三个颜色已经有别的含义，一级分类一律避开：
+//   支出红 #e5484d、收入绿 #1f9d55、品牌蓝 #2f6fed（按钮、选中态、余额曲线）。
+// 旧配色里「意外开支」正好是支出红、「经常生活开支」正好是品牌蓝，同一屏里
+// 一个颜色两种意思。改配色时别再把这三个捡回来。
 const BY_NAME: { test: (n: string) => boolean; color: string }[] = [
-  { test: (n) => n.includes('餐饮') || n.includes('日常') || n.includes('吃'), color: '#f5a524' },
-  { test: (n) => n.includes('娱乐') || n.includes('游戏'), color: '#7c5cff' },
-  { test: (n) => n.includes('非经常') || n.includes('大额'), color: '#14b8a6' },
-  { test: (n) => n.includes('经常') || n.includes('固定'), color: '#2f6fed' },
-  { test: (n) => n.includes('意外') || n.includes('其他'), color: '#e5484d' },
+  { test: (n) => n.includes('餐饮') || n.includes('日常') || n.includes('吃'), color: '#c7820a' },
+  // 「非经常」必须排在「经常」前面，否则前者会被后者先匹配走
+  { test: (n) => n.includes('非经常') || n.includes('大额'), color: '#17979b' },
+  { test: (n) => n.includes('经常') || n.includes('固定'), color: '#408632' },
+  { test: (n) => n.includes('娱乐') || n.includes('游戏'), color: '#7051d6' },
+  { test: (n) => n.includes('意外'), color: '#c62f85' },
   { test: (n) => n.includes('工资') || n.includes('实习'), color: '#1f9d55' },
   { test: (n) => n.includes('生活费'), color: '#2f6fed' },
   { test: (n) => n.includes('奖学金'), color: '#f5a524' },
   { test: (n) => n.includes('理财'), color: '#7c5cff' },
   { test: (n) => n.includes('退款'), color: '#14b8a6' },
+  // 收入里的「其他」。原来和「意外开支」共用一条规则，跟着拿了支出红——
+  // 一个收入分类显示成支出色。拆开单列，给个中性灰。
+  { test: (n) => n.includes('其他'), color: '#64748b' },
 ]
 
-const FALLBACK = ['#2f6fed', '#f5a524', '#14b8a6', '#7c5cff', '#e5484d', '#0ea5e9', '#f97316', '#a855f7', '#64748b']
+// 没匹配到名字的分类按顺序取。前四个刻意不和上面五个一级支出色重复，
+// 这样新建一个一级分类不会撞上「日常餐饮」；用完一轮才开始复用。
+const FALLBACK = ['#7a9523', '#945738', '#aa40bf', '#64748b', '#c7820a', '#408632', '#17979b', '#7051d6', '#c62f85']
 
 /** 一级分类的固定颜色 */
 export function categoryColor(name: string, index = 0): string {

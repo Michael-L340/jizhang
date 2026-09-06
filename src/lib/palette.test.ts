@@ -8,17 +8,19 @@ function dist(a: string, b: string): number {
   return Math.sqrt(x.reduce((s, v, i) => s + (v - y[i]) ** 2, 0))
 }
 
-const ROOTS = ['#f5a524', '#7c5cff', '#2f6fed', '#14b8a6', '#e5484d']
+/** 现行的五个一级支出色，下面的不变量都要在它们身上成立 */
+const ROOTS = ['#c7820a', '#408632', '#17979b', '#7051d6', '#c62f85']
+const EXPENSE_ROOTS = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支']
 
 describe('二级分类配色', () => {
   it('每个都是合法的 6 位十六进制', () => {
     for (const n of [1, 2, 3, 6, 12]) {
-      for (const c of childColors('#f5a524', n)) expect(c).toMatch(/^#[0-9a-f]{6}$/)
+      for (const c of childColors('#c7820a', n)) expect(c).toMatch(/^#[0-9a-f]{6}$/)
     }
   })
 
   it('只有一个二级时就用父色', () => {
-    expect(childColors('#f5a524', 1)).toEqual(['#f5a524'])
+    expect(childColors('#c7820a', 1)).toEqual(['#c7820a'])
   })
 
   it('相邻两片必须明显不同——原来只往白里兑，最后两片肉眼分不出', () => {
@@ -65,30 +67,59 @@ describe('二级分类配色', () => {
   })
 
   it('没匹配到名字的按顺序取备用色，且会循环不会越界', () => {
-    expect(categoryColor('新分类', 0)).toBe('#2f6fed')
+    expect(categoryColor('新分类', 0)).toBe('#7a9523')
     expect(categoryColor('新分类', 9)).toBe(categoryColor('新分类', 0))
   })
 })
 
 describe('流水行里二级分类的底色', () => {
   it('同一个二级分类的底色永远不变（按 sort 取，不随出现顺序变）', () => {
-    expect(childShade('#f5a524', 3)).toBe(childShade('#f5a524', 3))
+    expect(childShade('#c7820a', 3)).toBe(childShade('#c7820a', 3))
   })
 
   it('同一大类下相邻的两个二级底色不同，连着几行才不会糊成一片', () => {
-    const shades = [1, 2, 3, 4, 5, 6].map((s) => childShade('#f5a524', s))
+    const shades = [1, 2, 3, 4, 5, 6].map((s) => childShade('#c7820a', s))
     expect(new Set(shades).size).toBe(6)
   })
 
   it('仍然是父色那个色系，一眼还能看出属于哪个大类', () => {
-    const [h0] = hexToHsl('#2f6fed')
+    const [h0] = hexToHsl('#7051d6')
     for (const s of [1, 2, 3, 4, 5, 6]) {
-      const [h] = hexToHsl(childShade('#2f6fed', s))
+      const [h] = hexToHsl(childShade('#7051d6', s))
       expect(Math.min(Math.abs(h - h0), 360 - Math.abs(h - h0))).toBeLessThanOrEqual(25)
     }
   })
 
   it('sort 超出范围或为 0 也不会崩', () => {
-    for (const s of [0, 7, 99, -3]) expect(childShade('#f5a524', s)).toMatch(/^#[0-9a-f]{6}$/)
+    for (const s of [0, 7, 99, -3]) expect(childShade('#c7820a', s)).toMatch(/^#[0-9a-f]{6}$/)
+  })
+})
+
+describe('一级支出分类的配色约束', () => {
+  it('五个色相两两至少差 56°——差少了，两边的二级分类会互相撞', () => {
+    // childColors 把色相往左右各摆 28°，每个大类要独占 56°。
+    // 旧配色的蓝(219)和紫(253)只差 34°，这条会红。
+    const hs = EXPENSE_ROOTS.map((n) => hexToHsl(categoryColor(n))[0]).sort((a, b) => a - b)
+    for (let i = 0; i < hs.length; i++) {
+      const gap = ((hs[(i + 1) % hs.length] - hs[i] + 360) % 360) || 360
+      expect(gap, `${hs[i].toFixed(0)}° 之后只隔了 ${gap.toFixed(0)}°`).toBeGreaterThanOrEqual(56)
+    }
+  })
+
+  it('避开三个已经有含义的颜色：支出红、收入绿、品牌蓝', () => {
+    const TAKEN: Record<string, string> = { 支出红: '#e5484d', 收入绿: '#1f9d55', 品牌蓝: '#2f6fed' }
+    for (const name of EXPENSE_ROOTS) {
+      const c = categoryColor(name)
+      for (const [what, hex] of Object.entries(TAKEN)) {
+        expect(c, `${name} 用了${what}本身`).not.toBe(hex)
+        const d = Math.abs(hexToHsl(c)[0] - hexToHsl(hex)[0])
+        expect(Math.min(d, 360 - d), `${name} 的色相离${what}太近`).toBeGreaterThan(20)
+      }
+    }
+  })
+
+  it('收入的「其他」不能是支出红——它曾经和「意外开支」共用一条规则', () => {
+    expect(categoryColor('其他')).not.toBe('#e5484d')
+    expect(categoryColor('其他')).not.toBe(categoryColor('意外开支'))
   })
 })
