@@ -481,14 +481,28 @@ export function installmentPlan(t: Pick<Transaction, 'date' | 'amount' | 'instal
   return Array.from({ length: n }, (_, i) => ({ seq: i + 1, of: n, ym: shiftMonth(start, i + 1), amount: base + (i === n - 1 ? rem : 0) }))
 }
 
-/** 某月各白条账户应还多少：账户上所有支出在该月到期的那一期之和 */
+/**
+ * 某月各白条账户还应还多少：该月到期的各期之和，减去该月已经转进这个白条的钱。
+ * 不减的话，还完一笔再打开弹层仍会预填整月账单，再点一次就多还一笔（审查时发现）。
+ * 还清（或多还）的不再列出来。
+ */
 export function dueInMonth(txs: Transaction[], creditIds: ReadonlySet<string>, ym: string): Map<string, number> {
-  const out = new Map<string, number>()
+  const planned = new Map<string, number>()
+  const paid = new Map<string, number>()
   for (const t of txs) {
+    if (t.type === 'transfer' && t.to_account_id && creditIds.has(t.to_account_id) && monthOf(t.date) === ym) {
+      paid.set(t.to_account_id, (paid.get(t.to_account_id) ?? 0) + t.amount)
+      continue
+    }
     if (t.type !== 'expense' || !t.account_id || !creditIds.has(t.account_id)) continue
     const hit = installmentPlan(t).find((p) => p.ym === ym)
     if (!hit) continue
-    out.set(t.account_id, (out.get(t.account_id) ?? 0) + hit.amount)
+    planned.set(t.account_id, (planned.get(t.account_id) ?? 0) + hit.amount)
+  }
+  const out = new Map<string, number>()
+  for (const [id, v] of planned) {
+    const left = v - (paid.get(id) ?? 0)
+    if (left > 0) out.set(id, left)
   }
   return out
 }

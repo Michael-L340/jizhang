@@ -815,14 +815,29 @@ describe('白条', () => {
       credit({ date: '2026-09-20', amount: 1800, installments: null, account_id: 'hb' }), // 10 月 18
       credit({ date: '2026-08-01', amount: 6000, installments: 2 }), // 9 月、10 月各 30
       credit({ date: '2026-09-05', amount: 99900, account_id: 'boc' }), // 不是白条
-      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 40000, date: '2026-10-10' }), // 还款不算
+      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 40000, date: '2026-10-10' }), // 10 月已还 400，要从应还里扣掉
     ]
     const ids = new Set(['jd', 'hb'])
     expect([...dueInMonth(txs, ids, '2026-10')]).toEqual([
-      ['jd', 43000],
+      ['jd', 3000],
       ['hb', 1800],
     ])
     expect([...dueInMonth(txs, ids, '2027-01')]).toEqual([])
+  })
+
+  it('dueInMonth：当月已经转进白条的还款要扣掉，还清了就不再列出来', () => {
+    const txs = [
+      credit({ date: '2026-09-05', amount: 120000, installments: 3 }), // 10 月应还 400
+      credit({ date: '2026-09-20', amount: 1800, account_id: 'hb' }), // 10 月应还 18
+      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 10000, date: '2026-10-03' }), // 先还了 100
+      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'hb', amount: 1800, date: '2026-10-03' }), // 花呗还清
+      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 5000, date: '2026-11-01' }), // 下个月的，不算 10 月
+    ]
+    const ids = new Set(['jd', 'hb'])
+    expect([...dueInMonth(txs, ids, '2026-10')]).toEqual([['jd', 30000]])
+    // 多还了也不会变成负数
+    const more = [...txs, tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 90000, date: '2026-10-05' })]
+    expect([...dueInMonth(more, ids, '2026-10')]).toEqual([])
   })
 
   it('activePlans：还没还完的才列，本月那一期和已到期期数算对，最新下单排前面', () => {

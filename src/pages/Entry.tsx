@@ -353,6 +353,8 @@ export function Entry() {
     setNote('')
     setDate(today())
     setDateTouched(false) // 不复位的话，记过一笔昨天的账之后这页就永久停止跟随日期了
+    setInst('1') // 期数也复位：上一笔分 12 期，下一笔 30 元外卖不该跟着摊成 12 个月
+    setCustomInst('')
     setMore(false)
   }
 

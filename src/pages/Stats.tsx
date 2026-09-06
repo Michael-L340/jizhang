@@ -4,7 +4,7 @@ import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
-import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
+import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, isCredit, monthTotals, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { gridTopFor, legendRows } from '../lib/chart'
@@ -247,13 +247,14 @@ export function Stats() {
       color: accounts.map((a) => accountColor(a.name)),
       grid: { ...common.grid, top: gridTopFor(legendRows(accounts.map((a) => a.name), chartW)) },
       legend: { data: accounts.map((a) => a.name), top: 0, width: chartW, itemWidth: 14, itemHeight: 8, itemGap: 10, textStyle: { fontSize: 11 } },
+      // 白条画虚线：京东和中国银行、拼多多和招行都是红色系，实线摆一起分不出谁是谁
       series: accounts.map((a) => ({
         name: a.name,
         type: 'line',
         smooth: true,
         showSymbol: keys.length <= 40,
         symbolSize: 6,
-        lineStyle: { width: 2 },
+        lineStyle: { width: 2, type: isCredit(a) ? 'dashed' : 'solid' },
         data: bal.byAccount[a.id].map((v) => v / 100),
       })),
     }

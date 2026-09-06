@@ -102,9 +102,9 @@ export function Accounts() {
 
   function openCredit(a: Account) {
     setCreditTarget2(a)
-    const d = due.get(a.id) ?? 0
     const owed = Math.max(0, -(bal[a.id] ?? 0))
-    // 金额按本月应还填好；这个月没有到期的就填全部欠款；没欠就留空
+    // 金额按本月还应还的填好（已扣掉本月已还的，且不超过欠款）；这个月没有到期的就填全部欠款；没欠就留空
+    const d = Math.min(due.get(a.id) ?? 0, owed)
     setRepayInput(d > 0 ? fmtYuan(d).replace(/,/g, '') : owed > 0 ? fmtYuan(owed).replace(/,/g, '') : '')
   }
 
