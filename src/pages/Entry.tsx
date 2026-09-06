@@ -141,16 +141,20 @@ export function Entry() {
   const [customInst, setCustomInst] = useState('')
   const [more, setMore] = useState(false)
   // 选到白条后上面多了一排平台和一行分期，备注输入框会被挤到键盘下面，点开了也看不见。
-  // 展开时把它滚进视野并聚焦，直接能打字。
+  // 所以点「备注」时把它滚进视野并聚焦。
+  //
+  // 只在用户亲手点开时做，不能挂在 more 上：编辑一笔有备注的、或不是今天的记录时，
+  // 回填也会把 more 设成 true，那样进编辑页就会自己滚一下、抢走光标。
+  // 另外 iOS 只在用户手势里调 focus() 才会弹键盘，所以 focus 必须同步跟在 onClick 里，
+  // 不能等 setTimeout。滚动可以等动画结束再做。
   const noteRef = useRef<HTMLInputElement>(null)
-  useEffect(() => {
-    if (!more) return
-    const t = window.setTimeout(() => {
-      noteRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
-      noteRef.current?.focus({ preventScroll: true })
-    }, 200) // 等展开动画（.expand 0.18s）走完再量位置
-    return () => window.clearTimeout(t)
-  }, [more])
+  function toggleNote() {
+    const open = !more
+    setMore(open)
+    if (!open) return
+    noteRef.current?.focus({ preventScroll: true })
+    window.setTimeout(() => noteRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }), 200)
+  }
   const [dateOpen, setDateOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newName, setNewName] = useState('')
@@ -523,7 +527,7 @@ export function Entry() {
           <button type="button" className={`chip ${date !== today() ? 'on' : ''}`} onClick={() => setDateOpen(true)}>
             {fmtDateRel(date)}
           </button>
-          <button type="button" className={`chip flex-1 text-left truncate ${note ? '' : 'text-muted'}`} onClick={() => setMore(!more)}>
+          <button type="button" className={`chip flex-1 text-left truncate ${note ? '' : 'text-muted'}`} onClick={toggleNote}>
             {note || '备注（可不填）'}
           </button>
         </div>

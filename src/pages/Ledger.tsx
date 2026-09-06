@@ -264,11 +264,16 @@ export function Ledger() {
           options={[
             { id: 'all', label: '全部' },
             ...assets.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> })),
-            ...(credits.length ? [{ id: CREDIT_ALL, label: '白条', node: <AccountIcon name="白条" size={18} /> }] : []),
+            // 选了单个平台时这个 chip 只描一圈边（半选），提示「范围在白条里」但不假装是当前值
+            ...(credits.length ? [{ id: CREDIT_ALL, label: '白条', node: <AccountIcon name="白条" size={18} />, className: onCredit && accountId !== CREDIT_ALL ? 'border-brand text-brand-ink' : undefined }] : []),
             { id: 'none', label: '未指定' },
           ]}
-          value={onCredit ? CREDIT_ALL : accountId}
-          onChange={setAccountId}
+          value={accountId === CREDIT_ALL ? CREDIT_ALL : onCredit ? '' : accountId}
+          onChange={(id) => {
+            // 已经选了某个平台时再点「白条」，不该悄悄把范围放大回四个平台
+            if (id === CREDIT_ALL && onCredit) return
+            setAccountId(id)
+          }}
           className={onCredit ? 'mb-2' : 'mb-4'}
         />
         {onCredit ? (

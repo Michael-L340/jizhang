@@ -181,7 +181,7 @@ export function Settings() {
   const statusNote = syncFailed
     ? '最近一次同步失败，点「同步」再试。'
     : backupChecked && backupFailed
-      ? '读不到备份状态：网络不通或登录过期，点「同步」试试。'
+      ? '读不到备份状态：网络不通或登录过期，点上面那一格重试。'
       : cacheDegraded
         ? `缓存已满（${fmtBytes(cacheBytes)}），离线时看到的可能是旧数据，云端不受影响。`
         : cacheWarn
@@ -211,13 +211,20 @@ export function Settings() {
               {syncing ? '同步中…' : syncFailed ? '失败' : lastSync ? fmtIsoZh(lastSync) : '尚未'}
             </span>
           </button>
-          <div className="rounded-xl bg-bg px-2.5 py-2">
+          <button
+            type="button"
+            className="rounded-xl bg-bg px-2.5 py-2 text-left"
+            onClick={() => {
+              setBackupChecked(false)
+              void loadBackupStatus().finally(() => setBackupChecked(true))
+            }}
+          >
             <span className="block text-[10.5px] text-muted">自动备份</span>
             <span className={`block text-[13px] font-semibold ${backupTone === 'warn' ? 'text-adjust' : ''}`}>
               <Dot tone={backupTone === 'ok' ? 'ok' : backupTone === 'warn' ? 'warn' : 'muted'} />
               {backupText}
             </span>
-          </div>
+          </button>
           <div className="rounded-xl bg-bg px-2.5 py-2">
             <span className="block text-[10.5px] text-muted">本机缓存</span>
             <span className={`block num text-[13px] font-semibold ${cacheWarn ? 'text-expense' : ''}`}>{cachePct}%</span>
@@ -227,6 +234,10 @@ export function Settings() {
           </div>
         </div>
         {statusNote ? <div className={`text-[11px] mt-2 ${syncFailed || cacheWarn || (backupChecked && backupFailed) ? 'text-expense' : backupTone === 'warn' ? 'text-adjust' : 'text-muted'}`}>{statusNote}</div> : null}
+        {/* 核对备份和恢复结果时要拿这两个数去对，别只留百分比 */}
+        <div className="text-[11px] text-muted mt-1 num">
+          共 {transactions.length} 条记录 · 缓存 {fmtBytes(cacheBytes)} / {fmtBytes(CACHE_LIMIT_BYTES)}
+        </div>
       </div>
 
       <Group title="分类与账户">
@@ -241,8 +252,9 @@ export function Settings() {
         <Item icon="📥" label="合并导入" hint="找回误删的几笔，不删现有数据" action={busy === 'import' ? '…' : '选文件'} onClick={() => pickFile('merge')} />
         <Item icon="♻️" label="整库恢复" hint="先清空，再按备份文件重建" action={busy === 'import' ? '…' : '选文件'} danger onClick={() => pickFile('restore')} />
         {importErr ? <div className="text-xs text-expense leading-relaxed py-2">{importErr}</div> : null}
-        <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
       </Group>
+      {/* 放在 Group 外面：隐藏元素也算 :last-child，留在卡片里会让最后一行多一条分隔线 */}
+      <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
 
       <Group title="账号">
         <Item icon="🔑" label="修改密码" onClick={() => setPwOpen(true)} />

@@ -2,7 +2,7 @@ import { lazy, Suspense, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
-import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts, totalOf } from '../lib/compute'
+import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
@@ -27,6 +27,9 @@ export function Home() {
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
   // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 本月应还」
   const debt = debtOf(bal, credits)
+  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
+  // 白条余额为正 = 多还了，平台欠你钱。少见但要说清楚，否则这笔钱在界面上无处可寻
+  const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
   const dueTotal = useMemo(() => [...dueInMonth(txs, new Set(credits.map((c) => c.id)), ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
   const recent = useMemo(() => sortTxs(txs).slice(0, 5), [txs])
@@ -126,8 +129,9 @@ export function Home() {
         </div>
         {/* 合计原来是右上角一行小字，和「账户」二字一样大，容易滑过去。
             升成大数字打头，四张明细卡退到下面：先看总数，再看拆分。 */}
-        {/* 大数字是资产账户之和，和下面四张卡加起来对得上；白条欠款单独一行，不做净资产（用户 2026-09-06 二选一选了待还） */}
-        <div className="num text-3xl font-semibold tracking-tight mb-3">{fmtYuan(totalOf(bal) + debt, { symbol: true })}</div>
+        {/* 大数字就是下面四张卡之和。不能用 totalOf(bal)+debt：debt 只加回负余额，
+            某个白条多还成正数时那笔会留在合计里，卡片却没有它，两个数对不上。 */}
+        <div className="num text-3xl font-semibold tracking-tight mb-3">{fmtYuan(assetTotal, { symbol: true })}</div>
         <div className="grid grid-cols-2 gap-2">
           {assets.map((a) => (
             <Link key={a.id} to="/accounts" className="rounded-xl bg-bg px-3 py-2.5 flex items-center gap-2">
@@ -139,11 +143,11 @@ export function Home() {
             </Link>
           ))}
         </div>
-        {credits.length && (debt > 0 || dueTotal > 0) ? (
+        {credits.length && (debt > 0 || dueTotal > 0 || overpaid > 0) ? (
           <Link to="/accounts" className="mt-2.5 pt-2.5 border-t border-line flex justify-between items-baseline text-xs">
-            <span className="text-muted">白条待还</span>
+            <span className="text-muted">{debt > 0 || !overpaid ? '白条待还' : '白条多还'}</span>
             <span className="num">
-              <span className="text-expense font-medium">{fmtYuan(-debt)}</span>
+              {debt > 0 ? <span className="text-expense font-medium">{fmtYuan(-debt)}</span> : <span className="text-income font-medium">{fmtYuan(overpaid)}</span>}
               {dueTotal > 0 ? <span className="text-muted"> · 本月应还 {fmtYuan(dueTotal)}</span> : null}
               <span className="text-brand-ink"> ›</span>
             </span>
