@@ -9,7 +9,7 @@ import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today 
 import { fmtYuan } from '../lib/money'
 import { gridTopFor, legendRows } from '../lib/chart'
 import { categoryColor, childColors } from '../lib/palette'
-import { usePersistedState } from '../lib/hooks'
+import { usePersistedState, useRecentState } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
 
 const Chart = lazy(() => import('../components/Chart'))
@@ -21,9 +21,10 @@ export function Stats() {
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
   const nav = useNavigate()
-  const [ym, setYm] = useState(monthOf(today()))
+  // 月份和下钻是「这次在看什么」：切去流水核一笔再回来还在，隔几个小时再开就回本月
+  const [ym, setYm] = useRecentState('jz_stats_ym', () => monthOf(today()))
   const [kind, setKind] = usePersistedState<'expense' | 'income'>('jz_stats_pieKind', 'expense')
-  const [drill, setDrill] = useState<string | null>(null)
+  const [drill, setDrill] = useRecentState<string | null>('jz_stats_drill', null)
   const [lineMode, setLineMode] = usePersistedState<'total' | 'category'>('jz_stats_lineMode', 'total')
   const [unit, setUnit] = usePersistedState<Unit>('jz_stats_unit', 'month')
   const [range, setRange] = usePersistedState<RangeValue>('jz_stats_range', { kind: 'year' })

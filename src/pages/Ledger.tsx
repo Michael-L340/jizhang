@@ -7,7 +7,7 @@ import { TxRow } from '../components/TxRow'
 import { groupByDay, inMonth, monthSummary, monthTotals } from '../lib/compute'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
-import { useAccountMap, useCategoryMap } from '../lib/hooks'
+import { useAccountMap, useCategoryMap, useRecentState } from '../lib/hooks'
 import { isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -30,7 +30,9 @@ export function Ledger() {
   const showToast = useStore((s) => s.showToast)
 
   const [params, setParams] = useSearchParams()
-  const [ym, setYm] = useState(() => {
+  // 月份、搜索词、筛选都是「这次在看什么」：点进一笔改完回来还在，隔几个小时再开就回本月。
+  // 从别的页带参数跳过来时参数优先。
+  const [ym, setYm] = useRecentState('jz_ledger_ym', () => {
     const d = params.get('date')
     return d ? monthOf(d) : params.get('ym') || monthOf(today())
   })
@@ -50,12 +52,12 @@ export function Ledger() {
     scrolledFor.current = null
     setParams({}, { replace: true })
   }, [params, setParams])
-  const [q, setQ] = useState('')
-  const [searchOpen, setSearchOpen] = useState(false)
+  const [q, setQ] = useRecentState('jz_ledger_q', '')
+  const [searchOpen, setSearchOpen] = useRecentState('jz_ledger_searchOpen', false)
   // 搜索是跨月的——要找三个月前那笔窗帘钱，不该先翻到那个月。
   // 所以一旦输入内容，月份就不参与过滤了，顶上的月份选择器也收起来。
   const searching = q.trim() !== ''
-  const [filter, setFilter] = useState<LedgerFilter>(NO_FILTER)
+  const [filter, setFilter] = useRecentState<LedgerFilter>('jz_ledger_filter', NO_FILTER)
   const { type, accountId, parentId } = filter
   const setType = (type: string) => setFilter({ ...filter, type })
   const setAccountId = (accountId: string) => setFilter({ ...filter, accountId })

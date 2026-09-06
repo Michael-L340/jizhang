@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { Account, Category } from '../types'
 import { useStore } from './store'
+import { packRecent, RECENT_MS, unpackRecent } from './recent'
 
 export function useAccountMap(): Map<string, Account> {
   const accounts = useStore((s) => s.accounts)
@@ -49,6 +50,42 @@ export function usePersistedState<T>(key: string, initial: T): [T, (v: T) => voi
     [key],
   )
   return [value, set]
+}
+
+/**
+ * 最近用过就保留的状态：切页面、点进一笔再回来还在；超过 RECENT_MS 没碰就回到默认。
+ * 给「当前看的月份」「搜索词」这种属于本次使用的东西用；长期偏好用 usePersistedState。
+ * 打开时还新鲜就顺手续期，连着用就一直不丢。
+ */
+export function useRecentState<T>(key: string, initial: T | (() => T)): [T, (v: T) => void] {
+  const [value, setValue] = useState<T>(() => {
+    let raw: string | null = null
+    try {
+      raw = localStorage.getItem(key)
+    } catch {
+      /* 存储被禁用 */
+    }
+    const kept = unpackRecent<T>(raw, Date.now(), RECENT_MS)
+    if (kept === undefined) return typeof initial === 'function' ? (initial as () => T)() : initial
+    saveRecent(key, kept)
+    return kept
+  })
+  const set = useCallback(
+    (next: T) => {
+      setValue(next)
+      saveRecent(key, next)
+    },
+    [key],
+  )
+  return [value, set]
+}
+
+function saveRecent(key: string, value: unknown) {
+  try {
+    localStorage.setItem(key, packRecent(value, Date.now()))
+  } catch {
+    /* ignore */
+  }
 }
 
 /** 读写 localStorage 的小工具，失败时静默 */
