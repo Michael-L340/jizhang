@@ -6,7 +6,8 @@ export type CatKind = 'expense' | 'income'
 export interface Account {
   id: string
   name: string
-  kind: 'bank' | 'wallet'
+  /** credit = 白条：余额为负表示欠款，下单记支出、还款记转账 */
+  kind: 'bank' | 'wallet' | 'credit'
   sort: number
   is_archived: boolean
 }
@@ -34,6 +35,8 @@ export interface Transaction {
   to_account_id: string | null // 仅 transfer
   category_id: string | null // 仅 expense / income
   note: string | null
+  /** 白条分期期数，只对白条账户上的支出有意义；null 按 1 期算（下月一次还）。第 k 期在下单月之后第 k 个月到期 */
+  installments: number | null
   created_at: string // ISO
 }
 

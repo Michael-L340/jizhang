@@ -22,6 +22,7 @@ const tx: Transaction = {
   to_account_id: null,
   category_id: C1,
   note: '午饭',
+  installments: null,
   created_at: '2026-09-04T02:00:00.000Z',
 }
 const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx] }
@@ -81,7 +82,7 @@ describe('parseImport', () => {
 
   it('数据库没有的列也要扔掉，否则 PostgREST 会说 column does not exist', () => {
     const out = parseImport(file({ transactions: [{ ...tx, 备注2: '手写脚本加的' }] }))
-    expect(Object.keys(out.transactions[0]).sort()).toEqual(['account_id', 'amount', 'category_id', 'created_at', 'date', 'id', 'note', 'to_account_id', 'type'])
+    expect(Object.keys(out.transactions[0]).sort()).toEqual(['account_id', 'amount', 'category_id', 'created_at', 'date', 'id', 'installments', 'note', 'to_account_id', 'type'])
   })
 
   it('parseImport 真的接上了 validate.ts（不是只看那四样）', () => {

@@ -19,6 +19,7 @@ function tx(p: Partial<Transaction> = {}): Transaction {
     to_account_id: null,
     category_id: 'c1',
     note: null,
+    installments: null,
     created_at: `2026-09-05T00:00:${String(n).padStart(2, '0')}.000Z`,
     ...p,
   }

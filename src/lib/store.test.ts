@@ -78,6 +78,7 @@ function tx(id: string, over: Partial<Transaction> = {}): Transaction {
     to_account_id: null,
     category_id: 'cat1',
     note: null,
+    installments: null,
     created_at: '2026-09-04T02:00:00.000Z',
     ...over,
   }

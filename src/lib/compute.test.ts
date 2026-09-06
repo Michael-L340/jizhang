@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { applyTx, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, firstFlowDate, groupByDay, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { activePlans, applyTx, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, dueInMonth, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -27,6 +27,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount'> & { a
     to_account_id: null,
     category_id: null,
     note: null,
+    installments: null,
     created_at: new Date(Date.UTC(2026, 8, 3, 0, 0, seq)).toISOString(), // 严格递增，不能用 seq % 10 那种会回绕的写法
     ...p,
   }
@@ -778,5 +779,65 @@ describe('balanceShares', () => {
   })
   it('全是 0 时返回空数组，让调用方自己决定不画', () => {
     expect(balanceShares({ a: 0 }, ['a'])).toEqual([])
+  })
+})
+
+describe('白条', () => {
+  const acc = (id: string, kind: Account['kind']): Account => ({ id, name: id, kind, sort: 0, is_archived: false })
+  const credit = (p: Partial<Transaction> = {}): Transaction => tx({ type: 'expense', amount: 100, account_id: 'jd', category_id: 'c1', ...p })
+
+  it('splitAccounts / debtOf：白条分出去，欠款只算负数', () => {
+    const list = [acc('boc', 'bank'), acc('jd', 'credit'), acc('wx', 'wallet'), acc('hb', 'credit')]
+    const { assets, credits } = splitAccounts(list)
+    expect(assets.map((a) => a.id)).toEqual(['boc', 'wx'])
+    expect(credits.map((a) => a.id)).toEqual(['jd', 'hb'])
+    expect(debtOf({ boc: 100000, jd: -120000, hb: 500 }, credits)).toBe(120000)
+    expect(debtOf({}, credits)).toBe(0)
+  })
+
+  it('installmentPlan：从下单次月起每月一期，零头进最后一期，空期数按 1 期', () => {
+    expect(installmentPlan(credit({ date: '2026-09-05', amount: 120000, installments: 3 }))).toEqual([
+      { seq: 1, of: 3, ym: '2026-10', amount: 40000 },
+      { seq: 2, of: 3, ym: '2026-11', amount: 40000 },
+      { seq: 3, of: 3, ym: '2026-12', amount: 40000 },
+    ])
+    expect(installmentPlan(credit({ date: '2026-11-20', amount: 10000, installments: 3 })).map((p) => [p.ym, p.amount])).toEqual([
+      ['2026-12', 3333],
+      ['2027-01', 3333],
+      ['2027-02', 3334],
+    ])
+    expect(installmentPlan(credit({ date: '2026-09-05', amount: 1800, installments: null }))).toEqual([{ seq: 1, of: 1, ym: '2026-10', amount: 1800 }])
+  })
+
+  it('dueInMonth：只看白条账户上的支出，按账户汇总当月到期的那一期', () => {
+    const txs = [
+      credit({ date: '2026-09-05', amount: 120000, installments: 3 }), // 10/11/12 各 400
+      credit({ date: '2026-09-20', amount: 1800, installments: null, account_id: 'hb' }), // 10 月 18
+      credit({ date: '2026-08-01', amount: 6000, installments: 2 }), // 9 月、10 月各 30
+      credit({ date: '2026-09-05', amount: 99900, account_id: 'boc' }), // 不是白条
+      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 40000, date: '2026-10-10' }), // 还款不算
+    ]
+    const ids = new Set(['jd', 'hb'])
+    expect([...dueInMonth(txs, ids, '2026-10')]).toEqual([
+      ['jd', 43000],
+      ['hb', 1800],
+    ])
+    expect([...dueInMonth(txs, ids, '2027-01')]).toEqual([])
+  })
+
+  it('activePlans：还没还完的才列，本月那一期和已到期期数算对，最新下单排前面', () => {
+    const old = credit({ id: 'old', date: '2026-05-01', amount: 3000, installments: 3 }) // 6/7/8，9 月已完
+    const a = credit({ id: 'a', date: '2026-09-05', amount: 120000, installments: 3, created_at: '2026-09-05T01:00:00.000Z' })
+    const b = credit({ id: 'b', date: '2026-09-05', amount: 1800, created_at: '2026-09-05T02:00:00.000Z' })
+    const c = credit({ id: 'c', date: '2026-08-01', amount: 6000, installments: 4 }) // 9/10/11/12
+    const r = activePlans([old, a, b, c], 'jd', '2026-10')
+    expect(r.map((x) => x.tx.id)).toEqual(['b', 'a', 'c'])
+    expect(r[1].current).toEqual({ seq: 1, of: 3, ym: '2026-10', amount: 40000 })
+    expect(r[1].done).toBe(0)
+    expect(r[2].current?.seq).toBe(2)
+    expect(r[2].done).toBe(1)
+    expect(activePlans([old], 'jd', '2026-10')).toEqual([])
+    // 11 月：b 已经还完（只有 10 月一期）
+    expect(activePlans([a, b, c], 'jd', '2026-11').map((x) => x.tx.id)).toEqual(['a', 'c'])
   })
 })

@@ -13,6 +13,8 @@ import { beforeAll, describe, expect, it } from 'vitest'
 import mig0001 from '../../supabase/migrations/0001_init.sql?raw'
 import mig0002 from '../../supabase/migrations/0002_optional_account.sql?raw'
 import mig0003 from '../../supabase/migrations/0003_category_note.sql?raw'
+import mig0004 from '../../supabase/migrations/0004_credit_accounts.sql?raw'
+import mig0005 from '../../supabase/migrations/0005_installments.sql?raw'
 import type { Snapshot } from '../types'
 import { centsFromDb, centsToDb } from './money'
 import { validateImport } from './validate'
@@ -32,6 +34,8 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0001)
   await db.exec(mig0002)
   await db.exec(mig0003)
+  await db.exec(mig0004)
+  await db.exec(mig0005)
   return db
 }
 
@@ -50,7 +54,7 @@ async function exportBackup(db: PGlite): Promise<Snap> {
   return {
     accounts: await q(db, 'select id,name,kind,sort,is_archived from accounts'),
     categories: await q(db, 'select id,kind,parent_id,name,icon,sort,is_archived,note from categories'),
-    transactions: (await q(db, 'select id,date::text as date,type,amount,account_id,to_account_id,category_id,note,created_at from transactions')).map((t) => ({
+    transactions: (await q(db, 'select id,date::text as date,type,amount,account_id,to_account_id,category_id,note,installments,created_at from transactions')).map((t) => ({
       ...t,
       amount: centsFromDb(t.amount as string),
     })),
@@ -78,9 +82,9 @@ async function importRefs(db: PGlite, snap: Snap): Promise<void> {
 
 async function insertTx(db: PGlite, t: Row): Promise<void> {
   await db.query(
-    `insert into transactions (id,date,type,amount,account_id,to_account_id,category_id,note,created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9)
-     on conflict (id) do update set date=excluded.date,type=excluded.type,amount=excluded.amount,account_id=excluded.account_id,to_account_id=excluded.to_account_id,category_id=excluded.category_id,note=excluded.note`,
-    [t.id, t.date, t.type, centsToDb(t.amount as number), t.account_id, t.to_account_id, t.category_id, t.note, t.created_at],
+    `insert into transactions (id,date,type,amount,account_id,to_account_id,category_id,note,installments,created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+     on conflict (id) do update set date=excluded.date,type=excluded.type,amount=excluded.amount,account_id=excluded.account_id,to_account_id=excluded.to_account_id,category_id=excluded.category_id,note=excluded.note,installments=excluded.installments`,
+    [t.id, t.date, t.type, centsToDb(t.amount as number), t.account_id, t.to_account_id, t.category_id, t.note, t.installments ?? null, t.created_at],
   )
 }
 
@@ -298,7 +302,7 @@ const uid = (n: number): string => `${String(n).padStart(8, '0')}-0000-4000-8000
  * 归档过的账户与分类、smallint 上限的 sort、中文 + emoji + 逗号引号换行的备注、闰年那一天。
  */
 function legalBackup(): RawFile {
-  const A = { wx: uid(1), boc: uid(2), gone: uid(3) }
+  const A = { wx: uid(1), boc: uid(2), gone: uid(3), jd: uid(4) }
   const C = { food: uid(11), lunch: uid(12), fun: uid(13), lunch2: uid(14), salary: uid(15), otherE: uid(16), otherI: uid(17), breakfast: uid(18) }
   const t = (n: number, over: Record<string, unknown>): Record<string, unknown> => ({
     id: uid(100 + n),
@@ -309,6 +313,7 @@ function legalBackup(): RawFile {
     to_account_id: null,
     category_id: C.lunch,
     note: null,
+    installments: null,
     created_at: '2026-09-04T02:00:00.000Z',
     ...over,
   })
@@ -317,6 +322,7 @@ function legalBackup(): RawFile {
       { id: A.wx, name: '微信', kind: 'wallet', sort: 1, is_archived: false },
       { id: A.boc, name: '中国银行', kind: 'bank', sort: 2, is_archived: false },
       { id: A.gone, name: '已注销的卡', kind: 'bank', sort: 32767, is_archived: true },
+      { id: A.jd, name: '京东白条', kind: 'credit', sort: 5, is_archived: false },
     ],
     categories: [
       { id: C.food, kind: 'expense', parent_id: null, name: '日常餐饮', icon: '🍚', sort: 1, is_archived: false, note: '正常校园吃饭消费' },
@@ -341,6 +347,8 @@ function legalBackup(): RawFile {
       t(10, { category_id: C.breakfast, amount: 300, note: '记在归档分类上的历史流水' }),
       t(11, { date: '2024-02-29', amount: 250, note: '闰年那一天' }),
       t(12, { account_id: A.gone, amount: 99, note: '记在归档账户上的历史流水' }),
+      t(13, { account_id: A.jd, amount: 120000, installments: 3, note: '白条分 3 期（0004/0005）' }),
+      t(14, { type: 'transfer', category_id: null, account_id: A.boc, to_account_id: A.jd, amount: 40000, note: '还白条' }),
     ],
   }
 }
@@ -425,7 +433,7 @@ const BAD_CASES: BadCase[] = [
   },
   {
     name: '两个同名账户（accounts unique(user_id,name)）',
-    mutate: (f) => f.accounts.push({ id: uid(4), name: '微信', kind: 'bank', sort: 9, is_archived: false }),
+    mutate: (f) => f.accounts.push({ id: uid(5), name: '微信', kind: 'bank', sort: 9, is_archived: false }),
     msg: /同名账户/,
     dbRejects: true,
   },
@@ -463,9 +471,9 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     const snap = validateImport(file) // 不抛错 = 放行
     await restore(db, file)
 
-    expect(await count(db, 'accounts')).toBe(3)
+    expect(await count(db, 'accounts')).toBe(4)
     expect(await count(db, 'categories')).toBe(8)
-    expect(await count(db, 'transactions')).toBe(12)
+    expect(await count(db, 'transactions')).toBe(14)
 
     const back = await exportBackup(db)
     expect(byId(back.accounts)).toEqual(byId(snap.accounts as unknown as Row[]))

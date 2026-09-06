@@ -88,8 +88,9 @@ describe('账户', () => {
     expect(run(acc({ id: 'a1' }))).toThrow(/第 1 个账户.*a1.*UUID/)
   })
 
-  it('kind 只能是 bank / wallet（accounts_kind_check）', () => {
-    expect(run(acc({ kind: 'crypto' }, 1))).toThrow(/第 2 个账户.*crypto.*bank 或 wallet/)
+  it('kind 只能是 bank / wallet / credit（accounts_kind_check）', () => {
+    expect(run(acc({ kind: 'crypto' }, 1))).toThrow(/第 2 个账户.*crypto.*bank、wallet 或 credit/)
+    expect(run(acc({ kind: 'credit' }, 1))).not.toThrow()
   })
 
   it('sort 超出 smallint 就拒绝——超了数据库直接报 numeric field overflow', () => {

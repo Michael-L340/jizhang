@@ -19,7 +19,7 @@ import { TX_TYPE_LABEL } from '../types'
 const KIND_LABEL: Record<CatKind, string> = { expense: '支出', income: '收入' }
 const TX_TYPES = ['expense', 'income', 'transfer', 'adjust']
 const CAT_KINDS = ['expense', 'income']
-const ACC_KINDS = ['bank', 'wallet']
+const ACC_KINDS = ['bank', 'wallet', 'credit']
 
 /** accounts.sort / categories.sort 都是 smallint */
 const SORT_MIN = -32768
@@ -109,7 +109,7 @@ function readAccount(v: unknown, i: number): Account {
   if (typeof r.id !== 'string' || typeof r.name !== 'string') fail('缺少 id 或名称，文件可能已损坏')
   if (!isUuid(r.id)) fail(`的 id「${String(r.id)}」不是合法的 UUID，数据库不接受`)
   const kind: unknown = r.kind ?? 'bank'
-  if (typeof kind !== 'string' || !ACC_KINDS.includes(kind)) fail(`的种类「${String(r.kind)}」不认识，只能是 bank 或 wallet`)
+  if (typeof kind !== 'string' || !ACC_KINDS.includes(kind)) fail(`的种类「${String(r.kind)}」不认识，只能是 bank、wallet 或 credit`)
   return {
     id: r.id as string,
     name: r.name as string,
@@ -154,6 +154,11 @@ function readTransaction(v: unknown, i: number): Transaction {
   if (!Number.isInteger(amount)) fail(`的金额不是整数分（读到 ${String(amount)}）。备份里 12.50 元要写成 1250`)
   if (Math.abs(amount as number) > MAX_CENTS) fail(`的金额 ${String(amount)} 分超出数据库能存的范围（最多 ±9,999,999,999.99 元）`)
   if (!isTimestamp(r.created_at)) fail(`的记录时间不是合法的时间（读到 ${JSON.stringify(r.created_at)}）`)
+  // 0005：白条分期期数。旧备份没有这一列，按没有处理
+  const inst: unknown = r.installments ?? null
+  if (inst !== null && (!Number.isInteger(inst) || (inst as number) < 1 || (inst as number) > 60)) {
+    fail(`的分期期数不对（读到 ${JSON.stringify(r.installments)}），只能是 1 到 60 的整数或留空`)
+  }
   return {
     id: r.id as string,
     date: date as string,
@@ -163,6 +168,7 @@ function readTransaction(v: unknown, i: number): Transaction {
     to_account_id: refOf(r.to_account_id, '转入账户 id', fail),
     category_id: refOf(r.category_id, '分类 id', fail),
     note: textOf(r.note, '备注', fail),
+    installments: inst as number | null,
     created_at: r.created_at as string,
   }
 }

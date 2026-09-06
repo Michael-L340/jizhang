@@ -14,6 +14,8 @@ import { describe, expect, it } from 'vitest'
 import mig0001 from '../../supabase/migrations/0001_init.sql?raw'
 import mig0002 from '../../supabase/migrations/0002_optional_account.sql?raw'
 import mig0003 from '../../supabase/migrations/0003_category_note.sql?raw'
+import mig0004 from '../../supabase/migrations/0004_credit_accounts.sql?raw'
+import mig0005 from '../../supabase/migrations/0005_installments.sql?raw'
 import type { Account, Transaction } from '../types'
 import { balances, totalOf } from './compute'
 import { centsFromDb, centsToDb } from './money'
@@ -36,6 +38,8 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0001)
   await db.exec(mig0002)
   await db.exec(mig0003)
+  await db.exec(mig0004)
+  await db.exec(mig0005)
   return db
 }
 
@@ -269,7 +273,7 @@ describe('修改账户余额（真数据库）', () => {
     expect(b[wx]).toBe(20000) // 一分没动
     expect(b[cmb]).toBe(0) // 从没校准过的账户还是 0
     expect(b[ali]).toBe(0)
-    expect(Object.keys(b)).toHaveLength(4) // 四个账户都在，没有多也没有少
+    expect(Object.keys(b)).toHaveLength(8) // 四个资产账户 + 0004 预置的四个白条都在，没有多也没有少
   })
 
   it('场景9 金额边界：0.01 / 4846.42 / 负数，经过 numeric(12,2) 往返一分不差', async () => {

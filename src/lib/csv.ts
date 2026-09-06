@@ -12,7 +12,7 @@ function esc(v: string | null | undefined): string {
 export function buildCsv(snap: Snapshot): string {
   const acc = new Map(snap.accounts.map((a) => [a.id, a.name]))
   const cat = new Map(snap.categories.map((c) => [c.id, c]))
-  const header = ['日期', '类型', '金额', '一级分类', '二级分类', '账户', '转入账户', '备注', 'ID']
+  const header = ['日期', '类型', '金额', '一级分类', '二级分类', '账户', '转入账户', '备注', '分期', 'ID']
   const lines = [header.join(',')]
   const sorted = [...snap.transactions].sort((a, b) => (a.date === b.date ? (a.created_at < b.created_at ? -1 : 1) : a.date < b.date ? -1 : 1))
   for (const t of sorted) {
@@ -29,6 +29,7 @@ export function buildCsv(snap: Snapshot): string {
         esc(t.account_id ? acc.get(t.account_id) : ''),
         esc(t.to_account_id ? acc.get(t.to_account_id) : ''),
         esc(t.note),
+        t.installments ? `${t.installments}期` : '',
         t.id,
       ].join(','),
     )

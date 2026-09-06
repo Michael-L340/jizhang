@@ -440,3 +440,76 @@ export function balanceShares(bal: Record<string, number>, ids: string[]): { id:
   if (total <= 0) return []
   return positives.map(({ id, v }) => ({ id, ratio: v / total }))
 }
+
+// ---------- 白条 ----------
+
+/** 白条账户：余额为负表示欠平台的钱 */
+export function isCredit(a: Account): boolean {
+  return a.kind === 'credit'
+}
+
+/** 资产账户和白条分开：账户页分两栏、记账页分两级、首页只把资产铺成卡 */
+export function splitAccounts(accounts: Account[]): { assets: Account[]; credits: Account[] } {
+  return { assets: accounts.filter((a) => !isCredit(a)), credits: accounts.filter(isCredit) }
+}
+
+/** 白条欠款合计（正数）。某个白条余额为正（多还了）不抵别家的欠款 */
+export function debtOf(bal: Record<string, number>, credits: Account[]): number {
+  return credits.reduce((s, a) => s + Math.max(0, -(bal[a.id] ?? 0)), 0)
+}
+
+export interface Installment {
+  /** 第几期，从 1 起 */
+  seq: number
+  /** 共几期 */
+  of: number
+  /** 到期月 YYYY-MM */
+  ym: string
+  /** 这一期的金额（分） */
+  amount: number
+}
+
+/**
+ * 一笔白条支出的还款表：第 k 期在下单月之后第 k 个月到期，每期均分，除不尽的零头进最后一期。
+ * installments 为空按 1 期算（下个月一次还清）。
+ */
+export function installmentPlan(t: Pick<Transaction, 'date' | 'amount' | 'installments'>): Installment[] {
+  const n = Math.max(1, t.installments ?? 1)
+  const base = Math.floor(t.amount / n)
+  const rem = t.amount - base * n
+  const start = monthOf(t.date)
+  return Array.from({ length: n }, (_, i) => ({ seq: i + 1, of: n, ym: shiftMonth(start, i + 1), amount: base + (i === n - 1 ? rem : 0) }))
+}
+
+/** 某月各白条账户应还多少：账户上所有支出在该月到期的那一期之和 */
+export function dueInMonth(txs: Transaction[], creditIds: ReadonlySet<string>, ym: string): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const t of txs) {
+    if (t.type !== 'expense' || !t.account_id || !creditIds.has(t.account_id)) continue
+    const hit = installmentPlan(t).find((p) => p.ym === ym)
+    if (!hit) continue
+    out.set(t.account_id, (out.get(t.account_id) ?? 0) + hit.amount)
+  }
+  return out
+}
+
+export interface ActivePlan {
+  tx: Transaction
+  plan: Installment[]
+  /** 本月到期的那一期，没有则 null */
+  current: Installment | null
+  /** 本月之前已到期的期数 */
+  done: number
+}
+
+/** 某个白条账户上还没还完的分期（最后一期到期月 ≥ 本月），按下单日期倒序 */
+export function activePlans(txs: Transaction[], accountId: string, ym: string): ActivePlan[] {
+  const out: ActivePlan[] = []
+  for (const t of txs) {
+    if (t.type !== 'expense' || t.account_id !== accountId) continue
+    const plan = installmentPlan(t)
+    if (plan[plan.length - 1].ym < ym) continue
+    out.push({ tx: t, plan, current: plan.find((p) => p.ym === ym) ?? null, done: plan.filter((p) => p.ym < ym).length })
+  }
+  return out.sort((a, b) => (a.tx.date === b.tx.date ? (a.tx.created_at < b.tx.created_at ? 1 : -1) : a.tx.date < b.tx.date ? 1 : -1))
+}
