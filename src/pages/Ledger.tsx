@@ -8,9 +8,9 @@ import { groupByDay, inMonth, monthSummary, monthTotals } from '../lib/compute'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap } from '../lib/hooks'
+import { isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
-import type { TxType } from '../types'
 
 const TYPE_OPTS: { id: string; label: string }[] = [
   { id: 'all', label: '全部' },
@@ -55,9 +55,11 @@ export function Ledger() {
   // 搜索是跨月的——要找三个月前那笔窗帘钱，不该先翻到那个月。
   // 所以一旦输入内容，月份就不参与过滤了，顶上的月份选择器也收起来。
   const searching = q.trim() !== ''
-  const [type, setType] = useState<string>('all')
-  const [accountId, setAccountId] = useState<string>('all')
-  const [parentId, setParentId] = useState<string>('all')
+  const [filter, setFilter] = useState<LedgerFilter>(NO_FILTER)
+  const { type, accountId, parentId } = filter
+  const setType = (type: string) => setFilter({ ...filter, type })
+  const setAccountId = (accountId: string) => setFilter({ ...filter, accountId })
+  const setParentId = (parentId: string) => setFilter({ ...filter, parentId })
   const [open, setOpen] = useState(false)
 
   // 分类给「一级 · 二级」，两级都能搜到；账户给账户名。搜索模块自己不认识 store。
@@ -78,20 +80,12 @@ export function Ledger() {
 
   const list = useMemo(() => {
     const base = searching ? searchTx(txs, q, names) : txs
-    return base.filter((t) => {
-      if (!searching && !inMonth(t, ym)) return false
-      if (type !== 'all' && t.type !== (type as TxType)) return false
-      if (accountId === 'none' && t.account_id) return false
-      if (accountId !== 'all' && accountId !== 'none' && t.account_id !== accountId && t.to_account_id !== accountId) return false
-      if (parentId !== 'all') {
-        if (!t.category_id) return false
-        const c = catMap.get(t.category_id)
-        const p = c?.parent_id ?? c?.id
-        if (p !== parentId) return false
-      }
-      return true
-    })
-  }, [txs, ym, type, accountId, parentId, catMap, searching, q, names])
+    const rootOf = (id: string) => {
+      const c = catMap.get(id)
+      return c ? (c.parent_id ?? c.id) : undefined
+    }
+    return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, filter, rootOf))
+  }, [txs, ym, filter, catMap, searching, q, names])
 
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
@@ -128,7 +122,7 @@ export function Ledger() {
   // list 已经按 inMonth 过滤过，monthSummary 里那次判断只是冗余。
   const sum = useMemo(() => monthSummary(list, ym), [list, ym])
   const hits = useMemo(() => searchSummary(list), [list])
-  const filtered = type !== 'all' || accountId !== 'all' || parentId !== 'all'
+  const filtered = isFiltered(filter)
 
   return (
     <div className="pb-6">
@@ -261,16 +255,12 @@ export function Ledger() {
         <div className="text-xs text-muted mb-2">账户</div>
         <ChipGroup options={[{ id: 'all', label: '全部' }, ...accounts.map((a) => ({ id: a.id, label: a.name })), { id: 'none', label: '未指定' }]} value={accountId} onChange={setAccountId} className="mb-4" />
         <div className="text-xs text-muted mb-2">分类</div>
-        <ChipGroup options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: c.name, icon: c.icon }))]} value={parentId} onChange={setParentId} className="mb-4" />
+        <ChipGroup options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: c.name, icon: c.icon })), { id: 'none', label: '未分类' }]} value={parentId} onChange={setParentId} className="mb-4" />
         <div className="flex gap-2">
           <button
             type="button"
             className="flex-1 chip text-center"
-            onClick={() => {
-              setType('all')
-              setAccountId('all')
-              setParentId('all')
-            }}
+            onClick={() => setFilter(NO_FILTER)}
           >
             清除
           </button>
