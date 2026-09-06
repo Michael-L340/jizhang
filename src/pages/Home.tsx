@@ -25,7 +25,7 @@ export function Home() {
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
-  // 白条：大数字是净值（余额为负的白条算在里面），有欠款时标「净资产」，再补一行「待还 / 本月应还」
+  // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 本月应还」
   const debt = debtOf(bal, credits)
   const dueTotal = useMemo(() => [...dueInMonth(txs, new Set(credits.map((c) => c.id)), ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
@@ -119,14 +119,15 @@ export function Home() {
 
       <div className="card p-4 mb-3">
         <div className="flex justify-between items-baseline">
-          <span className="text-xs text-muted">{debt > 0 ? '净资产' : '总资产'}</span>
+          <span className="text-xs text-muted">总资产</span>
           <Link to="/accounts" className="text-xs text-brand-ink">
             账户 ›
           </Link>
         </div>
         {/* 合计原来是右上角一行小字，和「账户」二字一样大，容易滑过去。
             升成大数字打头，四张明细卡退到下面：先看总数，再看拆分。 */}
-        <div className="num text-3xl font-semibold tracking-tight mb-3">{fmtYuan(totalOf(bal), { symbol: true })}</div>
+        {/* 大数字是资产账户之和，和下面四张卡加起来对得上；白条欠款单独一行，不做净资产（用户 2026-09-06 二选一选了待还） */}
+        <div className="num text-3xl font-semibold tracking-tight mb-3">{fmtYuan(totalOf(bal) + debt, { symbol: true })}</div>
         <div className="grid grid-cols-2 gap-2">
           {assets.map((a) => (
             <Link key={a.id} to="/accounts" className="rounded-xl bg-bg px-3 py-2.5 flex items-center gap-2">
