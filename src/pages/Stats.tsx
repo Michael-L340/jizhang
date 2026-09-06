@@ -4,7 +4,7 @@ import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
-import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, isCredit, monthTotals, seriesByCategory, seriesTotals, type Unit } from '../lib/compute'
+import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, type Unit } from '../lib/compute'
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { gridTopFor, legendRows } from '../lib/chart'
@@ -19,7 +19,9 @@ const axisMoney = (v: number) => (Math.abs(v) >= 10000 ? `${+(v / 10000).toFixed
 export function Stats() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
-  const accounts = useActiveAccounts()
+  // 余额曲线只画资产账户：白条是欠款，用户不要它出现在曲线里，合计线也只算资产
+  const allAccounts = useActiveAccounts()
+  const accounts = useMemo(() => splitAccounts(allAccounts).assets, [allAccounts])
   const nav = useNavigate()
   // 月份和下钻是「这次在看什么」：切去流水核一笔再回来还在，隔几个小时再开就回本月
   const [ym, setYm] = useRecentState('jz_stats_ym', () => monthOf(today()))
@@ -247,14 +249,13 @@ export function Stats() {
       color: accounts.map((a) => accountColor(a.name)),
       grid: { ...common.grid, top: gridTopFor(legendRows(accounts.map((a) => a.name), chartW)) },
       legend: { data: accounts.map((a) => a.name), top: 0, width: chartW, itemWidth: 14, itemHeight: 8, itemGap: 10, textStyle: { fontSize: 11 } },
-      // 白条画虚线：京东和中国银行、拼多多和招行都是红色系，实线摆一起分不出谁是谁
       series: accounts.map((a) => ({
         name: a.name,
         type: 'line',
         smooth: true,
         showSymbol: keys.length <= 40,
         symbolSize: 6,
-        lineStyle: { width: 2, type: isCredit(a) ? 'dashed' : 'solid' },
+        lineStyle: { width: 2 },
         data: bal.byAccount[a.id].map((v) => v / 100),
       })),
     }

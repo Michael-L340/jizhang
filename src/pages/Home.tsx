@@ -25,7 +25,7 @@ export function Home() {
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
-  // 白条：总资产已经是净值（余额为负的白条算在里面），这里只补一行「待还 / 本月应还」
+  // 白条：大数字是净值（余额为负的白条算在里面），有欠款时标「净资产」，再补一行「待还 / 本月应还」
   const debt = debtOf(bal, credits)
   const dueTotal = useMemo(() => [...dueInMonth(txs, new Set(credits.map((c) => c.id)), ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
@@ -119,7 +119,7 @@ export function Home() {
 
       <div className="card p-4 mb-3">
         <div className="flex justify-between items-baseline">
-          <span className="text-xs text-muted">总资产</span>
+          <span className="text-xs text-muted">{debt > 0 ? '净资产' : '总资产'}</span>
           <Link to="/accounts" className="text-xs text-brand-ink">
             账户 ›
           </Link>
