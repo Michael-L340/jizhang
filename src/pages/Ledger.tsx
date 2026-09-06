@@ -1,14 +1,15 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
+import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
 import { TxRow } from '../components/TxRow'
-import { groupByDay, inMonth, monthSummary, monthTotals } from '../lib/compute'
+import { groupByDay, inMonth, monthSummary, monthTotals, splitAccounts } from '../lib/compute'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState } from '../lib/hooks'
-import { isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
+import { CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 
@@ -78,6 +79,10 @@ export function Ledger() {
     [catMap, accMap],
   )
 
+  // 账户筛选分两级：资产账户 + 「白条」，选到白条再展开四个平台（和记账页同一个样子）
+  const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
+  const creditIds = useMemo(() => new Set(credits.map((c) => c.id)), [credits])
+  const onCredit = accountId === CREDIT_ALL || creditIds.has(accountId)
   const roots = useMemo(() => cats.filter((c) => !c.parent_id && !c.is_archived).sort((a, b) => (a.kind === b.kind ? a.sort - b.sort : a.kind === 'expense' ? -1 : 1)), [cats])
 
   const list = useMemo(() => {
@@ -86,8 +91,8 @@ export function Ledger() {
       const c = catMap.get(id)
       return c ? (c.parent_id ?? c.id) : undefined
     }
-    return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, filter, rootOf))
-  }, [txs, ym, filter, catMap, searching, q, names])
+    return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, filter, rootOf, creditIds))
+  }, [txs, ym, filter, catMap, searching, q, names, creditIds])
 
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
@@ -255,7 +260,25 @@ export function Ledger() {
         <div className="text-xs text-muted mb-2">类型</div>
         <ChipGroup options={TYPE_OPTS} value={type} onChange={setType} className="mb-4" />
         <div className="text-xs text-muted mb-2">账户</div>
-        <ChipGroup options={[{ id: 'all', label: '全部' }, ...accounts.map((a) => ({ id: a.id, label: a.name })), { id: 'none', label: '未指定' }]} value={accountId} onChange={setAccountId} className="mb-4" />
+        <ChipGroup
+          options={[
+            { id: 'all', label: '全部' },
+            ...assets.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> })),
+            ...(credits.length ? [{ id: CREDIT_ALL, label: '白条', node: <AccountIcon name="白条" size={18} /> }] : []),
+            { id: 'none', label: '未指定' },
+          ]}
+          value={onCredit ? CREDIT_ALL : accountId}
+          onChange={setAccountId}
+          className={onCredit ? 'mb-2' : 'mb-4'}
+        />
+        {onCredit ? (
+          <ChipGroup
+            options={[{ id: CREDIT_ALL, label: '全部白条' }, ...credits.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> }))]}
+            value={accountId}
+            onChange={setAccountId}
+            className="mb-4 pl-2.5 border-l-2 border-brand"
+          />
+        ) : null}
         <div className="text-xs text-muted mb-2">分类</div>
         <ChipGroup options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: c.name, icon: c.icon })), { id: 'none', label: '未分类' }]} value={parentId} onChange={setParentId} className="mb-4" />
         <div className="flex gap-2">

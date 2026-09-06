@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
+import { CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
 import type { Transaction } from '../types'
 
 const rootOf = (id: string) => ({ p1: 'p1', c1: 'p1', c2: 'p2' } as Record<string, string>)[id]
@@ -50,6 +50,17 @@ describe('matchesFilter', () => {
     expect(matchesFilter(t, f({ accountId: 'a3' }), rootOf)).toBe(false)
     expect(matchesFilter(tx({ account_id: null }), f({ accountId: 'none' }), rootOf)).toBe(true)
     expect(matchesFilter(tx(), f({ accountId: 'none' }), rootOf)).toBe(false)
+  })
+
+  it('账户选「白条」：支出记在任一白条上、或还款转进任一白条的都算', () => {
+    const credits = new Set(['jd', 'hb'])
+    const c = f({ accountId: CREDIT_ALL })
+    expect(matchesFilter(tx({ account_id: 'jd' }), c, rootOf, credits)).toBe(true)
+    expect(matchesFilter(tx({ type: 'transfer', account_id: 'a1', to_account_id: 'hb', category_id: null }), c, rootOf, credits)).toBe(true)
+    expect(matchesFilter(tx({ account_id: 'a1' }), c, rootOf, credits)).toBe(false)
+    expect(matchesFilter(tx({ account_id: null }), c, rootOf, credits)).toBe(false)
+    // 没传白条集合就什么都不匹配，不会误把普通账户当白条
+    expect(matchesFilter(tx({ account_id: 'jd' }), c, rootOf)).toBe(false)
   })
 
   it('条件之间是「且」', () => {
