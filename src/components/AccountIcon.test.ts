@@ -64,12 +64,14 @@ describe('账户图标', () => {
     expect(accountColor('')).toMatch(/^#[0-9a-f]{6}$/i)
   })
 
-  it('白条平台各有各的颜色，「白条」两个字本身也认得出', () => {
-    const names = ['京东白条', '花呗', '拼多多', '美团月付', '白条']
-    const colors = names.map(accountColor)
-    expect(new Set(colors).size).toBe(5)
-    expect(brandOf('京东白条').path).toBe(brandOf('白条').path) // 同一张卡的形状
-    expect(brandOf('京东白条').path).not.toBe(brandOf('招商银行').path)
-    expect(brandOf('美团月付').fg).toBe('#1d1d1d') // 黄底上白标看不清，官方是黑标
+  it('白条平台：京东 / 拼多多 / 美团用官方位图，花呗自绘，「白条」两个字用通用卡片', () => {
+    expect(brandOf('京东白条').image).toMatch(/brand\/jd-v\d+\.png$/)
+    expect(brandOf('拼多多').image).toMatch(/brand\/pdd-v\d+\.png$/)
+    expect(brandOf('美团月付').image).toMatch(/brand\/meituan-v\d+\.png$/)
+    expect(typeof brandOf('花呗').render).toBe('function')
+    expect(brandOf('白条').image).toBeUndefined()
+    expect(brandOf('白条').path).toBe(BRANDS.GENERIC_CREDIT.path)
+    // 四家颜色（图表里的线和圆点用）各不相同
+    expect(new Set(['京东白条', '花呗', '拼多多', '美团月付'].map(accountColor)).size).toBe(4)
   })
 })

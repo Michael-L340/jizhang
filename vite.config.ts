@@ -20,7 +20,7 @@ export default defineConfig({
       // ★ 图标文件名带 -v2：图标不像 JS 那样自动带哈希，名字不变的话 Safari 会一直用缓存里那张，
       // 连「从主屏删掉再重新添加」都救不回来（实测：换成暖色图标后主屏还是蓝的）。
       // 以后再换图标，把后缀 +1，别原地覆盖。
-      includeAssets: ['favicon.ico', 'apple-touch-icon-180x180-v3.png'],
+      includeAssets: ['favicon.ico', 'apple-touch-icon-180x180-v3.png', 'brand/*.png'],
       manifest: {
         id: base,
         name: '记账',
