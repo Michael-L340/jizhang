@@ -4,10 +4,11 @@ import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
-import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, type Unit } from '../lib/compute'
+import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { gridTopFor, legendRows } from '../lib/chart'
+import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -85,6 +86,22 @@ export function Stats() {
   )
 
   const earliest = useMemo(() => firstFlowDate(txs), [txs])
+
+  /**
+   * 下钻之后点某个二级分类 → 跳到流水页，月份、收支、一级、二级都替用户筛好。
+   * 「未细分」和「未分类」在饼图里是拼出来的桶 id，得翻译成流水页认识的写法。
+   */
+  function gotoDetail(id: string) {
+    if (!drillAgg || !id) return
+    const p = new URLSearchParams({ ym, type: kind })
+    if (drillAgg.id === UNCATEGORIZED_ID) {
+      p.set('cat', 'none')
+    } else {
+      p.set('cat', drillAgg.id)
+      if (id !== drillAgg.id) p.set('sub', id === `${drillAgg.id}:none` ? CHILD_NONE : id)
+    }
+    nav(`/ledger?${p}`)
+  }
 
   /** 点图表某个点 → 跳到那个月（按日时再定位到那一天）的流水 */
   function gotoLedger(i: number) {
@@ -310,7 +327,7 @@ export function Stats() {
           <>
             <div className="relative mt-1">
               <Suspense fallback={<div style={{ height: 232 }} />}>
-                <Chart option={pieOption} height={232} onClick={(p) => !drilled && setDrill(agg[p.dataIndex]?.id ?? null)} />
+                <Chart option={pieOption} height={232} onClick={(p) => (drilled ? gotoDetail(pieRows[p.dataIndex]?.id ?? '') : setDrill(agg[p.dataIndex]?.id ?? null))} />
               </Suspense>
               <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
                 <div className="text-[11px] text-muted max-w-[46%] text-center leading-tight">
@@ -327,18 +344,18 @@ export function Stats() {
                   key={r.id}
                   type="button"
                   className="flex items-center gap-2.5 py-2 border-b border-line last:border-0 text-left"
-                  onClick={() => !drilled && setDrill(r.id)}
+                  onClick={() => (drilled ? gotoDetail(r.id) : setDrill(r.id))}
                 >
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: pieColors[i % pieColors.length] }} />
                   <span className="flex-1 min-w-0 truncate text-[15px]">{r.name}</span>
                   <span className="text-xs text-muted shrink-0">{r.count} 笔</span>
                   <span className="num text-xs text-muted w-9 text-right shrink-0">{pieTotal ? Math.round((r.amount / pieTotal) * 100) : 0}%</span>
                   <span className="num w-[88px] text-right shrink-0">{fmtYuan(r.amount)}</span>
-                  {!drilled ? <span className="text-muted text-xs shrink-0">›</span> : <span className="w-2" />}
+                  <span className="text-muted text-xs shrink-0">›</span>
                 </button>
               ))}
             </div>
-            {!drilled ? <div className="text-[11px] text-muted text-center mt-2">点任意一项查看二级分类</div> : null}
+            <div className="text-[11px] text-muted text-center mt-2">{drilled ? '点某一项，看是哪几笔' : '点任意一项查看二级分类'}</div>
           </>
         )}
       </div>

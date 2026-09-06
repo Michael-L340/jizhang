@@ -9,7 +9,7 @@ import { groupByDay, inMonth, monthSummary, monthTotals, splitAccounts } from '.
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState } from '../lib/hooks'
-import { CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
+import { CHILD_NONE, CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 
@@ -41,16 +41,25 @@ export function Ledger() {
   const scrolledFor = useRef<string | null>(null)
   const stickyRef = useRef<HTMLDivElement>(null)
 
-  // 从统计页跳过来时带着 ym / date
+  // 从统计页跳过来时带着 ym / date，点二级分类进来还带着 type / cat / sub
   useEffect(() => {
     const qYm = params.get('ym')
     const qDate = params.get('date')
+    const qCat = params.get('cat')
     // 没带参数就什么都不做：清空参数会让本 effect 再跑一次，
     // 那次不能把刚设好的状态冲掉
-    if (!qYm && !qDate) return
-    setYm(qDate ? monthOf(qDate) : (qYm as string))
-    setTarget(qDate)
-    scrolledFor.current = null
+    if (!qYm && !qDate && !qCat) return
+    if (qYm || qDate) {
+      setYm(qDate ? monthOf(qDate) : (qYm as string))
+      setTarget(qDate)
+      scrolledFor.current = null
+    }
+    if (qCat) {
+      // 搜索一开就无视月份，那样带过来的月份和分类会对不上，所以先关掉
+      setQ('')
+      setSearchOpen(false)
+      setFilter({ type: params.get('type') || 'all', accountId: 'all', parentId: qCat, childId: params.get('sub') || 'all' })
+    }
     setParams({}, { replace: true })
   }, [params, setParams])
   const [q, setQ] = useRecentState('jz_ledger_q', '')
@@ -59,10 +68,12 @@ export function Ledger() {
   // 所以一旦输入内容，月份就不参与过滤了，顶上的月份选择器也收起来。
   const searching = q.trim() !== ''
   const [filter, setFilter] = useRecentState<LedgerFilter>('jz_ledger_filter', NO_FILTER)
-  const { type, accountId, parentId } = filter
+  const { type, accountId, parentId, childId } = filter
   const setType = (type: string) => setFilter({ ...filter, type })
   const setAccountId = (accountId: string) => setFilter({ ...filter, accountId })
-  const setParentId = (parentId: string) => setFilter({ ...filter, parentId })
+  // 换一级分类就把二级清掉：上一个一级的二级挂在新一级下面是筛不出东西的
+  const setParentId = (parentId: string) => setFilter({ ...filter, parentId, childId: 'all' })
+  const setChildId = (childId: string) => setFilter({ ...filter, childId })
   const [open, setOpen] = useState(false)
 
   // 分类给「一级 · 二级」，两级都能搜到；账户给账户名。搜索模块自己不认识 store。
@@ -84,6 +95,11 @@ export function Ledger() {
   const creditIds = useMemo(() => new Set(credits.map((c) => c.id)), [credits])
   const onCredit = accountId === CREDIT_ALL || creditIds.has(accountId)
   const roots = useMemo(() => cats.filter((c) => !c.parent_id && !c.is_archived).sort((a, b) => (a.kind === b.kind ? a.sort - b.sort : a.kind === 'expense' ? -1 : 1)), [cats])
+  // 分类筛选也分两级：选了具体一级才展开它的二级（和账户里的白条同一个样子）
+  const children = useMemo(
+    () => (parentId === 'all' || parentId === 'none' ? [] : cats.filter((c) => c.parent_id === parentId && !c.is_archived).sort((a, b) => a.sort - b.sort)),
+    [cats, parentId],
+  )
 
   const list = useMemo(() => {
     const base = searching ? searchTx(txs, q, names) : txs
@@ -285,7 +301,25 @@ export function Ledger() {
           />
         ) : null}
         <div className="text-xs text-muted mb-2">分类</div>
-        <ChipGroup options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: c.name, icon: c.icon })), { id: 'none', label: '未分类' }]} value={parentId} onChange={setParentId} className="mb-4" />
+        <ChipGroup
+          options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: c.name, icon: c.icon })), { id: 'none', label: '未分类' }]}
+          value={parentId}
+          onChange={setParentId}
+          className={children.length ? 'mb-2' : 'mb-4'}
+        />
+        {children.length ? (
+          <ChipGroup
+            options={[
+              { id: 'all', label: '全部' },
+              ...children.map((c) => ({ id: c.id, label: c.name, icon: c.icon })),
+              // 直接记在一级上、没选二级的那几笔，统计页饼图里也叫这个名字
+              { id: CHILD_NONE, label: '未细分' },
+            ]}
+            value={childId ?? 'all'}
+            onChange={setChildId}
+            className="mb-4 pl-2.5 border-l-2 border-brand"
+          />
+        ) : null}
         <div className="flex gap-2">
           <button
             type="button"

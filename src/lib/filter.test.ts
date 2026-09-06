@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
+import { CHILD_NONE, CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
 import type { Transaction } from '../types'
 
 const rootOf = (id: string) => ({ p1: 'p1', c1: 'p1', c2: 'p2' } as Record<string, string>)[id]
@@ -42,6 +42,19 @@ describe('matchesFilter', () => {
     expect(matchesFilter(tx({ category_id: 'c1' }), none, rootOf)).toBe(false)
     expect(matchesFilter(tx({ type: 'transfer', category_id: null, to_account_id: 'a2' }), none, rootOf)).toBe(false)
     expect(matchesFilter(tx({ type: 'adjust', category_id: null }), none, rootOf)).toBe(false)
+    // 分类 id 查不到的孤儿记录也算未分类，和饼图的「未分类」块是同一批
+    expect(matchesFilter(tx({ category_id: 'gone' }), none, rootOf)).toBe(true)
+  })
+
+  it('二级分类：只挑那一个二级，「未细分」挑直接记在一级上的', () => {
+    expect(matchesFilter(tx({ category_id: 'c1' }), f({ parentId: 'p1', childId: 'c1' }), rootOf)).toBe(true)
+    expect(matchesFilter(tx({ category_id: 'p1' }), f({ parentId: 'p1', childId: 'c1' }), rootOf)).toBe(false)
+    expect(matchesFilter(tx({ category_id: 'p1' }), f({ parentId: 'p1', childId: CHILD_NONE }), rootOf)).toBe(true)
+    expect(matchesFilter(tx({ category_id: 'c1' }), f({ parentId: 'p1', childId: CHILD_NONE }), rootOf)).toBe(false)
+    // 没选一级时 childId 不生效；旧版本存下来的筛选没有这个字段，也不能把人挡光
+    expect(matchesFilter(tx({ category_id: 'c1' }), f({ childId: 'c2' }), rootOf)).toBe(true)
+    const old = { type: 'all', accountId: 'all', parentId: 'p1' } as LedgerFilter
+    expect(matchesFilter(tx({ category_id: 'c1' }), old, rootOf)).toBe(true)
   })
 
   it('账户：转入转出两边都算；「未指定」只挑没有账户的', () => {
