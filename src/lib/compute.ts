@@ -399,12 +399,14 @@ export function pickCategoryId(o: {
   current: string | null
   remembered?: string | null
   editing: boolean
+  /** 当前值和记忆值都用不了时，选列表第一个还是留空。留空 = 逼用户自己点一下 */
+  fallbackFirst?: boolean
 }): string | null {
   if (o.editing) return o.current
   const has = (id: string | null | undefined): id is string => !!id && o.options.some((c) => c.id === id)
   if (has(o.current)) return o.current
   if (has(o.remembered)) return o.remembered
-  return o.options[0]?.id ?? null
+  return o.fallbackFirst ? o.options[0]?.id ?? null : null
 }
 
 /**

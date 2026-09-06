@@ -650,18 +650,22 @@ describe('pickCategoryId 分类兜底', () => {
     expect(pickCategoryId({ options: opts, current: 'gone', remembered: 'fun', editing: false })).toBe('fun')
   })
 
-  it('当前值和记忆值都不在列表里 → 取第一个', () => {
-    expect(pickCategoryId({ options: opts, current: 'gone', remembered: 'alsoGone', editing: false })).toBe('food')
+  it('当前值和记忆值都用不了 → 默认留空，加了 fallbackFirst 才取第一个', () => {
+    // 分类每笔都要自己点（2026-09-06 的折中方案），留空 = 保存时会被拦下来提示
+    expect(pickCategoryId({ options: opts, current: 'gone', remembered: 'alsoGone', editing: false })).toBeNull()
+    expect(pickCategoryId({ options: opts, current: 'gone', remembered: 'alsoGone', editing: false, fallbackFirst: true })).toBe('food')
   })
 
-  it('当前值为空时记忆值优先于第一个', () => {
+  it('当前值为空时记忆值优先，没有记忆值就留空', () => {
     expect(pickCategoryId({ options: opts, current: null, remembered: 'fun', editing: false })).toBe('fun')
-    expect(pickCategoryId({ options: opts, current: null, remembered: null, editing: false })).toBe('food')
-    expect(pickCategoryId({ options: opts, current: null, editing: false })).toBe('food')
+    expect(pickCategoryId({ options: opts, current: null, remembered: null, editing: false })).toBeNull()
+    expect(pickCategoryId({ options: opts, current: null, editing: false })).toBeNull()
+    expect(pickCategoryId({ options: opts, current: null, editing: false, fallbackFirst: true })).toBe('food')
   })
 
   it('列表为空返回 null（分类还没加载出来时不要瞎猜）', () => {
     expect(pickCategoryId({ options: [], current: 'food', remembered: 'fun', editing: false })).toBeNull()
+    expect(pickCategoryId({ options: [], current: 'food', remembered: 'fun', editing: false, fallbackFirst: true })).toBeNull()
   })
 
   // ★ 这条是这次改动最要紧的一条 ★

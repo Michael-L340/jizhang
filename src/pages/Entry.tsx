@@ -127,9 +127,11 @@ export function Entry() {
   const [type, setType] = useState<TxType>(mem.type)
   const [amount, setAmount] = useState('')
   const [neg, setNeg] = useState(false)
-  const [parentId, setParentId] = useState<string | null>(mem.parentId)
-  const [childId, setChildId] = useState<string | null>(mem.parentId ? mem.childByParent[mem.parentId] ?? null : null)
-  const [incomeCatId, setIncomeCatId] = useState<string | null>(mem.incomeCatId)
+  // 分类每笔都从头选（用户 2026-09-06 定的折中：账户记着，分类不记）。
+  // 记住上次分类省两下点击，但连着记两笔不同的时很容易忘了改，就把午饭记成了早餐。
+  const [parentId, setParentId] = useState<string | null>(null)
+  const [childId, setChildId] = useState<string | null>(null)
+  const [incomeCatId, setIncomeCatId] = useState<string | null>(null)
   const [accountId, setAccountId] = useState<string | null>(mem.accountId === NO_ACCOUNT ? null : mem.accountId)
   const [accountTouched, setAccountTouched] = useState(mem.accountId === NO_ACCOUNT)
   const [fromId, setFromId] = useState<string | null>(mem.fromId)
@@ -246,25 +248,23 @@ export function Entry() {
   // 门挡的正是这种时序）。编辑一条用了已归档分类的旧账，分类必须原样留着。
   const isEdit = Boolean(editId)
   useEffect(() => {
-    const next = pickCategoryId({ options: parents, current: parentId, remembered: mem.parentId, editing: isEdit })
+    const next = pickCategoryId({ options: parents, current: parentId, editing: isEdit })
     if (next !== parentId) setParentId(next)
-  }, [parents, parentId, mem, isEdit])
+  }, [parents, parentId, isEdit])
   useEffect(() => {
-    const next = pickCategoryId({ options: incomeCats, current: incomeCatId, remembered: mem.incomeCatId, editing: isEdit })
+    const next = pickCategoryId({ options: incomeCats, current: incomeCatId, editing: isEdit })
     if (next !== incomeCatId) setIncomeCatId(next)
-  }, [incomeCats, incomeCatId, mem, isEdit])
+  }, [incomeCats, incomeCatId, isEdit])
   useEffect(() => {
-    const remembered = parentId ? mem.childByParent[parentId] ?? null : null
-    const next = pickCategoryId({ options: children, current: childId, remembered, editing: isEdit })
+    const next = pickCategoryId({ options: children, current: childId, editing: isEdit })
     if (next !== childId) setChildId(next)
-  }, [parentId, children, childId, mem, isEdit])
+  }, [parentId, children, childId, isEdit])
 
   function pickParent(id: string) {
+    if (id === parentId) return // 再点一次已选中的大类不该把二级重置掉
     setParentId(id)
     setAdding(false)
-    const remembered = mem.childByParent[id]
-    const kids = childOrderByUse(txs, cats, id)
-    setChildId(remembered && kids.some((c) => c.id === remembered) ? remembered : kids[0]?.id ?? null)
+    setChildId(null) // 二级也要自己点：这一步正是「别把午饭记成早餐」的关键
   }
 
   async function submitNewCategory() {
@@ -292,6 +292,7 @@ export function Entry() {
   function validate(): string | null {
     if (type !== 'adjust' && cents <= 0) return '请输入金额'
     if (type === 'expense' && !parentId) return '请选择用途'
+
     if (type === 'expense' && children.length > 0 && !childId) return '请选择二级分类'
     if (type === 'income' && !incomeCatId) return '请选择收入分类'
     if (type === 'transfer' && (!fromId || !toId)) return '请选择账户'
@@ -338,9 +339,10 @@ export function Entry() {
       const m: Memory = {
         type,
         accountId: accountId ?? NO_ACCOUNT,
-        parentId,
-        childByParent: { ...mem.childByParent, ...(parentId && childId ? { [parentId]: childId } : {}) },
-        incomeCatId,
+        parentId: null,
+        // 分类不再进记忆（折中方案），字段留着是为了旧数据能读进来不报错
+        childByParent: {},
+        incomeCatId: null,
         fromId,
         toId,
       }
