@@ -64,11 +64,12 @@ describe('账户图标', () => {
     expect(accountColor('')).toMatch(/^#[0-9a-f]{6}$/i)
   })
 
-  it('白条平台：京东 / 拼多多 / 美团用官方位图，花呗自绘，「白条」两个字用通用卡片', () => {
+  it('白条平台四家都用官方位图，「白条」两个字用通用卡片', () => {
     expect(brandOf('京东白条').image).toMatch(/brand\/jd-v\d+\.png$/)
     expect(brandOf('拼多多').image).toMatch(/brand\/pdd-v\d+\.png$/)
     expect(brandOf('美团月付').image).toMatch(/brand\/meituan-v\d+\.png$/)
-    expect(typeof brandOf('花呗').render).toBe('function')
+    expect(brandOf('花呗').image).toMatch(/brand\/huabei-v\d+\.png$/)
+    expect(brandOf('花呗').imageLight).toBe(true) // 白底标要加边
     expect(brandOf('白条').image).toBeUndefined()
     expect(brandOf('白条').path).toBe(BRANDS.GENERIC_CREDIT.path)
     // 四家颜色（图表里的线和圆点用）各不相同
