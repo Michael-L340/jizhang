@@ -118,9 +118,7 @@ export function Categories() {
                 >
                   <span className={`block font-medium truncate ${p.is_archived ? 'line-through opacity-50' : ''}`}>{p.name}</span>
                   <span className="block text-xs text-muted truncate">
-                    {hasChildren ? `${kids.length} 个二级 · ` : ''}
-                    {countOf(p)} 笔
-                    {p.note ? ` · ${p.note}` : ''}
+                    {[hasChildren ? `${kids.length} 个二级` : '', p.note ?? ''].filter(Boolean).join(' · ')}
                   </span>
                 </button>
                 {hasChildren ? (
