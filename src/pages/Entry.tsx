@@ -140,6 +140,17 @@ export function Entry() {
   const [inst, setInst] = useState('1')
   const [customInst, setCustomInst] = useState('')
   const [more, setMore] = useState(false)
+  // 选到白条后上面多了一排平台和一行分期，备注输入框会被挤到键盘下面，点开了也看不见。
+  // 展开时把它滚进视野并聚焦，直接能打字。
+  const noteRef = useRef<HTMLInputElement>(null)
+  useEffect(() => {
+    if (!more) return
+    const t = window.setTimeout(() => {
+      noteRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+      noteRef.current?.focus({ preventScroll: true })
+    }, 200) // 等展开动画（.expand 0.18s）走完再量位置
+    return () => window.clearTimeout(t)
+  }, [more])
   const [dateOpen, setDateOpen] = useState(false)
   const [adding, setAdding] = useState(false)
   const [newName, setNewName] = useState('')
@@ -518,7 +529,7 @@ export function Entry() {
         </div>
         <div className={`expand ${more ? 'open' : ''}`}>
           <div>
-            <input className="w-full rounded-xl bg-card border border-line px-3 py-2 mb-3" placeholder="备注（可不填）" value={note} onChange={(e) => setNote(e.target.value)} />
+            <input ref={noteRef} className="w-full rounded-xl bg-card border border-line px-3 py-2 mb-3" placeholder="备注（可不填）" value={note} onChange={(e) => setNote(e.target.value)} />
           </div>
         </div>
         <DatePicker
