@@ -70,5 +70,6 @@ describe('账户图标', () => {
     expect(new Set(colors).size).toBe(5)
     expect(brandOf('京东白条').path).toBe(brandOf('白条').path) // 同一张卡的形状
     expect(brandOf('京东白条').path).not.toBe(brandOf('招商银行').path)
+    expect(brandOf('美团月付').fg).toBe('#1d1d1d') // 黄底上白标看不清，官方是黑标
   })
 })

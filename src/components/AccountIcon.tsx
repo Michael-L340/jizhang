@@ -28,6 +28,8 @@ interface Brand {
   path: string
   /** 标记相对整个图标的占比。四个品牌都在 0.58~0.6，看起来才一样大 */
   scale: number
+  /** 标记本身的颜色。默认 brand 底板上是白色；美团黄底配白字看不清，官方就是黑标 */
+  fg?: string
 }
 
 const WECHAT: Brand = { color: '#07C160', plate: 'brand', scale: 0.6, viewBox: '0 0 24 24', path: 'M8.691 2.188C3.891 2.188 0 5.476 0 9.53c0 2.212 1.17 4.203 3.002 5.55a.59.59 0 0 1 .213.665l-.39 1.48c-.019.07-.048.141-.048.213 0 .163.13.295.29.295a.326.326 0 0 0 .167-.054l1.903-1.114a.864.864 0 0 1 .717-.098 10.16 10.16 0 0 0 2.837.403c.276 0 .543-.027.811-.05-.857-2.578.157-4.972 1.932-6.446 1.703-1.415 3.882-1.98 5.853-1.838-.576-3.583-4.196-6.348-8.596-6.348zM5.785 5.991c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178A1.17 1.17 0 0 1 4.623 7.17c0-.651.52-1.18 1.162-1.18zm5.813 0c.642 0 1.162.529 1.162 1.18a1.17 1.17 0 0 1-1.162 1.178 1.17 1.17 0 0 1-1.162-1.178c0-.651.52-1.18 1.162-1.18zm5.34 2.867c-1.797-.052-3.746.512-5.28 1.786-1.72 1.428-2.687 3.72-1.78 6.22.942 2.453 3.666 4.229 6.884 4.229.826 0 1.622-.12 2.361-.336a.722.722 0 0 1 .598.082l1.584.926a.272.272 0 0 0 .14.047c.134 0 .24-.111.24-.247 0-.06-.023-.12-.038-.177l-.327-1.233a.582.582 0 0 1-.023-.156.49.49 0 0 1 .201-.398C23.024 18.48 24 16.82 24 14.98c0-3.21-2.931-5.837-6.656-6.088V8.89c-.135-.01-.27-.027-.407-.03zm-2.53 3.274c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.97-.982zm4.844 0c.535 0 .969.44.969.982a.976.976 0 0 1-.969.983.976.976 0 0 1-.969-.983c0-.542.434-.982.969-.982z' }
@@ -51,6 +53,10 @@ const GENERIC_WALLET: Brand = {
   path: 'M4 6h13a2 2 0 0 1 2 2v1h-2.5a3 3 0 0 0 0 6H21v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm12.5 5H22v2h-5.5a1 1 0 0 1 0-2Z',
 }
 
+// 美团 —— simple-icons（CC0）的「美团」方标：黄底黑标，和它的 App 图标一致。
+// 用户 2026-09-06 选定实心版；京东 / 拼多多 / 花呗另找。
+const MEITUAN: Brand = { color: '#ffc300', plate: 'brand', scale: 0.6, fg: '#1d1d1d', viewBox: '0 0 24 24', path: 'M6.923 0c-2.408 0-3.28.25-4.16.721A4.906 4.907 0 0 0 .722 2.763C.25 3.643 0 4.516 0 6.923v10.154c0 2.407.25 3.28.72 4.16a4.9 4.9 0 0 0 2.042 2.042c.88.47 1.752.721 4.16.721h10.156c2.407 0 3.28-.25 4.16-.721a4.906 4.907 0 0 0 2.04-2.042c.471-.88.722-1.753.722-4.16V6.923c0-2.407-.25-3.28-.722-4.16A4.906 4.907 0 0 0 21.238.72C20.357.251 19.484 0 17.077 0ZM4.17 7.51h1.084c.04.24.07.488.11.737h3.47c.05-.25.08-.497.1-.736h1.105a10 10 0 0 1-.09.736h1.562v.866H7.62v.696h3.642v.855h-3.64v.667h3.64v.854h-3.64v.816h3.89v.865H7.88c.775.935 2.218 1.532 3.78 1.651l-.538.936c-1.442-.17-3.103-.846-4.028-2.04c-.856 1.194-2.487 1.92-4.525 2.07l.318-1.005c1.382-.02 2.814-.736 3.431-1.612h-3.62v-.865h3.86v-.816h-3.64v-.854h3.64v-.667h-3.64v-.855h3.64v-.697H2.7v-.866h1.56zm8.603.182h7.976c.358 0 .567.198.567.547v8.146H13.33c-.358 0-.557-.199-.557-.547zm1.044.885V15.5h6.455V8.577Zm3.999.476h1.024v.756h.975v.835h-.975V13c0 .806-.1 1.402-.318 2.02h-1.113c.338-.717.408-1.224.408-1.99v-2.387h-.935c-.14 1.541-.736 3.451-1.363 4.376h-1.134c.607-.855 1.303-2.526 1.472-4.376h-1.512v-.835h3.472z' }
+
 // 白条 / 先用后付：统一用一张卡的形状，只换平台色。两段矩形中间留一道空隙当磁条，
 // 用底色透出来，不用第二种颜色。
 const GENERIC_CREDIT: Brand = {
@@ -62,7 +68,7 @@ const GENERIC_CREDIT: Brand = {
 }
 
 /** 全部品牌，供测试逐个检查形状与大小是否统一 */
-export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, GENERIC_BANK, GENERIC_WALLET, GENERIC_CREDIT }
+export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, MEITUAN, GENERIC_BANK, GENERIC_WALLET, GENERIC_CREDIT }
 
 export function brandOf(name: string): Brand {
   const n = name.trim()
@@ -79,7 +85,7 @@ export function brandOf(name: string): Brand {
   if (n.includes('京东')) return { ...GENERIC_CREDIT, color: '#c8161d' }
   if (n.includes('花呗') || n.includes('淘宝')) return { ...GENERIC_CREDIT, color: '#4a90e2' }
   if (n.includes('拼多多')) return { ...GENERIC_CREDIT, color: '#e8432e' }
-  if (n.includes('美团')) return { ...GENERIC_CREDIT, color: '#e6a100' }
+  if (n.includes('美团')) return MEITUAN
   if (n.includes('白条') || n.includes('分期') || n.includes('月付') || n.includes('先用后付')) return GENERIC_CREDIT
   if (n.includes('银行') || n.includes('卡') || n.includes('信用')) return GENERIC_BANK
   if (n.includes('现金')) return { ...GENERIC_WALLET, color: '#f5a524' }
@@ -103,7 +109,7 @@ export function AccountIcon({ name, size = 40 }: Props) {
       }}
       aria-hidden
     >
-      <svg width={inner} height={inner} viewBox={b.viewBox} fill={light ? b.color : '#fff'} xmlns="http://www.w3.org/2000/svg">
+      <svg width={inner} height={inner} viewBox={b.viewBox} fill={light ? b.color : b.fg ?? '#fff'} xmlns="http://www.w3.org/2000/svg">
         <path d={b.path} />
       </svg>
     </span>
