@@ -22,8 +22,10 @@ interface Props {
 interface Brand {
   /** 品牌色。图表里的线和圆点也用它 */
   color: string
-  /** brand = 品牌色底 + 白色标；light = 白底 + 品牌色标 */
+  /** brand = 品牌色底 + 白色标；light = 浅底 + 品牌色标 */
   plate: 'brand' | 'light'
+  /** light 底板的底色，默认白。白条分组用 App 的浅焦糖 */
+  plateColor?: string
   viewBox: string
   path: string
   /** 标记相对整个图标的占比。四个品牌都在 0.58~0.6，看起来才一样大 */
@@ -40,7 +42,8 @@ interface Brand {
 // 用户 2026-09-06 看过之后要的是主屏上那个样子。文件名带 -vN，换图时改名，不然 Safari 会用旧缓存。
 // 路径要带 BASE_URL：GitHub Pages 部署在 /jizhang/ 子目录下。
 const brandImg = (file: string) => `${import.meta.env.BASE_URL}brand/${file}`
-const JD: Brand = { color: '#e1251b', plate: 'brand', scale: 1, viewBox: '0 0 1 1', path: '', image: brandImg('jd-v1.png') }
+// 京东那张官方图标带着「酒店」角标、飞机和行李箱，裁到只剩狗脸（-v2）
+const JD: Brand = { color: '#e1251b', plate: 'brand', scale: 1, viewBox: '0 0 1 1', path: '', image: brandImg('jd-v2.png') }
 const PDD: Brand = { color: '#e02e24', plate: 'brand', scale: 1, viewBox: '0 0 1 1', path: '', image: brandImg('pdd-v1.png') }
 const MEITUAN_APP: Brand = { color: '#ffc300', plate: 'brand', scale: 1, viewBox: '0 0 1 1', path: '', image: brandImg('meituan-v1.png') }
 // 花呗没有独立 App，用户 2026-09-06 找来的官方标（白底蓝球）裁成方图，显示时裁圆
@@ -67,12 +70,14 @@ const GENERIC_WALLET: Brand = {
   path: 'M4 6h13a2 2 0 0 1 2 2v1h-2.5a3 3 0 0 0 0 6H21v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm12.5 5H22v2h-5.5a1 1 0 0 1 0-2Z',
 }
 
-// 白条 / 先用后付：统一用一张卡的形状，只换平台色。两段矩形中间留一道空隙当磁条，
-// 用底色透出来，不用第二种颜色。
+// 「白条」分组 / 认不出平台的先用后付：一张卡的形状，两段矩形中间留一道空隙当磁条。
+// 浅焦糖底 + 焦糖色卡（用户 2026-09-06 定：形状选卡片、颜色学浅底深字），
+// 和四家平台的彩色官方图标并排时它退后一步，像个分组而不是第五个平台。
 const GENERIC_CREDIT: Brand = {
   color: '#8a6026',
-  plate: 'brand',
-  scale: 0.56,
+  plate: 'light',
+  plateColor: '#fdf2e4',
+  scale: 0.72,
   viewBox: '0 0 24 24',
   path: 'M2 6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.5H2V6Zm0 4.5h20V18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7.5Zm3 4h6v1.8H5v-1.8Z',
 }
@@ -124,7 +129,7 @@ export function AccountIcon({ name, size = 40 }: Props) {
       style={{
         width: size,
         height: size,
-        background: light ? '#fff' : b.color,
+        background: light ? (b.plateColor ?? '#fff') : b.color,
         borderRadius: '50%',
         // 白底在白卡片上会糊成一片，加一道极淡的边把轮廓交代清楚
         boxShadow: light ? 'inset 0 0 0 1px rgba(0,0,0,.09)' : undefined,
