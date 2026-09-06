@@ -173,6 +173,25 @@ export function Settings() {
     }
   }
 
+  const cachePct = Math.min(100, Math.round((cacheBytes / CACHE_LIMIT_BYTES) * 100))
+  const cacheWarn = cacheDegraded || cacheBytes > CACHE_WARN_BYTES
+  const backupTone = !backupChecked || backupFailed || health === 'none' ? 'muted' : health === 'stale' ? 'warn' : 'ok'
+  const backupText = !backupChecked ? '读取中…' : backupFailed ? '读不到' : health === 'ok' ? '正常' : health === 'stale' ? '好像停了' : '未启用'
+  // 状态卡下面那一行：有问题说问题，没问题就报一句上次备份
+  const statusNote = syncFailed
+    ? '最近一次同步失败，点「同步」再试。'
+    : backupChecked && backupFailed
+      ? '读不到备份状态：网络不通或登录过期，点「同步」试试。'
+      : cacheDegraded
+        ? `缓存已满（${fmtBytes(cacheBytes)}），离线时看到的可能是旧数据，云端不受影响。`
+        : cacheWarn
+          ? `缓存快满了（${fmtBytes(cacheBytes)}），没网时看到的可能是旧账本，云端不受影响。`
+          : backupChecked
+            ? backupLine(backup, nowIso())
+            : ''
+  const [accOpen, setAccOpen] = useState(false)
+  const assetsCount = accounts.filter((a) => a.kind !== 'credit').length
+
   return (
     <div className="px-4 pb-8">
       <div className="flex items-center justify-between pt-4 pb-3">
@@ -182,104 +201,55 @@ export function Settings() {
         </button>
       </div>
 
-      <Section title="分类与账户">
-        <Nav
-          label="分类管理"
-          hint={`${stat.expenseRoots} 个支出大类 · ${stat.children} 个二级 · ${stat.incomeRoots} 个收入分类`}
-          onClick={() => nav('/categories')}
-        />
-        <div className="py-3 border-b border-line last:border-0">
-          <div className="text-sm mb-2">账户</div>
-          <div className="flex flex-col gap-1">
-            {accounts
-              .slice()
-              .sort((a, b) => a.sort - b.sort)
-              .map((a) => (
-                <button
-                  key={a.id}
-                  type="button"
-                  className="flex items-center gap-2.5 py-1.5 text-left"
-                  onClick={async () => {
-                    const name = window.prompt('账户名称', a.name)?.trim()
-                    if (name && name !== a.name) await updateAccount(a.id, { name })
-                  }}
-                >
-                  <AccountIcon name={a.name} size={26} />
-                  <span className="flex-1 text-[15px]">{a.name}</span>
-                  <span className="text-xs text-muted">改名</span>
-                </button>
-              ))}
+      {/* 状态卡：同步 / 备份 / 缓存 三格并排，一眼看健康度。细节只在出问题时才展开成一句话。 */}
+      <div className="card p-3 mb-3">
+        <div className="grid grid-cols-3 gap-1.5">
+          <button type="button" className="rounded-xl bg-bg px-2.5 py-2 text-left" onClick={() => void refresh()}>
+            <span className="block text-[10.5px] text-muted">同步</span>
+            <span className={`block text-[13px] font-semibold ${syncFailed ? 'text-expense' : ''}`}>
+              <Dot tone={syncing ? 'muted' : syncFailed ? 'bad' : lastSync ? 'ok' : 'muted'} />
+              {syncing ? '同步中…' : syncFailed ? '失败' : lastSync ? fmtIsoZh(lastSync) : '尚未'}
+            </span>
+          </button>
+          <div className="rounded-xl bg-bg px-2.5 py-2">
+            <span className="block text-[10.5px] text-muted">自动备份</span>
+            <span className={`block text-[13px] font-semibold ${backupTone === 'warn' ? 'text-adjust' : ''}`}>
+              <Dot tone={backupTone === 'ok' ? 'ok' : backupTone === 'warn' ? 'warn' : 'muted'} />
+              {backupText}
+            </span>
+          </div>
+          <div className="rounded-xl bg-bg px-2.5 py-2">
+            <span className="block text-[10.5px] text-muted">本机缓存</span>
+            <span className={`block num text-[13px] font-semibold ${cacheWarn ? 'text-expense' : ''}`}>{cachePct}%</span>
+            <span className="block h-1 rounded-full bg-line overflow-hidden mt-1">
+              <span className="block h-full rounded-full" style={{ width: `${cachePct}%`, background: cacheDegraded ? 'var(--color-expense)' : cacheWarn ? 'var(--color-adjust)' : 'var(--color-brand-ink)' }} />
+            </span>
           </div>
         </div>
-      </Section>
+        {statusNote ? <div className={`text-[11px] mt-2 ${syncFailed || cacheWarn || (backupChecked && backupFailed) ? 'text-expense' : backupTone === 'warn' ? 'text-adjust' : 'text-muted'}`}>{statusNote}</div> : null}
+      </div>
 
-      <Section title="数据">
-        <Row
-          label={`${lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}${syncFailed ? ' · 最近一次失败' : ''}`}
-          action={syncing ? '同步中…' : '立即同步'}
-          onClick={() => void refresh()}
-          danger={syncFailed}
-        />
-        <div className="py-3 border-b border-line last:border-0">
-          <div className="flex items-center justify-between text-sm">
-            <span>每天自动备份</span>
-            <span className={`text-xs ${!backupChecked || backupFailed || health === 'none' ? 'text-muted' : health === 'stale' ? 'text-adjust' : 'text-income'}`}>
-              {!backupChecked ? '读取中…' : backupFailed ? '读不到' : health === 'ok' ? '正常' : health === 'stale' ? '好像停了' : '未启用'}
-            </span>
-          </div>
-          <div className={`text-xs mt-1.5 ${backupChecked && !backupFailed && health === 'stale' ? 'text-adjust' : 'text-muted'}`}>
-            {!backupChecked
-              ? '正在读取备份状态…'
-              : backupFailed
-                ? '读不到备份状态：网络不通或登录过期，先点上面的「立即同步」试试。'
-                : backupLine(backup, nowIso())}
-          </div>
-        </div>
-        <div className="py-3 border-b border-line last:border-0">
-          <div className="flex items-center justify-between text-sm">
-            <span>本机缓存</span>
-            <span className="num text-muted">
-              {fmtBytes(cacheBytes)} / {fmtBytes(CACHE_LIMIT_BYTES)}
-            </span>
-          </div>
-          <div className="mt-2 h-1.5 rounded-full bg-bg overflow-hidden">
-            <div
-              className="h-full rounded-full"
-              style={{
-                width: `${Math.min(100, Math.round((cacheBytes / CACHE_LIMIT_BYTES) * 100))}%`,
-                background: cacheDegraded ? 'var(--color-expense)' : cacheBytes > CACHE_WARN_BYTES ? 'var(--color-adjust)' : 'var(--color-brand-ink)',
-              }}
-            />
-          </div>
-          <div className={`text-xs mt-1.5 ${cacheDegraded || cacheBytes > CACHE_WARN_BYTES ? 'text-expense' : 'text-muted'}`}>
-            {cacheDegraded
-              ? '缓存已满，离线时看到的可能是旧数据。云端数据不受影响，请告诉我处理。'
-              : cacheBytes > CACHE_WARN_BYTES
-                ? '缓存快满了，没网时看到的可能是旧账本。云端数据不受影响，请告诉我处理。'
-                : '缓存是为了打开快和离线可看，写满后会提示。'}
-          </div>
-          <div className="text-xs text-muted mt-1">共 {transactions.length} 条记录</div>
-        </div>
-        {trustworthy ? null : (
-          <div className="text-xs text-expense leading-relaxed py-2 border-b border-line last:border-0">
-            这次打开 App 后还没成功同步过，现在导出的是本机缓存，可能不是最新的。建议先点上面的「立即同步」。
-          </div>
-        )}
-        <Row label="导出 CSV（Excel 可打开）" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
-        <Row label={`导出 JSON ${trustworthy ? '完整备份' : '备份（会标记为「未同步」）'}`} action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
-        <Row label="从备份合并导入（同 ID 覆盖，不删数据）" action={busy === 'import' ? '…' : '选择文件'} onClick={() => pickFile('merge')} />
-        <Row label="整库恢复（先清空，再按备份重建）" action={busy === 'import' ? '…' : '选择文件'} danger onClick={() => pickFile('restore')} />
-        {importErr ? <div className="text-xs text-expense leading-relaxed py-2 border-b border-line last:border-0">{importErr}</div> : null}
-        <div className="text-xs text-muted leading-relaxed py-2">
-          换了新的数据库、或者想回到备份那一刻的样子，用「整库恢复」。只是想把误删的几笔找回来，用「合并导入」——它不会删掉备份之后新记的账。
-        </div>
+      <Group title="分类与账户">
+        <Item icon="🏷️" label="分类管理" hint={`${stat.expenseRoots} 个支出大类 · ${stat.children} 个二级 · ${stat.incomeRoots} 个收入分类`} onClick={() => nav('/categories')} />
+        <Item icon="💳" label="账户" hint={`${assetsCount} 个资产 · ${accounts.length - assetsCount} 个白条 · 点进去改名`} onClick={() => setAccOpen(true)} />
+      </Group>
+
+      <Group title="备份与恢复">
+        {trustworthy ? null : <div className="text-xs text-expense leading-relaxed py-2 border-b border-line">这次打开 App 后还没成功同步过，现在导出的是本机缓存，可能不是最新的。建议先点上面的「同步」。</div>}
+        <Item icon="📤" label="导出 CSV" hint="Excel 可打开" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
+        <Item icon="🗂️" label="导出 JSON 备份" hint={trustworthy ? '完整备份，可用于恢复' : '会标记为「未同步」'} action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
+        <Item icon="📥" label="合并导入" hint="找回误删的几笔，不删现有数据" action={busy === 'import' ? '…' : '选文件'} onClick={() => pickFile('merge')} />
+        <Item icon="♻️" label="整库恢复" hint="先清空，再按备份文件重建" action={busy === 'import' ? '…' : '选文件'} danger onClick={() => pickFile('restore')} />
+        {importErr ? <div className="text-xs text-expense leading-relaxed py-2">{importErr}</div> : null}
         <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
-      </Section>
+      </Group>
 
-      <Section title="账号与版本">
-        <Row label="修改密码" action="修改" onClick={() => setPwOpen(true)} />
-        <Row
+      <Group title="账号">
+        <Item icon="🔑" label="修改密码" onClick={() => setPwOpen(true)} />
+        <Item
+          icon="🔄"
           label="检查更新"
+          hint={`当前版本 ${__APP_VERSION__}`}
           action={busy === 'upd' ? '检查中…' : '检查'}
           onClick={async () => {
             setBusy('upd')
@@ -288,8 +258,10 @@ export function Settings() {
             showToast(r === 'unsupported' ? '此浏览器不支持自动更新' : '已检查：若有新版本，顶部会出现更新条')
           }}
         />
-        <Row
-          label="强制刷新（拿最新版本）"
+        <Item
+          icon="🧹"
+          label="强制刷新"
+          hint="清空程序缓存重新加载，账本不受影响"
           action="刷新"
           onClick={async () => {
             if (!window.confirm('清空程序缓存并重新加载？需要联网，账本数据和登录状态不受影响。')) return
@@ -301,8 +273,10 @@ export function Settings() {
             }
           }}
         />
-        <Row
+        <Item
+          icon="🚪"
           label="退出登录"
+          hint="本机缓存会清除，云端不受影响"
           action="退出"
           danger
           onClick={async () => {
@@ -312,8 +286,30 @@ export function Settings() {
             }
           }}
         />
-        <div className="text-xs text-muted py-2">版本 {__APP_VERSION__}</div>
-      </Section>
+      </Group>
+
+      <Sheet open={accOpen} onClose={() => setAccOpen(false)} title="账户 · 点一个改名">
+        <div className="flex flex-col">
+          {accounts
+            .slice()
+            .sort((a, b) => a.sort - b.sort)
+            .map((a) => (
+              <button
+                key={a.id}
+                type="button"
+                className="flex items-center gap-3 py-2.5 text-left border-t border-line first:border-t-0"
+                onClick={async () => {
+                  const name = window.prompt('账户名称', a.name)?.trim()
+                  if (name && name !== a.name) await updateAccount(a.id, { name })
+                }}
+              >
+                <AccountIcon name={a.name} size={30} />
+                <span className="flex-1 text-[15px]">{a.name}</span>
+                <span className="text-xs text-muted">{a.kind === 'credit' ? '白条 · ' : ''}改名</span>
+              </button>
+            ))}
+        </div>
+      </Sheet>
 
       <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">
         <input
@@ -354,34 +350,30 @@ function fmtBytes(n: number): string {
   return `${(n / 1024 / 1024).toFixed(2)} MB`
 }
 
-function Section(props: { title: string; children: React.ReactNode }) {
+function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' | 'muted' }) {
+  const bg = tone === 'ok' ? 'var(--color-income)' : tone === 'warn' ? 'var(--color-adjust)' : tone === 'bad' ? 'var(--color-expense)' : 'var(--color-muted)'
+  return <span className="inline-block w-1.5 h-1.5 rounded-full mr-1 align-[1px]" style={{ background: bg }} />
+}
+
+function Group(props: { title: string; children: React.ReactNode }) {
   return (
-    <div className="card px-4 py-2 mb-3">
-      <div className="py-2 text-xs text-muted">{props.title}</div>
-      {props.children}
+    <div className="mb-3">
+      <div className="text-[11px] text-muted px-1 mb-1.5 tracking-wide">{props.title}</div>
+      <div className="card px-4">{props.children}</div>
     </div>
   )
 }
 
-function Nav({ label, hint, onClick }: { label: string; hint?: string; onClick: () => void }) {
+/** 一行：小图标 + 标题/说明 + 右侧动作文字（没有 action 就是 › ）。整行可点。 */
+function Item(props: { icon: string; label: string; hint?: string; action?: string; danger?: boolean; onClick: () => void }) {
   return (
-    <button type="button" className="w-full flex items-center gap-3 py-3 border-b border-line last:border-0 text-left" onClick={onClick}>
+    <button type="button" className="w-full flex items-center gap-3 py-3 border-b border-line last:border-0 text-left" onClick={props.onClick}>
+      <span className="w-7 h-7 rounded-lg bg-brand-soft flex items-center justify-center text-[15px] shrink-0">{props.icon}</span>
       <span className="flex-1 min-w-0">
-        <span className="block text-[15px]">{label}</span>
-        {hint ? <span className="block text-xs text-muted truncate">{hint}</span> : null}
+        <span className={`block text-[15px] ${props.danger ? 'text-expense' : ''}`}>{props.label}</span>
+        {props.hint ? <span className="block text-xs text-muted truncate">{props.hint}</span> : null}
       </span>
-      <span className="text-muted">›</span>
+      <span className={`text-sm shrink-0 ${props.action ? (props.danger ? 'text-expense' : 'text-brand-ink') : 'text-muted'}`}>{props.action ?? '›'}</span>
     </button>
-  )
-}
-
-function Row(props: { label: string; action: string; onClick: () => void; danger?: boolean }) {
-  return (
-    <div className="flex items-center justify-between py-3 border-b border-line last:border-0">
-      <span className="text-sm">{props.label}</span>
-      <button type="button" className={`text-sm ${props.danger ? 'text-expense' : 'text-brand-ink'}`} onClick={props.onClick}>
-        {props.action}
-      </button>
-    </div>
   )
 }
