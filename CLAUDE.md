@@ -52,7 +52,7 @@ bug 修复类固定四段，`git log` 扫一眼就知道该回退到哪一条：
 |---|---|
 | `src/lib/api.ts` | `ACC_COLS` / `CAT_COLS` / `TX_COLS` |
 | `src/lib/csv.ts` + `src/lib/validate.ts` | 导出格式 `ExportFile`、校验规则 `readAccount` / `readCategory` / `readTransaction` |
-| `jizhang-backup/backup.mjs` | `SELECT_ACC` / `SELECT_CAT` / `SELECT_TX` |
+| `jizhang-backup/backup.mjs` | `SELECT_ACC` / `SELECT_CAT` / `SELECT_TX`，**以及** `toAccount` / `toCategory` / `toTransaction`（逐字段构造，SELECT 拉到了这里没写照样丢；2026-09-06 加 `installments` 时真漏过） |
 
 加一列（比如计划中的「微信/支付宝交易单号」）时三处一起改，顺序：先跑 migration → 改 `backup.mjs` → 改 `validate.ts`/`csv.ts`/`api.ts`。
 
