@@ -355,6 +355,21 @@ export function Stats() {
                 </button>
               ))}
             </div>
+            {/* 下钻之后多一个出口：不挑二级，直接看这个大类的全部流水。
+                放在二级列表末尾而不是做成一级列表里的第二个热区——「点一级 = 看二级」
+                这条规则不该再叠第二层含义，行尾也挤不下第二个够大的点击区。 */}
+            {drillAgg ? (
+              <button
+                type="button"
+                className="w-full flex items-center gap-2 mt-1 pt-2.5 border-t border-line text-left text-[13px] text-muted"
+                onClick={() => gotoDetail(drillAgg.id)}
+              >
+                <span className="flex-1 min-w-0 truncate">
+                  不分二级，查看「{drillAgg.name}」全部 {drillAgg.count} 笔
+                </span>
+                <span className="shrink-0">›</span>
+              </button>
+            ) : null}
             <div className="text-[11px] text-muted text-center mt-2">{drilled ? '点某一项，看是哪几笔' : '点任意一项查看二级分类'}</div>
           </>
         )}
