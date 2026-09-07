@@ -1,3 +1,5 @@
+/// <reference types="node" />
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { categoryColor, childColors, childShade, hexToHsl } from './palette'
 
@@ -11,6 +13,20 @@ function dist(a: string, b: string): number {
 /** 现行的五个一级支出色，下面的不变量都要在它们身上成立 */
 const ROOTS = ['#c7820a', '#408632', '#17979b', '#7051d6', '#c62f85']
 const EXPENSE_ROOTS = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支']
+
+/**
+ * 主题色一律从 index.css 的 @theme 现读，不要在这里抄一份。
+ * 2026-09-06 就是抄错的：主题 09-05 换成暖色之后，这条测试还守着旧的冷色
+ * #e5484d / #1f9d55 / #2f6fed，守了半天守的是三个已经不存在的颜色。
+ */
+function themeColor(token: string): string {
+  // 试过 Vite 的 `?raw` 导入，在这个项目里拿到的是空字符串——
+  // Tailwind 的插件把 .css 的导入接管了。单测跑在 node 里，直接读文件最稳。
+  const css = readFileSync(new URL('../index.css', import.meta.url), 'utf8')
+  const m = css.match(new RegExp(`--color-${token}:\\s*(#[0-9a-fA-F]{6})`))
+  if (!m) throw new Error(`index.css 里找不到 --color-${token}`)
+  return m[1]
+}
 
 describe('二级分类配色', () => {
   it('每个都是合法的 6 位十六进制', () => {
@@ -106,8 +122,13 @@ describe('一级支出分类的配色约束', () => {
     }
   })
 
-  it('避开三个已经有含义的颜色：支出红、收入绿、品牌蓝', () => {
-    const TAKEN: Record<string, string> = { 支出红: '#e5484d', 收入绿: '#1f9d55', 品牌蓝: '#2f6fed' }
+  it('避开两个数据语义色：支出色和收入色', () => {
+    // 品牌色不在这条约束里，有两个原因：
+    // 一、它只出现在按钮底色和选中的胶囊上，从不给数据上色，撞色相不会产生
+    //     「同一屏里一个颜色两种含义」——那正是把「意外开支」从支出色挪走的理由。
+    // 二、五个色相 72° 等分时，支出(6°)、收入(137°)、品牌(33°) 三个位置
+    //     不可能同时让开 20° 以上，实测最好的旋转也只有 16°。
+    const TAKEN: Record<string, string> = { 支出色: themeColor('expense'), 收入色: themeColor('income') }
     for (const name of EXPENSE_ROOTS) {
       const c = categoryColor(name)
       for (const [what, hex] of Object.entries(TAKEN)) {
