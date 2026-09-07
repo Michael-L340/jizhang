@@ -345,8 +345,8 @@ export function Stats() {
                 >
                   <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: pieColors[i % pieColors.length] }} />
                   <span className="flex-1 min-w-0 truncate text-[15px]">{r.name}</span>
-                  <span className="text-xs text-muted shrink-0">{r.count} 笔</span>
-                  <span className="num text-xs text-muted w-9 text-right shrink-0">{pieTotal ? Math.round((r.amount / pieTotal) * 100) : 0}%</span>
+                  {/* 笔数用户说不需要（分类管理页同理）。占比居中，让名字和金额各占一边 */}
+                  <span className="num text-xs text-muted w-11 text-center shrink-0">{pieTotal ? Math.round((r.amount / pieTotal) * 100) : 0}%</span>
                   <span className="num w-[88px] text-right shrink-0">{fmtYuan(r.amount)}</span>
                   <span className="text-muted text-xs shrink-0">›</span>
                 </button>
