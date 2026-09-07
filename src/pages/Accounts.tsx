@@ -3,9 +3,9 @@ import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
-import { activePlans, balances, balanceShares, debtOf, dueInMonth, monthByAccount, splitAccounts, totalOf } from '../lib/compute'
+import { activePlans, balances, balanceShares, debtOf, dueInMonth, monthByAccount, splitAccounts } from '../lib/compute'
 import { fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
-import { useCategoryMap, usePersistedState } from '../lib/hooks'
+import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
 import { calcDelta, fmtYuan, parseYuan } from '../lib/money'
@@ -26,6 +26,9 @@ export function Accounts() {
   const catMap = useCategoryMap()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
+  // 不用 totalOf(bal) + debt：debt 只加回负余额，某个白条多还成正数时那笔会留在合计里，
+  // 而下面的卡片列表里没有它，两个数就对不上（首页同样的理由，同样的算法）
+  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
   // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页。
   // 注意：adjust 记录只在「有差额」时才产生，所以这里得到的是「上次校准」而不是「上次核对」。
   const lastAdjusts = useMemo(() => {
@@ -100,6 +103,14 @@ export function Accounts() {
   const plans = useMemo(() => (creditTarget2 ? activePlans(txs, creditTarget2.id, ym) : []), [txs, creditTarget2, ym])
   const [repayFrom, setRepayFrom] = usePersistedState<string | null>('jz_repay_from', null)
   const [repayInput, setRepayInput] = useState('')
+
+  // 再点一次「账户」：收起白条、关掉弹层、滚回顶部。
+  // repayFrom 不清——「我一般用中国银行还」是偏好，不是「这次在看什么」。
+  useTabReset(() => {
+    setCreditOpen(false)
+    setTarget(null)
+    setCreditTarget2(null)
+  })
   const repayCents = parseYuan(repayInput)
   const fromAcc = assets.find((a) => a.id === repayFrom) ?? assets[0]
 
@@ -155,12 +166,13 @@ export function Accounts() {
       </div>
 
       <div className="card p-4 mb-3">
-        <div className="text-xs text-muted">总余额</div>
-        <div className={`num text-3xl font-bold ${totalOf(bal) < 0 ? 'text-expense' : ''}`}>{fmtYuan(totalOf(bal), { symbol: true })}</div>
+        {/* 大数字和首页保持同一个口径：资产账户之和，不含白条。
+            以前这里是「总余额」（已经减掉白条），两页大数字差一个欠款额，对着看容易懵。
+            全项目只留三个词：总资产（不含白条）、白条待还、净资产（前两者相减）。 */}
+        <div className="text-xs text-muted">总资产</div>
+        <div className={`num text-3xl font-bold ${assetTotal < 0 ? 'text-expense' : ''}`}>{fmtYuan(assetTotal, { symbol: true })}</div>
         {credits.length && debt > 0 ? (
-          <div className="num text-xs text-muted mt-1">
-            资产 {fmtYuan(totalOf(bal) + debt, { symbol: true })} · 白条待还 {fmtYuan(debt, { symbol: true })}
-          </div>
+          <div className="num text-xs text-muted mt-1">白条待还 {fmtYuan(debt, { symbol: true })}</div>
         ) : null}
         {/* 同步失败时这里是用户最先看见的地方，得能就地重试——
             以前只有设置页那个不像按钮的状态格能点，等于没有。 */}

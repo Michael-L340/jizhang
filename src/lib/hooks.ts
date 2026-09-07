@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useLocation } from 'react-router-dom'
 import type { Account, Category } from '../types'
 import { useStore } from './store'
 import { packRecent, RECENT_MS, unpackRecent } from './recent'
@@ -104,4 +105,21 @@ export function saveLocal(key: string, value: unknown) {
   } catch {
     /* ignore */
   }
+}
+
+/**
+ * 底部标签被再点一次时「回到这一页刚打开的样子」。
+ * TabBar 会原地 replace 并换一个 resetAt 时间戳（路由没变、state 变了），靠它触发。
+ *
+ * 滚回顶部是四页共同的，放在这里做；各页自己要清什么状态写在 onReset 里。
+ * 依赖只放 resetAt：onReset 每次渲染都是新函数，放进依赖会让 effect 每次都跑。
+ */
+export function useTabReset(onReset?: () => void): void {
+  const resetAt = (useLocation().state as { resetAt?: number } | null)?.resetAt
+  useEffect(() => {
+    if (!resetAt) return
+    onReset?.()
+    document.querySelector('.app-main')?.scrollTo({ top: 0 })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [resetAt])
 }

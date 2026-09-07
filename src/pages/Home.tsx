@@ -4,7 +4,7 @@ import { AccountIcon } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
-import { useAccountMap, useCategoryMap } from '../lib/hooks'
+import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 
@@ -25,6 +25,8 @@ export function Home() {
   const accMap = useAccountMap()
   const catMap = useCategoryMap()
   const nav = useNavigate()
+  // 首页没有任何会记住的状态，再点一次「首页」就是滚回顶部
+  useTabReset()
 
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])

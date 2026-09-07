@@ -1,5 +1,5 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
-import { useLocation, useNavigate } from 'react-router-dom'
+import { lazy, Suspense, useMemo, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { accountColor } from '../components/AccountIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
@@ -10,7 +10,7 @@ import { fmtYuan } from '../lib/money'
 import { gridTopFor, legendRows } from '../lib/chart'
 import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, childColors } from '../lib/palette'
-import { usePersistedState, useRecentState } from '../lib/hooks'
+import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
 
 const Chart = lazy(() => import('../components/Chart'))
@@ -41,12 +41,9 @@ export function Stats() {
   // 留多了上面一片空白。宽度按整页最宽 430 减去页面和卡片的左右内边距估。
   const chartW = Math.min(typeof window === 'undefined' ? 393 : window.innerWidth, 430) - 64
 
-  // 底部「统计」标签被再点一次时退出分类下钻（TabBar 会原地 replace 并换一个 resetAt）。
-  // 只退下钻：月份、收支、时间范围都是用户刚挑的，一起清掉反而烦人。
-  const resetAt = (useLocation().state as { resetAt?: number } | null)?.resetAt
-  useEffect(() => {
-    if (resetAt) setDrill(null)
-  }, [resetAt])
+  // 再点一次「统计」只退出分类下钻，顺带滚回顶部。
+  // 月份、收支、时间范围都是用户为了看某段趋势刚挑的，一起清掉反而烦人。
+  useTabReset(() => setDrill(null))
 
   const agg = useMemo(() => byCategory(txs, cats, ym, kind), [txs, cats, ym, kind])
   const rootColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
