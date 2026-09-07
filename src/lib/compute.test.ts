@@ -955,6 +955,28 @@ describe('白条', () => {
     expect(bill.left).toBe(0)
   })
 
+  it('本月还过款之后才下的单要标出来（平台的账单周期 App 不知道）', () => {
+    // 还款日 17 号：13 号还完本期账单，14 号又下一单。按「下单后最近的 17 号」它归本月，
+    // 但多半已经进了下一期账单，平台那边其实结清了，而 App 会显示「还差 ¥50」。
+    const before = credit({ id: 'before', date: '2026-09-10', amount: 10000 })
+    const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 10000, date: '2026-09-13' })
+    const after = credit({ id: 'after', date: '2026-09-14', amount: 5000 })
+    const bill = monthBill([before, pay, after], jd17, '2026-09')
+    expect(bill.rows.map((r) => [r.tx.id, r.afterRepay])).toEqual([
+      ['after', true],
+      ['before', false],
+    ])
+    expect(bill.afterRepayTotal).toBe(5000)
+    expect(bill.left).toBe(5000) // 逻辑不改，只是把这 50 标出来让人自己判断
+    // 没还过款的月份不标
+    expect(monthBill([before, after], jd17, '2026-09').rows.every((r) => !r.afterRepay)).toBe(true)
+    // 先用后付没有账单周期这回事，不标
+    const p1 = credit({ id: 'p1', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
+    const p2 = credit({ id: 'p2', account_id: 'pdd', date: '2026-09-14', amount: 900 })
+    const ppay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, date: '2026-09-08' })
+    expect(monthBill([p1, p2, ppay], pdd, '2026-09').rows.every((r) => !r.afterRepay)).toBe(true)
+  })
+
   it('settledIds：删掉还款记录，结清关系跟着消失', () => {
     const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, settles: ['cup', 'cable'] })
     expect([...settledIds([pay])].sort()).toEqual(['cable', 'cup'])

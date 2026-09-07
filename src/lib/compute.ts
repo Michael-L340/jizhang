@@ -574,12 +574,23 @@ export interface BillRow {
   due: Installment
   /** 能不能勾选：只有「一次还清」的订单能勾，分期按账单走 */
   selectable: boolean
+  /**
+   * 本月已经还过一次款之后才下的单。
+   *
+   * 平台有账单周期，App 不知道那个截止日。还款日 17 号、13 号还完款、14 号又下一单，
+   * 按「下单后最近的还款日」算它归本月，但实际上多半已经进了下一期账单——
+   * 于是 App 显示「这个月还差 ¥X」而平台那边其实已经结清了。
+   * 逻辑不改（改了要引入账单日，那是另一个数据），只把这种行标出来让人自己判断。
+   */
+  afterRepay: boolean
 }
 
 export interface MonthBill {
   rows: BillRow[]
   /** 本月该还合计 = rows 的金额之和 */
   total: number
+  /** 其中「本月还过款之后才下单」的金额，可能实际上要下期才还 */
+  afterRepayTotal: number
   /** 本月已经转进这个白条的钱（全额，含已指明结清的部分） */
   paid: number
   /** 还差多少，最少 0 */
@@ -593,11 +604,13 @@ export interface MonthBill {
  */
 export function monthBill(txs: Transaction[], acc: Account, ym: string): MonthBill {
   const settled = settledIds(txs)
-  const rows: BillRow[] = []
+  const rows: Omit<BillRow, 'afterRepay'>[] = []
+  const repayDates: string[] = []
   let paid = 0
   for (const t of txs) {
     if (t.type === 'transfer' && t.to_account_id === acc.id && monthOf(t.date) === ym) {
       paid += t.amount
+      repayDates.push(t.date)
       continue
     }
     if (t.type !== 'expense' || t.account_id !== acc.id || settled.has(t.id)) continue
@@ -609,9 +622,15 @@ export function monthBill(txs: Transaction[], acc: Account, ym: string): MonthBi
     const hit = installmentPlan(t, acc.repay_day).find((p) => p.ym === ym)
     if (hit) rows.push({ tx: t, due: hit, selectable: n === 1 })
   }
-  rows.sort((a, b) => (a.tx.date === b.tx.date ? (a.tx.created_at < b.tx.created_at ? 1 : -1) : a.tx.date < b.tx.date ? 1 : -1))
-  const total = rows.reduce((s, r) => s + r.due.amount, 0)
-  return { rows, total, paid, left: Math.max(0, total - paid) }
+  // 只对有还款日的账户判：先用后付逐笔扣，没有「账单周期」这回事
+  const marked: BillRow[] = rows.map((r) => ({
+    ...r,
+    afterRepay: acc.repay_day !== null && r.due.seq === 1 && repayDates.some((d) => d < r.tx.date),
+  }))
+  marked.sort((a, b) => (a.tx.date === b.tx.date ? (a.tx.created_at < b.tx.created_at ? 1 : -1) : a.tx.date < b.tx.date ? 1 : -1))
+  const total = marked.reduce((s, r) => s + r.due.amount, 0)
+  const afterRepayTotal = marked.reduce((s, r) => s + (r.afterRepay ? r.due.amount : 0), 0)
+  return { rows: marked, total, afterRepayTotal, paid, left: Math.max(0, total - paid) }
 }
 
 export interface ActivePlan {

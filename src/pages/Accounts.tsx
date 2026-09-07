@@ -395,6 +395,9 @@ export function Accounts() {
                             {r.due.of > 1 ? ` · 第 ${r.due.seq}/${r.due.of} 期` : ''}
                             {creditTarget2.repay_day ? ` · ${Number(r.due.date.slice(5, 7))}/${Number(r.due.date.slice(8))} 到期` : ' · 待扣款'}
                           </span>
+                          {/* 平台有账单周期，App 不知道那个截止日。本月还过款之后才下的单
+                              多半已经进了下一期，这里只标出来让人自己判断，不改算法 */}
+                          {r.afterRepay ? <span className="block text-[11px] text-adjust">本月已还过款，这笔可能算下期</span> : null}
                         </span>
                         <span className="num text-sm font-medium shrink-0">¥{fmtYuan(r.due.amount)}</span>
                       </button>
@@ -415,6 +418,9 @@ export function Accounts() {
                     <span className="text-muted">还差</span>
                     <span className={`num font-medium ${bill.left > 0 ? 'text-expense' : 'text-muted'}`}>{fmtYuan(bill.left, { symbol: true })}</span>
                   </span>
+                  {bill.afterRepayTotal > 0 ? (
+                    <span className="text-[11px] text-adjust num">其中 {fmtYuan(bill.afterRepayTotal, { symbol: true })} 是本月还款之后才下的单，平台那边可能已经算进下一期账单了</span>
+                  ) : null}
                 </div>
               </>
             ) : null}
