@@ -38,6 +38,15 @@ export function daysInMonth(ym: string): number {
   return new Date(Date.UTC(y, m, 0)).getUTCDate()
 }
 
+/**
+ * 某月的第 day 天。day 超出该月天数时落到当月最后一天。
+ * 白条还款日填 31 时，2 月要还的是 2/28（闰年 2/29），不是不存在的 2/31。
+ */
+export function dayInMonth(ym: string, day: number): string {
+  const last = daysInMonth(ym)
+  return `${ym}-${pad(Math.max(1, Math.min(day, last)))}`
+}
+
 /** 某月的首尾日期（含） */
 export function monthRange(ym: string): { start: string; end: string } {
   return { start: `${ym}-01`, end: `${ym}-${pad(daysInMonth(ym))}` }

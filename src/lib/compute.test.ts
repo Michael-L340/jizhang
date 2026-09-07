@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { activePlans, applyTx, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, dueInMonth, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
-import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
+import { activePlans, applyTx, dueDateOf, monthBill, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, dueInMonth, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
 const accounts: Account[] = [
@@ -117,6 +117,16 @@ describe('date', () => {
     expect(shiftMonth('2026-01', -1)).toBe('2025-12')
     expect(shiftMonth('2026-12', 1)).toBe('2027-01')
     expect(lastMonths(3, '2026-01')).toEqual(['2025-11', '2025-12', '2026-01'])
+  })
+  it('dayInMonth：超出当月天数时落到最后一天（还款日填 31 遇上 2 月）', () => {
+    expect(dayInMonth('2026-09', 17)).toBe('2026-09-17')
+    expect(dayInMonth('2026-02', 31)).toBe('2026-02-28')
+    expect(dayInMonth('2024-02', 31)).toBe('2024-02-29')
+    expect(dayInMonth('2026-04', 31)).toBe('2026-04-30')
+    expect(dayInMonth('2026-09', 1)).toBe('2026-09-01')
+    // 越界的值不能造出非法日期
+    expect(dayInMonth('2026-09', 0)).toBe('2026-09-01')
+    expect(dayInMonth('2026-09', 99)).toBe('2026-09-30')
   })
 })
 
@@ -811,6 +821,11 @@ describe('balanceShares', () => {
 
 describe('白条', () => {
   const acc = (id: string, kind: Account['kind'], repay_day: number | null = null): Account => ({ id, name: id, kind, sort: 0, is_archived: false, repay_day })
+  // 花呗、美团的还款日是 1 号；用 1 号时「下单后最近的 1 号」正好等于旧规则的「下单次月」，
+  // 所以下面沿用旧断言的那几条能证明改还款日没有破坏原来的行为
+  const jd = acc('jd', 'credit', 1)
+  const jd17 = acc('jd', 'credit', 17)
+  const pdd = acc('pdd', 'credit', null)
   const credit = (p: Partial<Transaction> = {}): Transaction => tx({ type: 'expense', amount: 100, account_id: 'jd', category_id: 'c1', ...p })
 
   it('splitAccounts / debtOf：白条分出去，欠款只算负数', () => {
@@ -822,21 +837,42 @@ describe('白条', () => {
     expect(debtOf({}, credits)).toBe(0)
   })
 
-  it('installmentPlan：从下单次月起每月一期，零头进最后一期，空期数按 1 期', () => {
-    expect(installmentPlan(credit({ date: '2026-09-05', amount: 120000, installments: 3 }))).toEqual([
-      { seq: 1, of: 3, ym: '2026-10', amount: 40000 },
-      { seq: 2, of: 3, ym: '2026-11', amount: 40000 },
-      { seq: 3, of: 3, ym: '2026-12', amount: 40000 },
+  it('dueDateOf：下单后最近的那个还款日，当天下单算下一个', () => {
+    // 京东 17 号：这正是用户实测的规矩——9/6 打的白条，9/17 之前就要还
+    expect(dueDateOf('2026-09-06', 17)).toBe('2026-09-17')
+    expect(dueDateOf('2026-09-16', 17)).toBe('2026-09-17') // 最短只隔一天
+    expect(dueDateOf('2026-09-17', 17)).toBe('2026-10-17') // 当天下单算下个月，当天出账当天还不现实
+    expect(dueDateOf('2026-09-20', 17)).toBe('2026-10-17')
+    // 花呗 / 美团 1 号
+    expect(dueDateOf('2026-09-06', 1)).toBe('2026-10-01')
+    expect(dueDateOf('2026-09-01', 1)).toBe('2026-10-01')
+    // 分期：第 k 期往后推 k−1 个月
+    expect([1, 2, 3].map((k) => dueDateOf('2026-09-06', 17, k))).toEqual(['2026-09-17', '2026-10-17', '2026-11-17'])
+    // 还款日 31：短月落到当月最后一天，闰年 2 月是 29
+    expect(dueDateOf('2026-01-05', 31)).toBe('2026-01-31')
+    expect(dueDateOf('2026-02-05', 31)).toBe('2026-02-28')
+    expect(dueDateOf('2024-02-05', 31)).toBe('2024-02-29')
+    expect(dueDateOf('2026-01-31', 31)).toBe('2026-02-28') // 当天下单顺延，且顺延后仍要落回月末
+    // 没有还款日（先用后付）：不排期，到期日就是下单日
+    expect(dueDateOf('2026-09-06', null)).toBe('2026-09-06')
+  })
+
+  it('installmentPlan：每期均分，零头进最后一期，空期数按 1 期', () => {
+    expect(installmentPlan(credit({ date: '2026-09-05', amount: 120000, installments: 3 }), 1)).toEqual([
+      { seq: 1, of: 3, ym: '2026-10', date: '2026-10-01', amount: 40000 },
+      { seq: 2, of: 3, ym: '2026-11', date: '2026-11-01', amount: 40000 },
+      { seq: 3, of: 3, ym: '2026-12', date: '2026-12-01', amount: 40000 },
     ])
-    expect(installmentPlan(credit({ date: '2026-11-20', amount: 10000, installments: 3 })).map((p) => [p.ym, p.amount])).toEqual([
+    expect(installmentPlan(credit({ date: '2026-11-20', amount: 10000, installments: 3 }), 1).map((p) => [p.ym, p.amount])).toEqual([
       ['2026-12', 3333],
       ['2027-01', 3333],
       ['2027-02', 3334],
     ])
-    expect(installmentPlan(credit({ date: '2026-09-05', amount: 1800, installments: null }))).toEqual([{ seq: 1, of: 1, ym: '2026-10', amount: 1800 }])
+    expect(installmentPlan(credit({ date: '2026-09-05', amount: 1800, installments: null }), 1)).toEqual([{ seq: 1, of: 1, ym: '2026-10', date: '2026-10-01', amount: 1800 }])
   })
 
   it('dueInMonth：只看白条账户上的支出，按账户汇总当月到期的那一期', () => {
+    const hb = acc('hb', 'credit', 1)
     const txs = [
       credit({ date: '2026-09-05', amount: 120000, installments: 3 }), // 10/11/12 各 400
       credit({ date: '2026-09-20', amount: 1800, installments: null, account_id: 'hb' }), // 10 月 18
@@ -844,15 +880,15 @@ describe('白条', () => {
       credit({ date: '2026-09-05', amount: 99900, account_id: 'boc' }), // 不是白条
       tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 40000, date: '2026-10-10' }), // 10 月已还 400，要从应还里扣掉
     ]
-    const ids = new Set(['jd', 'hb'])
-    expect([...dueInMonth(txs, ids, '2026-10')]).toEqual([
+    expect([...dueInMonth(txs, [jd, hb], '2026-10')]).toEqual([
       ['jd', 3000],
       ['hb', 1800],
     ])
-    expect([...dueInMonth(txs, ids, '2027-01')]).toEqual([])
+    expect([...dueInMonth(txs, [jd, hb], '2027-01')]).toEqual([])
   })
 
   it('dueInMonth：当月已经转进白条的还款要扣掉，还清了就不再列出来', () => {
+    const hb = acc('hb', 'credit', 1)
     const txs = [
       credit({ date: '2026-09-05', amount: 120000, installments: 3 }), // 10 月应还 400
       credit({ date: '2026-09-20', amount: 1800, account_id: 'hb' }), // 10 月应还 18
@@ -860,11 +896,69 @@ describe('白条', () => {
       tx({ type: 'transfer', account_id: 'boc', to_account_id: 'hb', amount: 1800, date: '2026-10-03' }), // 花呗还清
       tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 5000, date: '2026-11-01' }), // 下个月的，不算 10 月
     ]
-    const ids = new Set(['jd', 'hb'])
-    expect([...dueInMonth(txs, ids, '2026-10')]).toEqual([['jd', 30000]])
+    expect([...dueInMonth(txs, [jd, hb], '2026-10')]).toEqual([['jd', 30000]])
     // 多还了也不会变成负数
     const more = [...txs, tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 90000, date: '2026-10-05' })]
-    expect([...dueInMonth(more, ids, '2026-10')]).toEqual([])
+    expect([...dueInMonth(more, [jd, hb], '2026-10')]).toEqual([])
+  })
+
+  it('京东 17 号：9/6 下单当月就要还，不是下个月', () => {
+    // 上线前 App 把这两笔算成 10 月到期，「本月应还」显示 0，实际 9/17 就得还
+    const txs = [credit({ id: 'a', date: '2026-09-06', amount: 599 }), credit({ id: 'b', date: '2026-09-06', amount: 6579 })]
+    expect([...dueInMonth(txs, [jd17], '2026-09')]).toEqual([['jd', 7178]])
+    expect([...dueInMonth(txs, [jd17], '2026-10')]).toEqual([])
+  })
+
+  it('勾选结清：结清的那单不再算应还，还款里对应的那部分也不能再减一遍', () => {
+    const cup = credit({ id: 'cup', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
+    const cable = credit({ id: 'cable', account_id: 'pdd', date: '2026-09-03', amount: 900 })
+    // 先用后付：没结清就一直算欠着
+    expect([...dueInMonth([cup, cable], [pdd], '2026-09')]).toEqual([['pdd', 2800]])
+    // 扣了 19 并指明结清杯子：只剩数据线 9
+    const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, date: '2026-09-08', settles: ['cup'] })
+    expect([...dueInMonth([cup, cable, pay], [pdd], '2026-09')]).toEqual([['pdd', 900]])
+    // 关键：杯子已经被排除在应还之外，这 19 块不能再从剩下的 9 块里扣一遍
+    expect(dueInMonth([cup, cable, pay], [pdd], '2026-09').get('pdd')).toBe(900)
+  })
+
+  it('先用后付：上个月没结清的，这个月照样算欠着', () => {
+    const old = credit({ id: 'old', account_id: 'pdd', date: '2026-08-20', amount: 500 })
+    expect([...dueInMonth([old], [pdd], '2026-09')]).toEqual([['pdd', 500]])
+    expect([...dueInMonth([old], [pdd], '2026-07')]).toEqual([]) // 下单之前不算
+  })
+
+  it('monthBill：一行 = 这个月该还的一笔，分期只出本期那份，各行之和 = 本月该还', () => {
+    const mouse = credit({ id: 'mouse', date: '2026-09-06', amount: 599 })
+    const fan = credit({ id: 'fan', date: '2026-09-06', amount: 6579 })
+    const monitor = credit({ id: 'monitor', date: '2026-09-06', amount: 60000, installments: 6 })
+    const bill = monthBill([mouse, fan, monitor], jd17, '2026-09')
+    expect(bill.rows.map((r) => [r.tx.id, r.due.amount, r.due.seq, r.due.of, r.selectable])).toEqual([
+      ['monitor', 10000, 1, 6, false], // 分期不给勾，按账单走
+      ['fan', 6579, 1, 1, true],
+      ['mouse', 599, 1, 1, true],
+    ])
+    // 这条是列法二的全部意义：各行加起来正好是本月该还，勾选加总才不会对不上
+    expect(bill.rows.reduce((s, r) => s + r.due.amount, 0)).toBe(bill.total)
+    expect(bill.total).toBe(17178)
+    expect(bill.paid).toBe(0)
+    expect(bill.left).toBe(17178)
+  })
+
+  it('monthBill：已还的算进 paid，勾选结清的不再列出来', () => {
+    const cup = credit({ id: 'cup', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
+    const cable = credit({ id: 'cable', account_id: 'pdd', date: '2026-09-03', amount: 900 })
+    const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, date: '2026-09-08', settles: ['cup'] })
+    const bill = monthBill([cup, cable, pay], pdd, '2026-09')
+    expect(bill.rows.map((r) => r.tx.id)).toEqual(['cable'])
+    expect(bill.total).toBe(900)
+    expect(bill.paid).toBe(1900)
+    expect(bill.left).toBe(0)
+  })
+
+  it('settledIds：删掉还款记录，结清关系跟着消失', () => {
+    const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, settles: ['cup', 'cable'] })
+    expect([...settledIds([pay])].sort()).toEqual(['cable', 'cup'])
+    expect(settledIds([]).size).toBe(0) // 还款没了，谁都不算已结清
   })
 
   it('activePlans：还没还完的才列，本月那一期和已到期期数算对，最新下单排前面', () => {
@@ -872,14 +966,14 @@ describe('白条', () => {
     const a = credit({ id: 'a', date: '2026-09-05', amount: 120000, installments: 3, settles: null, created_at: '2026-09-05T01:00:00.000Z' })
     const b = credit({ id: 'b', date: '2026-09-05', amount: 1800, created_at: '2026-09-05T02:00:00.000Z' })
     const c = credit({ id: 'c', date: '2026-08-01', amount: 6000, installments: 4 }) // 9/10/11/12
-    const r = activePlans([old, a, b, c], 'jd', '2026-10')
+    const r = activePlans([old, a, b, c], jd, '2026-10')
     expect(r.map((x) => x.tx.id)).toEqual(['b', 'a', 'c'])
-    expect(r[1].current).toEqual({ seq: 1, of: 3, ym: '2026-10', amount: 40000 })
+    expect(r[1].current).toEqual({ seq: 1, of: 3, ym: '2026-10', date: '2026-10-01', amount: 40000 })
     expect(r[1].done).toBe(0)
     expect(r[2].current?.seq).toBe(2)
     expect(r[2].done).toBe(1)
-    expect(activePlans([old], 'jd', '2026-10')).toEqual([])
+    expect(activePlans([old], jd, '2026-10')).toEqual([])
     // 11 月：b 已经还完（只有 10 月一期）
-    expect(activePlans([a, b, c], 'jd', '2026-11').map((x) => x.tx.id)).toEqual(['a', 'c'])
+    expect(activePlans([a, b, c], jd, '2026-11').map((x) => x.tx.id)).toEqual(['a', 'c'])
   })
 })

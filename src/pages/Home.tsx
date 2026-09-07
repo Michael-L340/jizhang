@@ -36,7 +36,7 @@ export function Home() {
   const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
   // 白条余额为正 = 多还了，平台欠你钱。少见但要说清楚，否则这笔钱在界面上无处可寻
   const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
-  const dueTotal = useMemo(() => [...dueInMonth(txs, new Set(credits.map((c) => c.id)), ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
+  const dueTotal = useMemo(() => [...dueInMonth(txs, credits, ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
   const recent = useMemo(() => sortTxs(txs).slice(0, 5), [txs])
 

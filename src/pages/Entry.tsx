@@ -287,7 +287,9 @@ export function Entry() {
   const instN = inst === 'custom' ? Number(customInst) : Number(inst)
   const instOk = Number.isInteger(instN) && instN >= 1 && instN <= INST_MAX
   // 分期提示：每期多少、哪几个月。用一笔临时记录算，和保存后账户页看到的完全一致
-  const plan = onCredit && cents > 0 && instOk ? installmentPlan({ date, amount: cents, installments: instN }) : null
+  // 到期日按这个白条自己的还款日算（京东 17、花呗和美团 1），所以预览要先找到账户
+  const creditAcc = accountId ? (credits.find((c) => c.id === accountId) ?? null) : null
+  const plan = onCredit && cents > 0 && instOk ? installmentPlan({ date, amount: cents, installments: instN }, creditAcc?.repay_day ?? null) : null
 
   function validate(): string | null {
     if (type !== 'adjust' && cents <= 0) return '请输入金额'

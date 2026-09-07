@@ -1,6 +1,6 @@
 // 所有余额与统计的纯函数。不依赖任何其他模块（date.ts 除外），方便单测。
 import type { Account, Category, Transaction, TxType } from '../types'
-import { addDays, lastMonths, monthOf, monthRange, shiftMonth, today } from './date'
+import { addDays, dayInMonth, lastMonths, monthOf, monthRange, shiftMonth, today } from './date'
 
 /** 收支统计只看这两种类型；transfer / adjust 永远不进收支 */
 export function isFlow(t: Transaction): t is Transaction & { type: 'expense' | 'income' } {
@@ -467,39 +467,97 @@ export interface Installment {
   of: number
   /** 到期月 YYYY-MM */
   ym: string
+  /** 到期日 YYYY-MM-DD */
+  date: string
   /** 这一期的金额（分） */
   amount: number
 }
 
 /**
- * 一笔白条支出的还款表：第 k 期在下单月之后第 k 个月到期，每期均分，除不尽的零头进最后一期。
- * installments 为空按 1 期算（下个月一次还清）。
+ * 一笔白条支出第 seq 期的到期日（seq 从 1 起）。
+ *
+ * 第 1 期 = 下单日之后最近的那个还款日，之后每期往后推一个月。
+ * 京东还款日 17 号：9/6 下单 → 9/17 到期；9/20 下单 → 10/17。
+ * **正好在还款日当天下单算下一个月的**——当天出账当天还不现实。
+ *
+ * repayDay 为空 = 这个账户没有固定还款日（拼多多先用后付，确认收货后几天逐笔扣）。
+ * 这种不按月排期，到期日就是下单日本身；「还没还」由勾选结清来判定，
+ * 见 dueOfTxInMonth。
  */
-export function installmentPlan(t: Pick<Transaction, 'date' | 'amount' | 'installments'>): Installment[] {
-  const n = Math.max(1, t.installments ?? 1)
-  const base = Math.floor(t.amount / n)
-  const rem = t.amount - base * n
-  const start = monthOf(t.date)
-  return Array.from({ length: n }, (_, i) => ({ seq: i + 1, of: n, ym: shiftMonth(start, i + 1), amount: base + (i === n - 1 ? rem : 0) }))
+export function dueDateOf(date: string, repayDay: number | null, seq = 1): string {
+  if (repayDay === null) return date
+  const start = monthOf(date)
+  // 先把还款日在下单那个月落实（填 31 时 2 月要落到 28），再和下单日比大小
+  const first = date < dayInMonth(start, repayDay) ? start : shiftMonth(start, 1)
+  return dayInMonth(shiftMonth(first, seq - 1), repayDay)
 }
 
 /**
- * 某月各白条账户还应还多少：该月到期的各期之和，减去该月已经转进这个白条的钱。
- * 不减的话，还完一笔再打开弹层仍会预填整月账单，再点一次就多还一笔（审查时发现）。
+ * 一笔白条支出的还款表。每期均分，除不尽的零头进最后一期。
+ * installments 为空按 1 期算。到期日由 dueDateOf 按账户的还款日算。
+ */
+export function installmentPlan(t: Pick<Transaction, 'date' | 'amount' | 'installments'>, repayDay: number | null): Installment[] {
+  const n = Math.max(1, t.installments ?? 1)
+  const base = Math.floor(t.amount / n)
+  const rem = t.amount - base * n
+  return Array.from({ length: n }, (_, i) => {
+    const date = dueDateOf(t.date, repayDay, i + 1)
+    return { seq: i + 1, of: n, ym: monthOf(date), date, amount: base + (i === n - 1 ? rem : 0) }
+  })
+}
+
+/**
+ * 已经被某笔还款「勾选结清」的支出 id。
+ * settles 挂在还款那一侧，所以删掉还款记录，这里自然就不再包含它了。
+ */
+export function settledIds(txs: Transaction[]): Set<string> {
+  const out = new Set<string>()
+  for (const t of txs) if (t.settles) for (const id of t.settles) out.add(id)
+  return out
+}
+
+/**
+ * 一笔白条支出在 ym 这个月该还多少（0 = 这个月不用还）。
+ *
+ * 两种账户两套判据：
+ * - 有还款日（京东/花呗/美团）：按 installmentPlan 排期，落在这个月的那一期
+ * - 没有还款日（拼多多先用后付）：不排期，只要没被勾选结清，从下单那个月起一直算欠着
+ */
+function dueOfTxInMonth(t: Transaction, acc: Account, ym: string, settled: ReadonlySet<string>): number {
+  if (settled.has(t.id)) return 0
+  if (acc.repay_day === null) return monthOf(t.date) <= ym ? t.amount : 0
+  return installmentPlan(t, acc.repay_day).find((p) => p.ym === ym)?.amount ?? 0
+}
+
+/**
+ * 某月各白条账户还应还多少。
+ *
+ * = 该月到期且未结清的各期之和 − 该月转进这个白条、但**没指明结清哪几单**的钱。
+ *
+ * 后半截那个「没指明」是关键：整体还账单时转账不带 settles，全额都要减，否则还完一笔
+ * 再打开弹层仍会预填整月账单，再点一次就多还一笔；而勾选结清时那几单已经被前半截
+ * 排除掉了，转账里对应的部分不能再减一遍，否则同一笔钱扣两次。
+ *
  * 还清（或多还）的不再列出来。
  */
-export function dueInMonth(txs: Transaction[], creditIds: ReadonlySet<string>, ym: string): Map<string, number> {
+export function dueInMonth(txs: Transaction[], credits: Account[], ym: string): Map<string, number> {
+  const byId = new Map(credits.map((a) => [a.id, a]))
+  const settled = settledIds(txs)
+  const amountOf = new Map(txs.map((t) => [t.id, t.amount]))
   const planned = new Map<string, number>()
   const paid = new Map<string, number>()
   for (const t of txs) {
-    if (t.type === 'transfer' && t.to_account_id && creditIds.has(t.to_account_id) && monthOf(t.date) === ym) {
-      paid.set(t.to_account_id, (paid.get(t.to_account_id) ?? 0) + t.amount)
+    if (t.type === 'transfer' && t.to_account_id && byId.has(t.to_account_id) && monthOf(t.date) === ym) {
+      const allocated = (t.settles ?? []).reduce((s, id) => s + (amountOf.get(id) ?? 0), 0)
+      const rest = Math.max(0, t.amount - allocated)
+      paid.set(t.to_account_id, (paid.get(t.to_account_id) ?? 0) + rest)
       continue
     }
-    if (t.type !== 'expense' || !t.account_id || !creditIds.has(t.account_id)) continue
-    const hit = installmentPlan(t).find((p) => p.ym === ym)
-    if (!hit) continue
-    planned.set(t.account_id, (planned.get(t.account_id) ?? 0) + hit.amount)
+    if (t.type !== 'expense' || !t.account_id) continue
+    const acc = byId.get(t.account_id)
+    if (!acc) continue
+    const due = dueOfTxInMonth(t, acc, ym, settled)
+    if (due > 0) planned.set(acc.id, (planned.get(acc.id) ?? 0) + due)
   }
   const out = new Map<string, number>()
   for (const [id, v] of planned) {
@@ -507,6 +565,53 @@ export function dueInMonth(txs: Transaction[], creditIds: ReadonlySet<string>, y
     if (left > 0) out.set(id, left)
   }
   return out
+}
+
+export interface BillRow {
+  /** 这一行对应的那笔支出 */
+  tx: Transaction
+  /** 落在这个月的那一期（没有还款日的账户，seq/of 都是 1，到期日就是下单日） */
+  due: Installment
+  /** 能不能勾选：只有「一次还清」的订单能勾，分期按账单走 */
+  selectable: boolean
+}
+
+export interface MonthBill {
+  rows: BillRow[]
+  /** 本月该还合计 = rows 的金额之和 */
+  total: number
+  /** 本月已经转进这个白条的钱（全额，含已指明结清的部分） */
+  paid: number
+  /** 还差多少，最少 0 */
+  left: number
+}
+
+/**
+ * 某个白条账户在 ym 这个月的账单。面板按它来画：**一行 = 这个月该还的一笔**，
+ * 分期订单只出本期那一份，所以各行加起来正好等于「本月该还」。
+ * 一行 = 一整个订单的话，分期订单显示整单金额，勾选加总就和本月应还对不上了。
+ */
+export function monthBill(txs: Transaction[], acc: Account, ym: string): MonthBill {
+  const settled = settledIds(txs)
+  const rows: BillRow[] = []
+  let paid = 0
+  for (const t of txs) {
+    if (t.type === 'transfer' && t.to_account_id === acc.id && monthOf(t.date) === ym) {
+      paid += t.amount
+      continue
+    }
+    if (t.type !== 'expense' || t.account_id !== acc.id || settled.has(t.id)) continue
+    const n = Math.max(1, t.installments ?? 1)
+    if (acc.repay_day === null) {
+      if (monthOf(t.date) <= ym) rows.push({ tx: t, due: { seq: 1, of: 1, ym, date: t.date, amount: t.amount }, selectable: true })
+      continue
+    }
+    const hit = installmentPlan(t, acc.repay_day).find((p) => p.ym === ym)
+    if (hit) rows.push({ tx: t, due: hit, selectable: n === 1 })
+  }
+  rows.sort((a, b) => (a.tx.date === b.tx.date ? (a.tx.created_at < b.tx.created_at ? 1 : -1) : a.tx.date < b.tx.date ? 1 : -1))
+  const total = rows.reduce((s, r) => s + r.due.amount, 0)
+  return { rows, total, paid, left: Math.max(0, total - paid) }
 }
 
 export interface ActivePlan {
@@ -518,12 +623,13 @@ export interface ActivePlan {
   done: number
 }
 
-/** 某个白条账户上还没还完的分期（最后一期到期月 ≥ 本月），按下单日期倒序 */
-export function activePlans(txs: Transaction[], accountId: string, ym: string): ActivePlan[] {
+/** 某个白条账户上还没还完的分期（最后一期到期月 ≥ 本月），按下单日期倒序。已勾选结清的不再列出 */
+export function activePlans(txs: Transaction[], acc: Account, ym: string): ActivePlan[] {
+  const settled = settledIds(txs)
   const out: ActivePlan[] = []
   for (const t of txs) {
-    if (t.type !== 'expense' || t.account_id !== accountId) continue
-    const plan = installmentPlan(t)
+    if (t.type !== 'expense' || t.account_id !== acc.id || settled.has(t.id)) continue
+    const plan = installmentPlan(t, acc.repay_day)
     if (plan[plan.length - 1].ym < ym) continue
     out.push({ tx: t, plan, current: plan.find((p) => p.ym === ym) ?? null, done: plan.filter((p) => p.ym < ym).length })
   }

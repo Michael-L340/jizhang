@@ -94,14 +94,13 @@ export function Accounts() {
   const shares = useMemo(() => balanceShares(bal, assets.map((a) => a.id)), [bal, assets])
 
   // ---- 白条 ----
-  const creditIds = useMemo(() => new Set(credits.map((c) => c.id)), [credits])
-  const due = useMemo(() => dueInMonth(txs, creditIds, ym), [txs, creditIds, ym])
+  const due = useMemo(() => dueInMonth(txs, credits, ym), [txs, credits, ym])
   const dueTotal = [...due.values()].reduce((s, v) => s + v, 0)
   const debt = debtOf(bal, credits)
   const withDebt = credits.filter((c) => (bal[c.id] ?? 0) < 0).length
   const [creditOpen, setCreditOpen] = usePersistedState('jz_acc_creditOpen', false)
   const [creditTarget2, setCreditTarget2] = useState<Account | null>(null)
-  const plans = useMemo(() => (creditTarget2 ? activePlans(txs, creditTarget2.id, ym) : []), [txs, creditTarget2, ym])
+  const plans = useMemo(() => (creditTarget2 ? activePlans(txs, creditTarget2, ym) : []), [txs, creditTarget2, ym])
   const [repayFrom, setRepayFrom] = usePersistedState<string | null>('jz_repay_from', null)
   const [repayInput, setRepayInput] = useState('')
 
@@ -242,7 +241,7 @@ export function Accounts() {
                 {credits.map((c) => {
                   const owed = Math.max(0, -(bal[c.id] ?? 0))
                   const d = due.get(c.id) ?? 0
-                  const n = activePlans(txs, c.id, ym).length
+                  const n = activePlans(txs, c, ym).length
                   return (
                     <button key={c.id} type="button" className="w-full text-left flex items-center gap-2.5 py-2.5" onClick={() => openCredit(c)}>
                       <AccountIcon name={c.name} size={28} />
