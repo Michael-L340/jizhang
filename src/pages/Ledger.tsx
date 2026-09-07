@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
@@ -75,6 +75,22 @@ export function Ledger() {
   const setParentId = (parentId: string) => setFilter({ ...filter, parentId, childId: 'all' })
   const setChildId = (childId: string) => setFilter({ ...filter, childId })
   const [open, setOpen] = useState(false)
+
+  // 底部「流水」标签被再点一次时回到默认：本月、不筛选、不搜索、滚回顶部。
+  // 和统计页共用 TabBar 那套 resetAt 机制。这里连月份一起重置——统计页刻意不重置，
+  // 因为它的月份和时间范围是用户为了看某段趋势刚挑的；流水页的「默认」就是本月流水。
+  const resetAt = (useLocation().state as { resetAt?: number } | null)?.resetAt
+  useEffect(() => {
+    if (!resetAt) return
+    setYm(monthOf(today()))
+    setQ('')
+    setSearchOpen(false)
+    setFilter(NO_FILTER)
+    setTarget(null)
+    setOpen(false)
+    scrolledFor.current = null
+    document.querySelector('.app-main')?.scrollTo({ top: 0 })
+  }, [resetAt])
 
   // 分类给「一级 · 二级」，两级都能搜到；账户给账户名。搜索模块自己不认识 store。
   const names: SearchNames = useMemo(

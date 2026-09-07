@@ -19,11 +19,14 @@ export const tabs = [
 
 /**
  * 已经停在某个标签上时再点它一次 = 「回到这一页的初始样子」。
- * 目前只有统计页需要（退出分类下钻），所以只给它挂。
+ * 统计页退出分类下钻，流水页回到本月、清掉筛选和搜索并滚回顶部。
  * 做法是原地 replace 一次并带上时间戳：路由没变，但 location.state 变了，
  * 页面靠它知道「用户又点了一次我」。不用全局事件，免得多一套要维护的东西。
+ *
+ * 「初始样子」各页自己定义，别在这里写死：统计页刻意不重置月份和时间范围
+ * （那是用户刚挑的），流水页则连月份一起回到本月。
  */
-const RESET_ON_REPEAT_TAP = ['/stats']
+const RESET_ON_REPEAT_TAP = ['/stats', '/ledger']
 
 export function TabBar() {
   const { pathname } = useLocation()
