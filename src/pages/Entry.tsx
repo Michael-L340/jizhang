@@ -248,7 +248,9 @@ export function Entry() {
   // 门挡的正是这种时序）。编辑一条用了已归档分类的旧账，分类必须原样留着。
   const isEdit = Boolean(editId)
   useEffect(() => {
-    const next = pickCategoryId({ options: parents, current: parentId, editing: isEdit })
+    // 大类默认选第一个（按分类管理页的排序，也就是「日常开支」）：不记上次选的，
+    // 但也别每次都空着让人多点一次。二级仍然要自己点，因为那才是真正要想的那一下。
+    const next = pickCategoryId({ options: parents, current: parentId, editing: isEdit, fallbackFirst: true })
     if (next !== parentId) setParentId(next)
   }, [parents, parentId, isEdit])
   useEffect(() => {
