@@ -185,6 +185,28 @@ describe('month stats exclude transfer and adjust', () => {
     expect(agg[1].children[0]).toMatchObject({ name: '午餐', amount: 2800 })
     expect(agg.reduce((s, a) => s + a.amount, 0)).toBe(monthSummary(txs, '2026-09').expense)
   })
+  it('归档的分类照样进饼图，二级合计仍然等于一级', () => {
+    // 分类只归档不删除，旧月份里长期躺着归档的分类。
+    // 如果 byCategory 跟着记账页一起过滤 is_archived，这笔钱会从二级列表里消失，
+    // 下钻后各块之和就比一级少一截，而且没有任何提示。
+    const withArchived: Category[] = [
+      ...cats,
+      { id: 'coffee', kind: 'expense', parent_id: 'food', name: '咖啡奶茶', icon: null, sort: 4, is_archived: true, note: null },
+    ]
+    const rows = [
+      tx({ type: 'expense', amount: 2800, account_id: 'wx', category_id: 'lunch' }),
+      tx({ type: 'expense', amount: 2400, account_id: 'wx', category_id: 'coffee' }),
+    ]
+    const agg = byCategory(rows, withArchived, '2026-09', 'expense')
+    expect(agg).toHaveLength(1)
+    expect(agg[0].amount).toBe(5200)
+    expect(agg[0].children.map((c) => c.name).sort()).toEqual(['午餐', '咖啡奶茶'].sort())
+    expect(agg[0].children.reduce((s, c) => s + c.amount, 0)).toBe(agg[0].amount)
+    expect(agg[0].children.reduce((s, c) => s + c.count, 0)).toBe(agg[0].count)
+    // 也不能让它从「本月支出」和饼图之间掉出去
+    expect(agg.reduce((s, a) => s + a.amount, 0)).toBe(monthSummary(rows, '2026-09').expense)
+  })
+
   it('keeps parent-level spending visible as 未细分 when drilling', () => {
     const mixed = [
       tx({ type: 'expense', amount: 53800, account_id: null, category_id: 'food' }), // 直接记在一级
