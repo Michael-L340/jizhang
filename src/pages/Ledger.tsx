@@ -6,6 +6,7 @@ import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
 import { TxRow } from '../components/TxRow'
 import { groupByDay, inMonth, monthSummary, monthTotals, splitAccounts } from '../lib/compute'
+import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState } from '../lib/hooks'
@@ -110,12 +111,19 @@ export function Ledger() {
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const creditIds = useMemo(() => new Set(credits.map((c) => c.id)), [credits])
   const onCredit = accountId === CREDIT_ALL || creditIds.has(accountId)
-  const roots = useMemo(() => cats.filter((c) => !c.parent_id && !c.is_archived).sort((a, b) => (a.kind === b.kind ? a.sort - b.sort : a.kind === 'expense' ? -1 : 1)), [cats])
-  // 分类筛选也分两级：选了具体一级才展开它的二级（和账户里的白条同一个样子）
-  const children = useMemo(
-    () => (parentId === 'all' || parentId === 'none' ? [] : cats.filter((c) => c.parent_id === parentId && !c.is_archived).sort((a, b) => a.sort - b.sort)),
+  // 归档的分类平时不出现在 chip 里，但「正在筛的那一个」必须留着：
+  // 从统计页点一个归档分类跳过来时，列表是对的，chip 却一个都不高亮，看着像筛选坏了。
+  const keep = (c: Category, current: string) => !c.is_archived || c.id === current
+  const roots = useMemo(
+    () => cats.filter((c) => !c.parent_id && keep(c, parentId)).sort((a, b) => (a.kind === b.kind ? a.sort - b.sort : a.kind === 'expense' ? -1 : 1)),
     [cats, parentId],
   )
+  // 分类筛选也分两级：选了具体一级才展开它的二级（和账户里的白条同一个样子）
+  const children = useMemo(
+    () => (parentId === 'all' || parentId === 'none' ? [] : cats.filter((c) => c.parent_id === parentId && keep(c, childId)).sort((a, b) => a.sort - b.sort)),
+    [cats, parentId, childId],
+  )
+  const label = (c: Category) => (c.is_archived ? `${c.name}（已归档）` : c.name)
 
   const list = useMemo(() => {
     const base = searching ? searchTx(txs, q, names) : txs
@@ -318,7 +326,7 @@ export function Ledger() {
         ) : null}
         <div className="text-xs text-muted mb-2">分类</div>
         <ChipGroup
-          options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: c.name, icon: c.icon })), { id: 'none', label: '未分类' }]}
+          options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: label(c), icon: c.icon })), { id: 'none', label: '未分类' }]}
           value={parentId}
           onChange={setParentId}
           className={children.length ? 'mb-2' : 'mb-4'}
@@ -327,7 +335,7 @@ export function Ledger() {
           <ChipGroup
             options={[
               { id: 'all', label: '全部' },
-              ...children.map((c) => ({ id: c.id, label: c.name, icon: c.icon })),
+              ...children.map((c) => ({ id: c.id, label: label(c), icon: c.icon })),
               // 直接记在一级上、没选二级的那几笔，统计页饼图里也叫这个名字
               { id: CHILD_NONE, label: '未细分' },
             ]}
