@@ -27,7 +27,7 @@ const api = vi.hoisted(() => ({
   upsertTx: vi.fn(),
   friendlyError: (e: unknown) => String((e as { message?: string })?.message ?? e),
   // 和真的 api.ts 保持同一套判据：带 23xxx/42xxx 错误码的才是「数据被拒」，其余一律可重传
-  isPermanentError: (e: unknown) => /^(23|42)/.test(String((e as { code?: string })?.code ?? '')),
+  isPermanentError: (e: unknown) => /^(22|23|42)/.test(String((e as { code?: string })?.code ?? '')),
   isDuplicateName: (e: unknown) => (e as { code?: string })?.code === '23505' || /duplicate key/i.test(String((e as { message?: string })?.message ?? e)),
   configured: true,
 }))

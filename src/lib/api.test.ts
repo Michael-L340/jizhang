@@ -83,7 +83,7 @@ const h = vi.hoisted(() => {
 })
 vi.mock('./supabase', () => ({ supabase: h.client, configured: true }))
 
-const { fetchAll, fetchBackupStatus, friendlyError, importAll, wipeAll } = await import('./api')
+const { fetchAll, fetchBackupStatus, friendlyError, importAll, isPermanentError, wipeAll } = await import('./api')
 
 const shape = () => h.calls.map((c) => `${c.table}:${c.op}${c.filters.length ? ':' + c.filters.join('+') : ''}`)
 
@@ -284,5 +284,20 @@ describe('fetchAll 的中止信号', () => {
     const tx = h.calls.find((c) => c.table === 'transactions')
     expect(tx?.filters).toContain('order.id')
     expect(tx?.filters).toContain('range.0.999')
+  })
+})
+
+describe('isPermanentError：分清「没网」和「数据被拒」', () => {
+  it('22/23/42 开头的错误码是数据被拒，重传一万次也一样', () => {
+    for (const code of ['22P02', '23503', '23505', '42703']) {
+      expect(isPermanentError({ code, message: 'x' }), code).toBe(true)
+    }
+  })
+
+  it('没网、超时、登录过期一律可重传——误判成永久失败是当场丢账', () => {
+    expect(isPermanentError(Object.assign(new Error('Failed to fetch'), { name: 'TypeError' }))).toBe(false)
+    expect(isPermanentError(Object.assign(new Error('The operation was aborted.'), { name: 'AbortError' }))).toBe(false)
+    expect(isPermanentError({ code: 'PGRST301', message: 'JWT expired' })).toBe(false)
+    expect(isPermanentError(new Error('说不清是什么'))).toBe(false)
   })
 })

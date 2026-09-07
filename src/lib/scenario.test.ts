@@ -24,7 +24,7 @@ const api = vi.hoisted(() => ({
   onAuthChange: vi.fn(() => () => {}),
   friendlyError: (e: unknown) => String((e as { message?: string })?.message ?? e),
   isDuplicateName: () => false,
-  isPermanentError: (e: unknown) => /^(23|42)/.test(String((e as { code?: string })?.code ?? '')),
+  isPermanentError: (e: unknown) => /^(22|23|42)/.test(String((e as { code?: string })?.code ?? '')),
   configured: true,
 }))
 vi.mock('./api', () => api)

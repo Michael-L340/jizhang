@@ -61,15 +61,18 @@ export function isDuplicateName(e: unknown): boolean {
  * 后者用户看得见（首页一直显示「N 笔待上传」），前者是当场丢数据，
  * 所以**默认可重传**，只有明确认出是数据被拒才返回 true。
  *
- * 认的是 Postgres 的错误码前缀：23xxx 是完整性约束（非空 / 外键 / 唯一 / check），
- * 42xxx 是列或表对不上（少跑了一条 migration）。这两类重传一万次也是同样的结果。
+ * 认的是 Postgres 的错误码前缀：
+ *   22xxx 数据本身不合法（格式对不上列的类型、数值越界），例如 22P02
+ *   23xxx 完整性约束（非空 / 外键 / 唯一 / check）
+ *   42xxx 列或表对不上（少跑了一条 migration）
+ * 这三类重传一万次也是同样的结果，留在队列里只会永远重试、永远清不掉。
  * 唯独不认 PGRST301 这类鉴权错误——那是登录过期，重新登录后能传上去。
  */
 export function isPermanentError(e: unknown): boolean {
   const code = (e as { code?: string })?.code
-  if (typeof code === 'string' && /^(23|42)/.test(code)) return true
+  if (typeof code === 'string' && /^(22|23|42)/.test(code)) return true
   const msg = (e as { message?: string })?.message ?? String(e)
-  return /violates (check|foreign key|not-null|unique) constraint|duplicate key|does not exist/i.test(msg)
+  return /violates (check|foreign key|not-null|unique) constraint|duplicate key|does not exist|invalid input syntax/i.test(msg)
 }
 
 /** 把各种错误翻译成能给用户看的中文 */
