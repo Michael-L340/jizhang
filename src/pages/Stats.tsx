@@ -331,7 +331,6 @@ export function Stats() {
                   {drillAgg ? drillAgg.name : `${ym === monthOf(today()) ? '本月' : fmtMonthZh(ym)}${kind === 'expense' ? '支出' : '收入'}`}
                 </div>
                 <div className="num text-[22px] font-bold leading-tight mt-0.5">{fmtYuan(pieTotal, { symbol: true })}</div>
-                <div className="text-[11px] text-muted mt-0.5">{pieRows.reduce((s, r) => s + r.count, 0)} 笔</div>
               </div>
             </div>
 
