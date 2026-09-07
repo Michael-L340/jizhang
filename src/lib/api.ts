@@ -20,7 +20,7 @@ interface TxRow {
 }
 
 const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,created_at'
-const ACC_COLS = 'id,name,kind,sort,is_archived,repay_day'
+const ACC_COLS = 'id,name,kind,sort,is_archived,repay_day,facade_offset'
 const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived,note'
 
 function rowToTx(r: TxRow): Transaction {
@@ -173,7 +173,7 @@ export async function updateCategory(id: string, patch: Partial<Pick<Category, '
 
 // ---------- 账户 ----------
 
-export async function updateAccount(id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived'>>): Promise<void> {
+export async function updateAccount(id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived' | 'facade_offset'>>): Promise<void> {
   const { error } = await supabase.from('accounts').update(patch).eq('id', id)
   if (error) throw error
 }

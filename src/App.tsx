@@ -51,6 +51,8 @@ function Root() {
   const init = useStore((s) => s.init)
   const refresh = useStore((s) => s.refresh)
   const flushOutbox = useStore((s) => s.flushOutbox)
+  const noteHidden = useStore((s) => s.noteHidden)
+  const noteVisible = useStore((s) => s.noteVisible)
 
   useEffect(() => {
     void init()
@@ -58,7 +60,14 @@ function Root() {
 
   useEffect(() => {
     const onVisible = () => {
-      if (document.visibilityState === 'visible') void refresh()
+      // 里页面有时效：切走超过 60 秒再回来就自动退回外页面（手机放下走开的情况）。
+      // 判断放在 store 里，页面只负责报告「切走了 / 回来了」。
+      if (document.visibilityState !== 'visible') {
+        noteHidden()
+        return
+      }
+      noteVisible()
+      void refresh()
     }
     // 断网时同步失败后，只要 App 一直开着就再也不会重试（visibilitychange 不触发）。
     // 地铁里失败、出站后网络回来，这一下把它补上：先补传欠的那几笔，再同步一次。
@@ -73,7 +82,7 @@ function Root() {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('online', onOnline)
     }
-  }, [refresh, flushOutbox])
+  }, [refresh, flushOutbox, noteHidden, noteVisible])
 
   if (auth === 'loading') {
     return <div className="app-shell items-center justify-center text-muted text-sm">加载中…</div>

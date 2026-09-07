@@ -11,7 +11,7 @@ const C1 = '22222222-2222-4222-8222-222222222222'
 const T1 = '33333333-3333-4333-8333-333333333333'
 const T2 = '44444444-4444-4444-8444-444444444444'
 
-const acc: Account = { id: A1, name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null }
+const acc: Account = { id: A1, name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null, facade_offset: null }
 const cat: Category = { id: C1, kind: 'expense', parent_id: null, name: '日常开支', icon: '🍚', sort: 1, is_archived: false, note: null }
 const tx: Transaction = {
   id: T1,
@@ -88,9 +88,12 @@ describe('parseImport', () => {
 
   // 账户也守一遍。加一列而 readAccount 忘了收，备份文件里有、导进去却是空的，静默丢数据。
   it('账户也只收数据库真有的那几列', () => {
-    const out = parseImport(file({ accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: 17, 余额: '瞎写的' }] }))
-    expect(Object.keys(out.accounts[0]).sort()).toEqual(['id', 'is_archived', 'kind', 'name', 'repay_day', 'sort'])
+    const out = parseImport(file({ accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: 17, facade_offset: -134874, 余额: '瞎写的' }] }))
+    expect(Object.keys(out.accounts[0]).sort()).toEqual(['facade_offset', 'id', 'is_archived', 'kind', 'name', 'repay_day', 'sort'])
     expect(out.accounts[0].repay_day).toBe(17)
+    // 0007：漏在 readAccount 里补这一句的话，备份文件里明明有这个值，
+    // 导入时会在发给数据库之前被悄悄丢掉，一点报错都没有
+    expect(out.accounts[0].facade_offset).toBe(-134874)
   })
 
   it('parseImport 真的接上了 validate.ts（不是只看那四样）', () => {

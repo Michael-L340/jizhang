@@ -8,6 +8,7 @@ import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthT
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { gridTopFor, legendRows } from '../lib/chart'
+import { shiftSeries } from '../lib/facade'
 import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
@@ -20,6 +21,7 @@ const axisMoney = (v: number) => (Math.abs(v) >= 10000 ? `${+(v / 10000).toFixed
 export function Stats() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
+  const mode = useStore((s) => s.mode)
   // 余额曲线只画资产账户：白条是欠款，用户不要它出现在曲线里，合计线也只算资产
   const allAccounts = useActiveAccounts()
   const accounts = useMemo(() => splitAccounts(allAccounts).assets, [allAccounts])
@@ -211,7 +213,11 @@ export function Stats() {
     }
   }, [lineMode, keys, labels, trendTotal, trendByCat, fewPoints, unit, trendKind])
 
-  const bal = useMemo(() => balanceSeries(txs, accounts, keys, unit), [txs, accounts, keys, unit])
+  // 里外页面：外模式把整条曲线按偏移量平移。形状、涨跌、拐点全是真的，只有高度不同。
+  const bal = useMemo(
+    () => shiftSeries(balanceSeries(txs, accounts, keys, unit), accounts, mode),
+    [txs, accounts, keys, unit, mode],
+  )
   // 大数字其实是「最后一个桶结束时」的余额。切到 8 月它就是 8/31 收盘值，
   // 而账户页显示的是当前值，两个页面对不上会让人以为同步坏了。
   // 用 bucketEnd 而不是 tEnd：按月时最后一个桶到月末，两者可能差好几天。

@@ -45,7 +45,7 @@ class FakeStorage {
 import { balances, debtOf, dueInMonth, monthBill, settledIds, splitAccounts, totalOf } from './compute'
 import { buildCsv, buildJson, parseImport } from './csv'
 
-const A = (id: string, name: string, kind: Account['kind'], sort: number, repay_day: number | null = null): Account => ({ id, name, kind, sort, is_archived: false, repay_day })
+const A = (id: string, name: string, kind: Account['kind'], sort: number, repay_day: number | null = null): Account => ({ id, name, kind, sort, is_archived: false, repay_day, facade_offset: null })
 const boc = A('00000000-0000-4000-8000-000000000001', '中国银行', 'bank', 1)
 const jd = A('00000000-0000-4000-8000-000000000002', '京东白条', 'credit', 5, 17)
 const pdd = A('00000000-0000-4000-8000-000000000003', '拼多多', 'credit', 7, null)

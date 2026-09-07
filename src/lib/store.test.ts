@@ -977,3 +977,67 @@ describe('离线记账：待上传队列', () => {
     expect(api.upsertTx).toHaveBeenCalledTimes(1)
   })
 })
+
+// ══════════════════════════════════════════════════════════════
+// 里外页面
+//   外页面（平时用的）显示修饰过的余额，里页面显示真的。两条安全性质在这里守：
+//   冷启动必须是外页面；里页面有时效，手机放下走开 60 秒回来就自动退回外页面。
+// ══════════════════════════════════════════════════════════════
+describe('里外页面', () => {
+  it('默认是外页面', () => {
+    expect(st().mode).toBe('outer')
+  })
+
+  it('模式绝不能进缓存——否则冷启动会停在里页面，这个开关就白做了', async () => {
+    st().setMode('inner')
+    st().persist()
+    await vi.advanceTimersByTimeAsync(600) // 越过 500ms 去抖
+    const raw = ls.getItem(CACHE_KEY)
+    expect(raw).toBeTruthy()
+    expect(JSON.parse(raw as string)).not.toHaveProperty('mode')
+    expect(raw).not.toContain('inner')
+  })
+
+  it('切走不到 60 秒再回来，还在里页面', () => {
+    st().setMode('inner')
+    st().noteHidden()
+    vi.advanceTimersByTime(59_000)
+    st().noteVisible()
+    expect(st().mode).toBe('inner')
+  })
+
+  it('切走满 60 秒再回来，自动退回外页面', () => {
+    st().setMode('inner')
+    st().noteHidden()
+    vi.advanceTimersByTime(60_000)
+    st().noteVisible()
+    expect(st().mode).toBe('outer')
+  })
+
+  it('连着切走两次，只按最后一次离开的时间算', () => {
+    // 漏掉 noteVisible 里那句 hiddenAt = null 的话，第一次离开的时间会一直留着，
+    // 之后随便切走再回来都会被判成「离开很久」，里页面根本待不住
+    st().setMode('inner')
+    st().noteHidden()
+    vi.advanceTimersByTime(120_000)
+    st().noteVisible()
+    expect(st().mode).toBe('outer')
+
+    st().setMode('inner')
+    st().noteVisible() // 没有 noteHidden 就直接回前台（比如首次加载）
+    expect(st().mode).toBe('inner')
+  })
+
+  it('本来就在外页面时，切走多久回来都不受影响', () => {
+    st().noteHidden()
+    vi.advanceTimersByTime(600_000)
+    st().noteVisible()
+    expect(st().mode).toBe('outer')
+  })
+
+  it('退出登录复位成外页面', async () => {
+    st().setMode('inner')
+    await st().signOut()
+    expect(st().mode).toBe('outer')
+  })
+})

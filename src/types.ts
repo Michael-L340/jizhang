@@ -16,6 +16,12 @@ export interface Account {
    * 1–31，遇到短月由 date.ts 落到当月最后一天。
    */
   repay_day: number | null
+  /**
+   * 里外页面：外页面显示的余额 = 真实余额 + 这个偏移量（整数「分」）。
+   * null = 不做修饰，里外一样。白条不参与（`facade.ts` 的 offsetOf 里挡了一道）。
+   * 存分不存元：accounts 表没有别的金额列，不存在和谁不一致的问题，还省掉一层换算。
+   */
+  facade_offset: number | null
 }
 
 export interface Category {

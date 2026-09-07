@@ -7,6 +7,7 @@ import { cacheBytes, type BackupStatus } from './backup'
 import { nowIso } from './date'
 import { applyPending, DELETED, type Pending } from './pending'
 import { packOutbox, unpackOutbox, type Outbox, type OutboxDump } from './outbox'
+import { INNER_TTL_MS, type Mode } from './facade'
 
 const CACHE_KEY = 'jz_cache_v1'
 
@@ -27,7 +28,7 @@ function readCache(): Cache | null {
     // 「本月应还」在首屏就是错的（等一次同步回来才会自愈）。在入口补齐，别让 undefined 流出去。
     return {
       ...c,
-      accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null })),
+      accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null, facade_offset: a.facade_offset ?? null })),
       transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null })),
     }
   } catch {
@@ -74,6 +75,13 @@ export interface State extends Snapshot {
   backupFailed: boolean
   /** 还没传上云端的记录条数。>0 说明本机比云端多／少几笔，备份里也还没有 */
   outboxCount: number
+  /**
+   * 里外页面。outer = 平时用的外页面（余额被偏移量修饰过），inner = 只有本人知道的里页面（真实余额）。
+   * **绝不写进缓存**：冷启动必须永远是 outer，否则这个开关就没有意义了。
+   * persist() 只写三张表，所以这条不用额外处理——但以后有人想「顺手把整个 store 存下来」时，
+   * 这就是不能那么干的理由。
+   */
+  mode: Mode
 
   init: () => Promise<void>
   refresh: () => Promise<void>
@@ -96,7 +104,7 @@ export interface State extends Snapshot {
 
   addCategory: (kind: CatKind, parentId: string | null, name: string) => Promise<Category | null>
   updateCategory: (id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note' | 'parent_id'>>) => Promise<boolean>
-  updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived'>>) => Promise<boolean>
+  updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived' | 'facade_offset'>>) => Promise<boolean>
   /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
   /**
@@ -105,9 +113,21 @@ export interface State extends Snapshot {
    */
   restoreSnapshot: (snap: Snapshot) => Promise<void>
 
+  setMode: (m: Mode) => void
+  /** 切走 App 时记一下时间点 */
+  noteHidden: () => void
+  /** 切回前台：离开超过 INNER_TTL_MS 就自动退回外页面 */
+  noteVisible: () => void
+
   showToast: (msg: string, undo?: () => void | Promise<void>) => void
   hideToast: () => void
 }
+
+/**
+ * 上一次切走 App 的时间点。放模块级而不是 state：它只用来算一个判断，
+ * 放进 state 会让每次前后台切换都触发一轮全局重渲染。
+ */
+let hiddenAt: number | null = null
 
 // ── 在途写入的补丁表 ──────────────────────────────────────────
 // 一次写请求飞在路上时，refresh() 拉回的快照里还没有它。直接 set 会把它冲掉，
@@ -237,6 +257,7 @@ export const useStore = create<State>((set, get) => ({
   backup: null,
   backupFailed: false,
   outboxCount: 0,
+  mode: 'outer',
 
   async init() {
     const cache = readCache()
@@ -380,6 +401,9 @@ export const useStore = create<State>((set, get) => ({
     pendingCat.clear()
     settledTx.clear()
     settledCat.clear()
+    // 换个人登录进来必须是外页面
+    hiddenAt = null
+    set({ mode: 'outer' })
     // 推进号码，让还在飞的那次 loadBackupStatus 回来时自己作废，
     // 否则下面刚清掉的 backup 会被它写回来
     backupSeq++
@@ -602,6 +626,23 @@ export const useStore = create<State>((set, get) => ({
     } finally {
       await pullAfterWrite(get)
     }
+  },
+
+  setMode(m) {
+    if (get().mode !== m) set({ mode: m })
+  },
+
+  noteHidden() {
+    hiddenAt = Date.now()
+  },
+
+  noteVisible() {
+    // 你在里页面时最常做的事恰恰是切去银行 App 查余额再切回来，所以「一切走就回外」太烦；
+    // 但要是把手机放下走开了，回来时它得已经变回外页面。60 秒是这两件事的折中。
+    if (get().mode === 'inner' && hiddenAt !== null && Date.now() - hiddenAt >= INNER_TTL_MS) {
+      set({ mode: 'outer' })
+    }
+    hiddenAt = null
   },
 
   showToast(msg, undo) {

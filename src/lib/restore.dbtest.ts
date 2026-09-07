@@ -16,6 +16,7 @@ import mig0003 from '../../supabase/migrations/0003_category_note.sql?raw'
 import mig0004 from '../../supabase/migrations/0004_credit_accounts.sql?raw'
 import mig0005 from '../../supabase/migrations/0005_installments.sql?raw'
 import mig0006 from '../../supabase/migrations/0006_repay_day_and_settles.sql?raw'
+import mig0007 from '../../supabase/migrations/0007_facade_offset.sql?raw'
 import type { Snapshot } from '../types'
 import { centsFromDb, centsToDb } from './money'
 import { validateImport } from './validate'
@@ -38,6 +39,7 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0004)
   await db.exec(mig0005)
   await db.exec(mig0006)
+  await db.exec(mig0007)
   return db
 }
 
@@ -54,7 +56,7 @@ interface Snap {
 /** 对应 csv.ts 的 buildJson：库里存的是「元」，备份文件里是整数「分」 */
 async function exportBackup(db: PGlite): Promise<Snap> {
   return {
-    accounts: await q(db, 'select id,name,kind,sort,is_archived,repay_day from accounts'),
+    accounts: await q(db, 'select id,name,kind,sort,is_archived,repay_day,facade_offset from accounts'),
     categories: await q(db, 'select id,kind,parent_id,name,icon,sort,is_archived,note from categories'),
     transactions: (await q(db, 'select id,date::text as date,type,amount,account_id,to_account_id,category_id,note,installments,settles,created_at from transactions')).map((t) => ({
       ...t,
@@ -67,9 +69,9 @@ async function exportBackup(db: PGlite): Promise<Snap> {
 async function importRefs(db: PGlite, snap: Snap): Promise<void> {
   for (const a of snap.accounts) {
     await db.query(
-      `insert into accounts (id,name,kind,sort,is_archived,repay_day) values ($1,$2,$3,$4,$5,$6)
-       on conflict (id) do update set name=excluded.name,kind=excluded.kind,sort=excluded.sort,is_archived=excluded.is_archived,repay_day=excluded.repay_day`,
-      [a.id, a.name, a.kind, a.sort, a.is_archived, a.repay_day ?? null],
+      `insert into accounts (id,name,kind,sort,is_archived,repay_day,facade_offset) values ($1,$2,$3,$4,$5,$6,$7)
+       on conflict (id) do update set name=excluded.name,kind=excluded.kind,sort=excluded.sort,is_archived=excluded.is_archived,repay_day=excluded.repay_day,facade_offset=excluded.facade_offset`,
+      [a.id, a.name, a.kind, a.sort, a.is_archived, a.repay_day ?? null, a.facade_offset ?? null],
     )
   }
   const ordered = [...snap.categories.filter((c) => !c.parent_id), ...snap.categories.filter((c) => c.parent_id)]

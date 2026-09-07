@@ -4,6 +4,7 @@ import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
+import { applyFacade } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { categoryColor } from '../lib/palette'
@@ -18,6 +19,7 @@ export function Home() {
   const syncFailed = useStore((s) => s.syncFailed)
   const refresh = useStore((s) => s.refresh)
   const outboxCount = useStore((s) => s.outboxCount)
+  const mode = useStore((s) => s.mode)
   const flushOutbox = useStore((s) => s.flushOutbox)
   const accounts = useActiveAccounts()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
@@ -30,9 +32,13 @@ export function Home() {
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
+  // 里外页面：外页面把资产账户的余额加上各自的偏移量，里页面原样。
+  // 只有余额被修饰——上面的本月收支、储蓄率、下面的饼图和流水全是真的。
+  // 白条不参与（applyFacade 里挡了），所以下面算欠款仍然用真实的 bal。
+  const shown = useMemo(() => applyFacade(bal, accounts, mode), [bal, accounts, mode])
   // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 本月应还」
   const debt = debtOf(bal, credits)
-  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
+  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (shown[a.id] ?? 0), 0), [assets, shown])
   // 白条余额为正 = 多还了，平台欠你钱。少见但要说清楚，否则这笔钱在界面上无处可寻
   const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
   const dueTotal = useMemo(() => [...dueInMonth(txs, credits, ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
@@ -183,7 +189,7 @@ export function Home() {
               <AccountIcon name={a.name} size={28} />
               <span className="min-w-0">
                 <span className="block text-xs text-muted truncate">{a.name}</span>
-                <span className={`block num font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
+                <span className={`block num font-semibold ${(shown[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(shown[a.id] ?? 0)}</span>
               </span>
             </Link>
           ))}

@@ -5,6 +5,7 @@ import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, debtOf, dueInMonth, monthBill, monthByAccount, splitAccounts } from '../lib/compute'
 import { fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
+import { applyFacade, normalizeOffset, offsetFor } from '../lib/facade'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
@@ -20,6 +21,8 @@ export function Accounts() {
   const showToast = useStore((s) => s.showToast)
   const lastSync = useStore((s) => s.lastSync)
   const syncFailed = useStore((s) => s.syncFailed)
+  const mode = useStore((s) => s.mode)
+  const updateAccount = useStore((s) => s.updateAccount)
   const syncing = useStore((s) => s.syncing)
   const refresh = useStore((s) => s.refresh)
   const outboxCount = useStore((s) => s.outboxCount)
@@ -29,7 +32,10 @@ export function Accounts() {
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
   // 不用 totalOf(bal) + debt：debt 只加回负余额，某个白条多还成正数时那笔会留在合计里，
   // 而下面的卡片列表里没有它，两个数就对不上（首页同样的理由，同样的算法）
-  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
+  // 里外页面：外页面把资产账户的余额加上各自的偏移量。白条不参与，
+  // 所以下面所有和欠款有关的计算仍然用真实的 bal。
+  const dispBal = useMemo(() => applyFacade(bal, accounts, mode), [bal, accounts, mode])
+  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (dispBal[a.id] ?? 0), 0), [assets, dispBal])
   // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页。
   // 注意：adjust 记录只在「有差额」时才产生，所以这里得到的是「上次校准」而不是「上次核对」。
   const lastAdjusts = useMemo(() => {
@@ -43,11 +49,18 @@ export function Accounts() {
   }, [txs])
   const [target, setTarget] = useState<Account | null>(null)
   const [input, setInput] = useState('')
+  // 里页面第二个框：这个账户在外页面显示多少
+  const [facadeInput, setFacadeInput] = useState('')
   const [busy, setBusy] = useState(false)
 
   // 白条：余额为负是欠款。核对时让用户输「待还」（正数），差额再翻回余额的方向。
   const creditTarget = target ? credits.some((c) => c.id === target.id) : false
-  const computed = target ? bal[target.id] ?? 0 : 0
+  // 外页面点开非白条账户时，这个框改的是「外面显示多少」，只动偏移量、不写任何流水。
+  // 白条不分里外，所以在外页面点白条走的还是真正的校准。
+  const facadeOnly = mode === 'outer' && Boolean(target) && !creditTarget
+  // 里页面的非白条账户才有第二个框
+  const showFacadeField = mode === 'inner' && Boolean(target) && !creditTarget
+  const computed = target ? (facadeOnly ? dispBal[target.id] ?? 0 : bal[target.id] ?? 0) : 0
   const shown = creditTarget ? -computed : computed
   const real = parseYuan(input)
   const rawDelta = calcDelta(input, shown) // 算式本体在 lib/money.ts，那里测得到
@@ -55,15 +68,53 @@ export function Accounts() {
 
   function open(a: Account) {
     setTarget(a)
-    const v = credits.some((c) => c.id === a.id) ? -(bal[a.id] ?? 0) : bal[a.id] ?? 0
+    const isCred = credits.some((c) => c.id === a.id)
+    const real = bal[a.id] ?? 0
+    // 外页面预填的是屏幕上那个数（也就是修饰过的），里页面和白条预填真实值
+    const v = isCred ? -real : mode === 'outer' ? dispBal[a.id] ?? 0 : real
     setInput(fmtYuan(v).replace(/,/g, ''))
+    setFacadeInput(fmtYuan(real + (a.facade_offset ?? 0)).replace(/,/g, ''))
+  }
+
+  /**
+   * 里页面改「实际余额」时，「对外显示」跟着同幅变动——偏移量是固定的，
+   * 你看到的直接是最终结果，不用心算。想单独定外面那个数就直接改下面那个框。
+   */
+  function onRealInput(v: string) {
+    setInput(v)
+    if (!target || creditTarget || mode !== 'inner') return
+    const r = parseYuan(v)
+    if (r !== null) setFacadeInput(fmtYuan(r + (target.facade_offset ?? 0)).replace(/,/g, ''))
+  }
+
+  /** 把「对外显示多少」写成偏移量。realCents 是这一刻的真实余额 */
+  async function saveFacade(a: Account, realCents: number): Promise<boolean> {
+    const want = parseYuan(facadeOnly ? input : facadeInput)
+    if (want === null) return true
+    const next = normalizeOffset(offsetFor(want, realCents))
+    if (next === (a.facade_offset ?? null)) return true
+    return await updateAccount(a.id, { facade_offset: next })
   }
 
   async function confirm() {
-    if (!target || delta === null) return
+    if (!target) return
+    // 外页面：不写流水，只改这个账户在外面显示多少
+    if (facadeOnly) {
+      if (parseYuan(input) === null) return
+      setBusy(true)
+      const ok = await saveFacade(target, bal[target.id] ?? 0)
+      setBusy(false)
+      if (ok) setTarget(null)
+      return
+    }
+    if (delta === null) return
     // 没差额就不留痕：以前会写一条 0 元「余额核对」，只是为了同步「上次核对时间」，
     // 结果流水里全是 0 元行，用户嫌碍眼。核对本身不产生数据。
     if (delta === 0) {
+      setBusy(true)
+      const ok = await saveFacade(target, computed)
+      setBusy(false)
+      if (!ok) return
       showToast(`${target.name} 核对无差异，没有产生记录`)
       setTarget(null)
       return
@@ -82,6 +133,8 @@ export function Accounts() {
       settles: null,
       created_at: nowIso(),
     })
+    // 真实余额变成刚输入的那个数之后，再按「对外显示」反推偏移量
+    if (ok) await saveFacade(target, computed + delta)
     setBusy(false)
     if (ok) {
       showToast(`${target.name} 已校准 ${fmtYuan(delta, { sign: true })}`)
@@ -92,7 +145,8 @@ export function Accounts() {
   const ym = monthOf(today())
   const byAcc = useMemo(() => monthByAccount(txs, ym), [txs, ym])
   const nameOf = (id: string): string => accounts.find((a) => a.id === id)?.name ?? ''
-  const shares = useMemo(() => balanceShares(bal, assets.map((a) => a.id)), [bal, assets])
+  // 占比条跟着屏幕上的数字走，否则外页面「各占多少」和四张卡对不上
+  const shares = useMemo(() => balanceShares(dispBal, assets.map((a) => a.id)), [dispBal, assets])
 
   // ---- 白条 ----
   const due = useMemo(() => dueInMonth(txs, credits, ym), [txs, credits, ym])
@@ -286,7 +340,7 @@ export function Accounts() {
                 <span className="block text-xs text-muted">{lc ? `上次校准 ${fmtIsoZh(lc)}` : '点此输入实际余额核对'}</span>
               </span>
               <span className="text-right">
-                <span className={`block num text-lg font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
+                <span className={`block num text-lg font-semibold ${(dispBal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(dispBal[a.id] ?? 0)}</span>
                 {/* 本月这个账户进出了多少。转账两头都算、校准也算，所以它和余额的变化能对上。 */}
                 {(() => {
                   const m = byAcc.get(a.id)
@@ -520,7 +574,14 @@ export function Accounts() {
         ) : null}
       </Sheet>
 
-      <Sheet open={Boolean(target)} onClose={() => setTarget(null)} title={target ? `${target.name} · ${creditTarget ? '输入待还金额' : '输入实际余额'}` : ''}>
+      <Sheet
+        open={Boolean(target)}
+        onClose={() => setTarget(null)}
+        title={target ? `${target.name} · ${facadeOnly ? '输入余额' : creditTarget ? '输入待还金额' : '输入实际余额'}` : ''}
+      >
+        {/* 里页面才有标签：外页面就是一个光秃秃的输入框，看起来和任何记账 App 一样正常。
+            反过来这也是本人辨认自己在哪一边的记号——有没有下面那些对账信息。 */}
+        {showFacadeField ? <div className="text-xs text-muted mb-1">实际余额</div> : null}
         <div className="flex items-center gap-2 mb-3">
           <span className="text-2xl">¥</span>
           <input
@@ -528,11 +589,26 @@ export function Accounts() {
             inputMode="decimal"
             className="flex-1 num text-2xl font-semibold bg-bg rounded-xl px-3 py-2"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => onRealInput(e.target.value)}
             onKeyDown={(e) => e.key === 'Enter' && confirm()}
           />
         </div>
-        <div className="text-sm flex flex-col gap-1 mb-4">
+        {showFacadeField ? (
+          <>
+            <div className="text-xs text-muted mb-1">对外显示</div>
+            <div className="flex items-center gap-2 mb-3">
+              <span className="text-2xl text-muted">¥</span>
+              <input
+                inputMode="decimal"
+                className="flex-1 num text-2xl font-semibold bg-bg rounded-xl px-3 py-2"
+                value={facadeInput}
+                onChange={(e) => setFacadeInput(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && confirm()}
+              />
+            </div>
+          </>
+        ) : null}
+        <div className={`text-sm flex-col gap-1 mb-4 ${facadeOnly ? 'hidden' : 'flex'}`}>
           <div className="flex justify-between">
             <span className="text-muted">{creditTarget ? '推算待还' : '推算余额'}</span>
             <span className="num">{fmtYuan(shown)}</span>
@@ -548,8 +624,13 @@ export function Accounts() {
             </span>
           </div>
         </div>
-        <button type="button" disabled={busy || delta === null} className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold disabled:opacity-40" onClick={confirm}>
-          {delta === 0 ? '无差异，直接关闭' : '生成校准记录'}
+        <button
+          type="button"
+          disabled={busy || (facadeOnly ? parseYuan(input) === null : delta === null)}
+          className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold disabled:opacity-40"
+          onClick={confirm}
+        >
+          {facadeOnly ? '确认' : delta === 0 ? '无差异，直接关闭' : '生成校准记录'}
         </button>
       </Sheet>
     </div>

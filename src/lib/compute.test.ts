@@ -5,9 +5,9 @@ import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, t
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
 const accounts: Account[] = [
-  { id: 'boc', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: null },
-  { id: 'cmb', name: '招商银行', kind: 'bank', sort: 2, is_archived: false, repay_day: null },
-  { id: 'wx', name: '微信', kind: 'wallet', sort: 4, is_archived: false, repay_day: null },
+  { id: 'boc', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: null, facade_offset: null },
+  { id: 'cmb', name: '招商银行', kind: 'bank', sort: 2, is_archived: false, repay_day: null, facade_offset: null },
+  { id: 'wx', name: '微信', kind: 'wallet', sort: 4, is_archived: false, repay_day: null, facade_offset: null },
 ]
 const cats: Category[] = [
   { id: 'food', kind: 'expense', parent_id: null, name: '日常餐饮', icon: '🍚', sort: 1, is_archived: false, note: null },
@@ -820,7 +820,7 @@ describe('balanceShares', () => {
 })
 
 describe('白条', () => {
-  const acc = (id: string, kind: Account['kind'], repay_day: number | null = null): Account => ({ id, name: id, kind, sort: 0, is_archived: false, repay_day })
+  const acc = (id: string, kind: Account['kind'], repay_day: number | null = null): Account => ({ id, name: id, kind, sort: 0, is_archived: false, repay_day, facade_offset: null })
   // 花呗、美团的还款日是 1 号；用 1 号时「下单后最近的 1 号」正好等于旧规则的「下单次月」，
   // 所以下面沿用旧断言的那几条能证明改还款日没有破坏原来的行为
   const jd = acc('jd', 'credit', 1)

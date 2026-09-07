@@ -146,7 +146,20 @@ function readAccount(v: unknown, i: number): Account {
     sort: sortOf(r.sort, fail),
     is_archived: archivedOf(r.is_archived, fail),
     repay_day: repayDayOf(r.repay_day, fail),
+    facade_offset: facadeOffsetOf(r.facade_offset, fail),
   }
+}
+
+/**
+ * 0007：里外页面的对外余额偏移量（整数「分」，可正可负）。旧备份没有这一列，按 null 处理。
+ * 这个函数是显式构造 Account 的那一步——漏了它，备份文件里明明有这一列，
+ * 导入时也会在发给数据库之前被悄悄丢掉，一点报错都没有。
+ */
+function facadeOffsetOf(v: unknown, fail: Fail): number | null {
+  const n: unknown = v ?? null
+  if (n === null) return null
+  if (!Number.isInteger(n)) fail(`的对外偏移量不对（读到 ${JSON.stringify(v)}），只能是整数「分」或留空`)
+  return n as number
 }
 
 function readCategory(v: unknown, i: number): Category {

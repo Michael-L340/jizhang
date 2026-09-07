@@ -1,4 +1,7 @@
+import { useEffect, useRef } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
+import { HOLD_MS } from '../lib/facade'
+import { useStore } from '../lib/store'
 
 /**
  * 五个标签页的图标。全部是单条 path，viewBox 24、22px 渲染、1.8 描边。
@@ -32,15 +35,83 @@ export const tabs = [
  */
 const RESET_ON_REPEAT_TAP = ['/', '/ledger', '/stats', '/accounts']
 
+/**
+ * 长按 ＋ 切换里外页面。
+ *
+ * 为什么挂在 ＋ 上：它只有「点一下就走」这一种正常用法，长按是空的，
+ * 所以加这个手势不会夺走任何已有功能——点一下照样跳记账页。
+ *
+ * 三件必须做对的事：
+ *   1. iOS 长按链接会弹系统的「拷贝 / 预览」菜单（＋ 本质是个 <a>），
+ *      要用 WebkitTouchCallout + userSelect 关掉，光靠 preventDefault 挡不住。
+ *   2. 长按结束抬手时浏览器还会补发一次 click，会把人带到记账页。
+ *      用 fired 标记在 onClick 里拦掉，并在下一次按下时清零
+ *      （长按后手指移开再松手不会触发 click，标记留着会误伤下一次点击）。
+ *   3. 手指移动超过阈值就取消，免得滑动时误触。
+ *
+ * 切换成功不给任何界面提示——「本该跳去记账页却没跳」本身就是信号，
+ * 外人看不出，本人一清二楚。加提示反而等于自曝。
+ */
+function useHoldToggle() {
+  const holdRef = useRef<{ timer: number; x: number; y: number } | null>(null)
+  const firedRef = useRef(false)
+
+  const cancel = () => {
+    if (holdRef.current) {
+      clearTimeout(holdRef.current.timer)
+      holdRef.current = null
+    }
+  }
+  useEffect(() => cancel, [])
+
+  return {
+    onPointerDown(e: React.PointerEvent) {
+      firedRef.current = false
+      cancel()
+      const timer = window.setTimeout(() => {
+        firedRef.current = true
+        holdRef.current = null
+        // 用 getState 而不是订阅 mode：TabBar 不需要因为切换而重渲染，
+        // 也就不会有「订阅了却读到上一次渲染时的值」这种闭包问题。
+        const s = useStore.getState()
+        s.setMode(s.mode === 'inner' ? 'outer' : 'inner')
+      }, HOLD_MS)
+      holdRef.current = { timer, x: e.clientX, y: e.clientY }
+    },
+    onPointerMove(e: React.PointerEvent) {
+      const h = holdRef.current
+      if (h && Math.hypot(e.clientX - h.x, e.clientY - h.y) > 10) cancel()
+    },
+    onPointerUp: cancel,
+    onPointerCancel: cancel,
+    onClickCapture(e: React.MouseEvent) {
+      if (firedRef.current) {
+        e.preventDefault()
+        e.stopPropagation()
+        firedRef.current = false
+      }
+    },
+  }
+}
+
 export function TabBar() {
   const { pathname } = useLocation()
   const nav = useNavigate()
+  const hold = useHoldToggle()
   return (
     <nav className="safe-bottom bg-card border-t border-line">
       <div className="grid grid-cols-5 h-14">
         {tabs.map((t) =>
           t.to === '/add' ? (
-            <NavLink key={t.to} to={t.to} className="flex items-center justify-center" aria-label="记一笔">
+            <NavLink
+              key={t.to}
+              to={t.to}
+              className="flex items-center justify-center"
+              aria-label="记一笔"
+              draggable={false}
+              style={{ WebkitTouchCallout: 'none', WebkitUserSelect: 'none', userSelect: 'none' }}
+              {...hold}
+            >
               <span className="w-11 h-11 rounded-full bg-brand text-on-brand flex items-center justify-center shadow-sm">
                 <svg width="26" height="26" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round">
                   <path d={t.icon} />
