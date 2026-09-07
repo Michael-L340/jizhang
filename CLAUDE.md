@@ -17,7 +17,10 @@
 - 账户余额 = Σ收入 − Σ支出 + Σ转入 − Σ转出 + Σ校准，没有初始余额字段。
 - 分类只归档（`is_archived`）不删除；数据库改动只新增 `supabase/migrations/000N_*.sql`，不改旧文件。
 - 写入失败分两类，别只写「失败就回滚」：`api.isPermanentError` 为真（`23xxx`/`42xxx` 错误码）才回滚，其余（没网、超时、登录过期）进 `lib/outbox.ts` 的待上传队列，联网后补传。默认可重传——误判成永久失败是当场丢账，误判成网络问题只是队列里卡一条、用户看得见。
-- 白条账户 `kind = 'credit'`（京东白条、花呗、拼多多、美团月付），余额为负 = 欠款。**下单记支出**（账户选白条，支出算在下单那个月）、**平台扣款记转账**（银行 → 白条）、利息单独记支出。`installments` 只对白条上的支出有意义，null 按 1 期算，第 k 期在下单月之后第 k 个月到期；「本月应还」是从它算出来的，还款不预排流水。
+- 白条账户 `kind = 'credit'`（京东白条、花呗、拼多多、美团月付），余额为负 = 欠款。**下单记支出**（账户选白条，支出算在下单那个月）、**平台扣款记转账**（银行 → 白条）、利息单独记支出。还款不预排流水。
+- **到期日 = 下单日之后最近的那个还款日**（`accounts.repay_day`，京东 17、花呗和美团 1）。还款日当天下单算下一个月；填 31 时短月落到月末。`installments` 的第 k 期 = 第 1 期往后推 k−1 个月。`repay_day` 为空 = 没有固定还款日（拼多多先用后付逐笔扣），这种账户不排期，只要没被勾选结清就一直算欠着。
+- **勾选结清**（`transactions.settles`）挂在**还款那一侧**，存被结清的支出 id。一次还款只写一条记录，删掉它结清关系跟着消失。只对「一次还清」的订单用，分期按账单整体还、不参与勾选。`dueInMonth` 减还款时只减「没指明结清哪几单」的那部分，否则同一笔钱会扣两次。
+- 面板按**「一行 = 这个月该还的一笔」**画（`monthBill`）：分期只出本期那一份，各行之和正好等于「本月该还」。一行一个订单的话，分期会显示整单金额，勾选加总就和本月应还对不上。
 
 ## 改动流程
 1. `npm run dev` 本地看效果（手机同 WiFi 访问终端打印的地址）。
@@ -51,11 +54,16 @@ bug 修复类固定四段，`git log` 扫一眼就知道该回退到哪一条：
 
 | 文件 | 里面是什么 |
 |---|---|
-| `src/lib/api.ts` | `ACC_COLS` / `CAT_COLS` / `TX_COLS` |
+| `src/lib/api.ts` | `ACC_COLS` / `CAT_COLS` / `TX_COLS` 和 `rowToTx` / `txToRow` |
 | `src/lib/csv.ts` + `src/lib/validate.ts` | 导出格式 `ExportFile`、校验规则 `readAccount` / `readCategory` / `readTransaction` |
+| `src/lib/restore.dbtest.ts` | 它自己有一份 `select` / `insert` 列清单在模拟备份脚本（2026-09-07 加两列时靠它抓到的） |
 | `jizhang-backup/backup.mjs` | `SELECT_ACC` / `SELECT_CAT` / `SELECT_TX`，**以及** `toAccount` / `toCategory` / `toTransaction`（逐字段构造，SELECT 拉到了这里没写照样丢；2026-09-06 加 `installments` 时真漏过） |
 
-加一列（比如计划中的「微信/支付宝交易单号」）时三处一起改，顺序：先跑 migration → 改 `backup.mjs` → 改 `validate.ts`/`csv.ts`/`api.ts`。
+还有一处不是列清单但同样会静默出错：`store.ts` 的 `readCache` 要把新列补成 `null`。
+冷启动先用旧版本写的缓存渲染，那份缓存里根本没有这个键，`undefined` 会一路走进算式
+（2026-09-07 实测算出 `"2026-09-NaN"`）。
+
+加一列（比如计划中的「微信/支付宝交易单号」）时几处一起改，顺序：先跑 migration → 改 `backup.mjs` → 改 `validate.ts`/`csv.ts`/`api.ts`。**云端迁移和推 `backup.mjs` 要挨着做**：只跑迁移不推脚本，当晚备份会因为「冒出不认识的列」失败；只推脚本不跑迁移，`SELECT` 会报 42703。
 
 **漏改的后果都是静默的**（2026-09-05 在内存版真 Postgres 上逐条实测，不是推测）：
 
