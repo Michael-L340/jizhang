@@ -83,6 +83,35 @@ function archivedOf(v: unknown, fail: Fail): boolean {
   return b as boolean
 }
 
+/**
+ * 0006：白条还款日。旧备份没有这一列，按「没有固定还款日」处理。
+ * 允许到 31，短月由 date.ts 落到当月最后一天——这里不收窄，否则改了那边的规则
+ * 这里会先把文件拒掉。
+ */
+function repayDayOf(v: unknown, fail: Fail): number | null {
+  const n: unknown = v ?? null
+  if (n === null) return null
+  if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > 31) {
+    fail(`的还款日不对（读到 ${JSON.stringify(v)}），只能是 1 到 31 的整数或留空`)
+  }
+  return n as number
+}
+
+/**
+ * 0006：这笔还款结清了哪几单。旧备份没有这一列，按 null 处理。
+ * 空数组也收成 null——数据库里两者等价，但备份文件里留着空数组会让 diff 噪音变大。
+ */
+function settlesOf(v: unknown, fail: Fail): string[] | null {
+  const a: unknown = v ?? null
+  if (a === null) return null
+  if (!Array.isArray(a)) fail(`的结清清单不是一组 id（读到 ${JSON.stringify(v)}）`)
+  const arr = a as unknown[]
+  for (const x of arr) {
+    if (!isUuid(x)) fail(`的结清清单里有「${String(x)}」，不是合法的 UUID，数据库不接受`)
+  }
+  return arr.length ? (arr as string[]) : null
+}
+
 /** 可空文本列：缺失和 null 一样，都写 null */
 function textOf(v: unknown, name: string, fail: Fail): string | null {
   const s: unknown = v ?? null
@@ -116,6 +145,7 @@ function readAccount(v: unknown, i: number): Account {
     kind: kind as Account['kind'],
     sort: sortOf(r.sort, fail),
     is_archived: archivedOf(r.is_archived, fail),
+    repay_day: repayDayOf(r.repay_day, fail),
   }
 }
 
@@ -169,6 +199,7 @@ function readTransaction(v: unknown, i: number): Transaction {
     category_id: refOf(r.category_id, '分类 id', fail),
     note: textOf(r.note, '备注', fail),
     installments: inst as number | null,
+    settles: settlesOf(r.settles, fail),
     created_at: r.created_at as string,
   }
 }

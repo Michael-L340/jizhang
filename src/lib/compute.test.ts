@@ -5,9 +5,9 @@ import { addDays, daysInMonth, lastMonths, monthRange, shiftMonth, today } from 
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
 const accounts: Account[] = [
-  { id: 'boc', name: '中国银行', kind: 'bank', sort: 1, is_archived: false },
-  { id: 'cmb', name: '招商银行', kind: 'bank', sort: 2, is_archived: false },
-  { id: 'wx', name: '微信', kind: 'wallet', sort: 4, is_archived: false },
+  { id: 'boc', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: null },
+  { id: 'cmb', name: '招商银行', kind: 'bank', sort: 2, is_archived: false, repay_day: null },
+  { id: 'wx', name: '微信', kind: 'wallet', sort: 4, is_archived: false, repay_day: null },
 ]
 const cats: Category[] = [
   { id: 'food', kind: 'expense', parent_id: null, name: '日常餐饮', icon: '🍚', sort: 1, is_archived: false, note: null },
@@ -28,6 +28,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount'> & { a
     category_id: null,
     note: null,
     installments: null,
+    settles: null,
     created_at: new Date(Date.UTC(2026, 8, 3, 0, 0, seq)).toISOString(), // 严格递增，不能用 seq % 10 那种会回绕的写法
     ...p,
   }
@@ -809,7 +810,7 @@ describe('balanceShares', () => {
 })
 
 describe('白条', () => {
-  const acc = (id: string, kind: Account['kind']): Account => ({ id, name: id, kind, sort: 0, is_archived: false })
+  const acc = (id: string, kind: Account['kind'], repay_day: number | null = null): Account => ({ id, name: id, kind, sort: 0, is_archived: false, repay_day })
   const credit = (p: Partial<Transaction> = {}): Transaction => tx({ type: 'expense', amount: 100, account_id: 'jd', category_id: 'c1', ...p })
 
   it('splitAccounts / debtOf：白条分出去，欠款只算负数', () => {
@@ -868,7 +869,7 @@ describe('白条', () => {
 
   it('activePlans：还没还完的才列，本月那一期和已到期期数算对，最新下单排前面', () => {
     const old = credit({ id: 'old', date: '2026-05-01', amount: 3000, installments: 3 }) // 6/7/8，9 月已完
-    const a = credit({ id: 'a', date: '2026-09-05', amount: 120000, installments: 3, created_at: '2026-09-05T01:00:00.000Z' })
+    const a = credit({ id: 'a', date: '2026-09-05', amount: 120000, installments: 3, settles: null, created_at: '2026-09-05T01:00:00.000Z' })
     const b = credit({ id: 'b', date: '2026-09-05', amount: 1800, created_at: '2026-09-05T02:00:00.000Z' })
     const c = credit({ id: 'c', date: '2026-08-01', amount: 6000, installments: 4 }) // 9/10/11/12
     const r = activePlans([old, a, b, c], 'jd', '2026-10')

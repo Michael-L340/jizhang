@@ -329,6 +329,7 @@ export function Entry() {
       category_id: type === 'expense' ? childId ?? parentId : type === 'income' ? incomeCatId : null,
       note: note.trim() || null,
       installments: onCredit ? instN : null,
+      settles: null,
       created_at: editing?.created_at ?? nowIso(),
     }
     const ok = editing ? await editTx(tx) : await addTx(tx)

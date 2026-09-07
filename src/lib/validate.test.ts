@@ -25,8 +25,8 @@ const [T1, T2] = [uuid(21), uuid(22)]
 function base(): Fixture {
   return {
     accounts: [
-      { id: A1, name: '微信', kind: 'wallet', sort: 1, is_archived: false },
-      { id: A2, name: '中国银行', kind: 'bank', sort: 2, is_archived: false },
+      { id: A1, name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null },
+      { id: A2, name: '中国银行', kind: 'bank', sort: 2, is_archived: false, repay_day: null },
     ],
     categories: [
       { id: C1, kind: 'expense', parent_id: null, name: '日常餐饮', icon: '🍚', sort: 1, is_archived: false, note: '正常校园吃饭消费' },

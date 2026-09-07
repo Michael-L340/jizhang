@@ -78,6 +78,7 @@ export function Accounts() {
       category_id: null,
       note: '余额校准',
       installments: null,
+      settles: null,
       created_at: nowIso(),
     })
     setBusy(false)
@@ -136,6 +137,7 @@ export function Accounts() {
       category_id: null,
       note: '还款',
       installments: null,
+      settles: null,
       created_at: nowIso(),
     }
     const ok = await addTx(tx)

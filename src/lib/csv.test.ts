@@ -11,7 +11,7 @@ const C1 = '22222222-2222-4222-8222-222222222222'
 const T1 = '33333333-3333-4333-8333-333333333333'
 const T2 = '44444444-4444-4444-8444-444444444444'
 
-const acc: Account = { id: A1, name: '微信', kind: 'wallet', sort: 1, is_archived: false }
+const acc: Account = { id: A1, name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null }
 const cat: Category = { id: C1, kind: 'expense', parent_id: null, name: '日常开支', icon: '🍚', sort: 1, is_archived: false, note: null }
 const tx: Transaction = {
   id: T1,
@@ -23,6 +23,7 @@ const tx: Transaction = {
   category_id: C1,
   note: '午饭',
   installments: null,
+  settles: null,
   created_at: '2026-09-04T02:00:00.000Z',
 }
 const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx] }
@@ -82,7 +83,14 @@ describe('parseImport', () => {
 
   it('数据库没有的列也要扔掉，否则 PostgREST 会说 column does not exist', () => {
     const out = parseImport(file({ transactions: [{ ...tx, 备注2: '手写脚本加的' }] }))
-    expect(Object.keys(out.transactions[0]).sort()).toEqual(['account_id', 'amount', 'category_id', 'created_at', 'date', 'id', 'installments', 'note', 'to_account_id', 'type'])
+    expect(Object.keys(out.transactions[0]).sort()).toEqual(['account_id', 'amount', 'category_id', 'created_at', 'date', 'id', 'installments', 'note', 'settles', 'to_account_id', 'type'])
+  })
+
+  // 账户也守一遍。加一列而 readAccount 忘了收，备份文件里有、导进去却是空的，静默丢数据。
+  it('账户也只收数据库真有的那几列', () => {
+    const out = parseImport(file({ accounts: [{ id: '11111111-1111-4111-8111-111111111111', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: 17, 余额: '瞎写的' }] }))
+    expect(Object.keys(out.accounts[0]).sort()).toEqual(['id', 'is_archived', 'kind', 'name', 'repay_day', 'sort'])
+    expect(out.accounts[0].repay_day).toBe(17)
   })
 
   it('parseImport 真的接上了 validate.ts（不是只看那四样）', () => {
