@@ -26,7 +26,7 @@
 4. `npm run deploy` 发布。它按顺序做：check → test → **版本号第三位自动 +1 并打 tag**（v1.0.1、v1.0.2……可到两位数如 v1.0.12）→ 构建 → 发到 gh-pages → 推 main 和 tag。所以**先 commit 再 deploy**（工作区不干净会被拒），**不要手改 `package.json` 的 version**。 大功能（比如 1.1.0 的白条）用 `npm run deploy:minor`，第二位 +1、第三位归零，其余步骤一样。改坏了 `git revert` 回退再 deploy，版本号照常 +1。
 
 ## 测试纪律
-- 动了 `lib/store.ts` / `lib/compute.ts` / `lib/pending.ts` / `lib/outbox.ts` 就要补测试。这三个文件的 bug 大多是时序或边界问题，肉眼和手动操作都很难稳定复现。
+- 动了 `lib/store.ts` / `lib/compute.ts` / `lib/pending.ts` / `lib/outbox.ts` 就要补测试。这几个文件的 bug 大多是时序或边界问题，肉眼和手动操作都很难稳定复现。
 - `store.test.ts` 的隔离手段：`vi.mock('./api')` 换掉唯一联网的那层，`vi.resetModules()` 每例重建 store 模块（避开 `pendingTx` / `persistTimer` 这些模块级单例串味），`vi.useFakeTimers()` 让 500ms 去抖和 10s 分类窗口变成确定性推进。照这个模式加新用例。
 - **新写的测试必须先证明它会红**：把对应的修复改回出 bug 前的写法，确认用例真的变红，再改回来。不会红的测试是负资产，它让人以为有保护，其实没有。
 - 单测跑在 node 环境（`vite.config.ts` 的 `test.environment`），没有 DOM。纯逻辑放 `lib/`，页面里只留渲染，这样才测得到。
