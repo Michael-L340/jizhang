@@ -19,7 +19,7 @@ const CREDIT_GROUP = '__credit__'
 
 /** 分期选项。'1' = 下个月一次还清；custom 时期数从输入框读 */
 const INST_OPTS: { id: string; label: string }[] = [
-  { id: '1', label: '下月一次还' },
+  { id: '1', label: '一次还清' },
   { id: '3', label: '3 期' },
   { id: '6', label: '6 期' },
   { id: '12', label: '12 期' },
@@ -503,7 +503,11 @@ export function Entry() {
             />
             {onCredit ? (
               <div className="mt-3">
-                <div className="text-xs text-muted mb-1">分期 · 从下个月起每月还一期</div>
+                {/* 到期日由账户的还款日决定，不再是写死的「下个月」：京东 17 号的话
+                    9/6 下单就是 9/17 到期。所以这行提示要跟着账户变。 */}
+                <div className="text-xs text-muted mb-1">
+                  分期{creditAcc?.repay_day ? ` · ${creditAcc.name}每月 ${creditAcc.repay_day} 号还款` : ' · 先用后付，确认收货后几天扣'}
+                </div>
                 <ChipGroup options={INST_OPTS} value={inst} onChange={setInst} />
                 {inst === 'custom' ? (
                   <input
@@ -520,7 +524,9 @@ export function Entry() {
                     每期 ¥{fmtYuan(plan[0].amount)}
                     {plan.length > 1 && plan[plan.length - 1].amount !== plan[0].amount ? `，最后一期 ¥${fmtYuan(plan[plan.length - 1].amount)}` : ''}
                     {' · '}
-                    {plan.length <= 3 ? plan.map((x) => `${Number(x.ym.slice(5))} 月`).join('、') : `${Number(plan[0].ym.slice(5))} 月起，到 ${plan[plan.length - 1].ym.replace('-', ' 年 ')} 月`}
+                    {plan.length <= 3
+                      ? plan.map((x) => `${Number(x.date.slice(5, 7))}/${Number(x.date.slice(8))} 到期`).join('、')
+                      : `${Number(plan[0].date.slice(5, 7))}/${Number(plan[0].date.slice(8))} 起，到 ${plan[plan.length - 1].ym.replace('-', ' 年 ')} 月`}
                   </div>
                 ) : null}
               </div>

@@ -3,19 +3,20 @@ import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
-import { activePlans, balances, balanceShares, debtOf, dueInMonth, monthByAccount, splitAccounts } from '../lib/compute'
+import { balances, balanceShares, debtOf, dueInMonth, monthBill, monthByAccount, splitAccounts } from '../lib/compute'
 import { fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
 import { calcDelta, fmtYuan, parseYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
-import type { Account } from '../types'
+import type { Account, Transaction } from '../types'
 
 export function Accounts() {
   const txs = useStore((s) => s.transactions)
   const addTx = useStore((s) => s.addTx)
   const removeTx = useStore((s) => s.removeTx)
+  const editTx = useStore((s) => s.editTx)
   const showToast = useStore((s) => s.showToast)
   const lastSync = useStore((s) => s.lastSync)
   const syncFailed = useStore((s) => s.syncFailed)
@@ -100,7 +101,36 @@ export function Accounts() {
   const withDebt = credits.filter((c) => (bal[c.id] ?? 0) < 0).length
   const [creditOpen, setCreditOpen] = usePersistedState('jz_acc_creditOpen', false)
   const [creditTarget2, setCreditTarget2] = useState<Account | null>(null)
-  const plans = useMemo(() => (creditTarget2 ? activePlans(txs, creditTarget2, ym) : []), [txs, creditTarget2, ym])
+  // 面板按「一行 = 这个月该还的一笔」画：分期只出本期那一份，各行之和 = 本月该还
+  const bill = useMemo(() => (creditTarget2 ? monthBill(txs, creditTarget2, ym) : null), [txs, creditTarget2, ym])
+  /** 勾选的行（存支出 id）。默认全勾，金额就是本月该还，和以前的行为一样 */
+  const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
+  /** 正在修改的那笔还款；null = 在记新的一笔 */
+  const [editingRepay, setEditingRepay] = useState<Transaction | null>(null)
+  // 这个白条上最近的几笔还款，点一条可以回去改勾选（勾错了不用删掉重记）
+  const recentRepays = useMemo(
+    () =>
+      creditTarget2
+        ? txs
+            .filter((t) => t.type === 'transfer' && t.to_account_id === creditTarget2.id)
+            .sort((a, b) => (a.date === b.date ? (a.created_at < b.created_at ? 1 : -1) : a.date < b.date ? 1 : -1))
+            .slice(0, 5)
+        : [],
+    [txs, creditTarget2],
+  )
+  const yuanStr = (cents: number) => fmtYuan(cents).replace(/,/g, '')
+  /** 勾选之和。改勾选时金额跟着变，但用户仍然可以自己改成别的数 */
+  function pickSum(ids: ReadonlySet<string>): number {
+    return (bill?.rows ?? []).reduce((sum, r) => sum + (ids.has(r.tx.id) ? r.due.amount : 0), 0)
+  }
+  const pickedSum = pickSum(picked)
+  function togglePick(id: string) {
+    const next = new Set(picked)
+    if (next.has(id)) next.delete(id)
+    else next.add(id)
+    setPicked(next)
+    setRepayInput(yuanStr(pickSum(next)))
+  }
   const [repayFrom, setRepayFrom] = usePersistedState<string | null>('jz_repay_from', null)
   const [repayInput, setRepayInput] = useState('')
 
@@ -116,27 +146,60 @@ export function Accounts() {
 
   function openCredit(a: Account) {
     setCreditTarget2(a)
+    setEditingRepay(null)
+    // 默认全勾：金额就是本月该还，和以前一键还款的行为一样，想少还再取消几个
+    const rows = monthBill(txs, a, ym).rows
+    setPicked(new Set(rows.map((r) => r.tx.id)))
     const owed = Math.max(0, -(bal[a.id] ?? 0))
     // 金额按本月还应还的填好（已扣掉本月已还的，且不超过欠款）；这个月没有到期的就填全部欠款；没欠就留空
     const d = Math.min(due.get(a.id) ?? 0, owed)
-    setRepayInput(d > 0 ? fmtYuan(d).replace(/,/g, '') : owed > 0 ? fmtYuan(owed).replace(/,/g, '') : '')
+    setRepayInput(d > 0 ? yuanStr(d) : owed > 0 ? yuanStr(owed) : '')
+  }
+
+  /** 点最近的某笔还款：把它的金额和勾选装回面板，改完保存 */
+  function editRepay(t: Transaction) {
+    setEditingRepay(t)
+    setPicked(new Set(t.settles ?? []))
+    setRepayInput(yuanStr(t.amount))
+  }
+
+  /**
+   * 勾中且「能记结清」的那些订单 id。分期订单能勾（要算进金额），但不写进 settles——
+   * settles 指的是一整单结清，分期有好几期，说不清勾一下算结清了整单还是某一期。
+   */
+  function settlesOfPicked(): string[] | null {
+    const ids = (bill?.rows ?? []).filter((r) => r.selectable && picked.has(r.tx.id)).map((r) => r.tx.id)
+    return ids.length ? ids : null
   }
 
   async function repay() {
-    if (!creditTarget2 || !fromAcc || !repayCents || repayCents <= 0) return
+    if (!creditTarget2 || !repayCents || repayCents <= 0) return
     const credit = creditTarget2
     setBusy(true)
-    const tx = {
+    if (editingRepay) {
+      const next: Transaction = { ...editingRepay, amount: repayCents, settles: settlesOfPicked() }
+      const ok = await editTx(next)
+      setBusy(false)
+      if (!ok) return
+      setCreditTarget2(null)
+      showToast(`已改这笔还款 ¥${fmtYuan(repayCents)}`)
+      return
+    }
+    if (!fromAcc) {
+      setBusy(false)
+      return
+    }
+    const tx: Transaction = {
       id: newId(),
       date: today(),
-      type: 'transfer' as const,
+      type: 'transfer',
       amount: repayCents,
       account_id: fromAcc.id,
       to_account_id: credit.id,
       category_id: null,
       note: '还款',
       installments: null,
-      settles: null,
+      settles: settlesOfPicked(),
       created_at: nowIso(),
     }
     const ok = await addTx(tx)
@@ -241,13 +304,13 @@ export function Accounts() {
                 {credits.map((c) => {
                   const owed = Math.max(0, -(bal[c.id] ?? 0))
                   const d = due.get(c.id) ?? 0
-                  const n = activePlans(txs, c, ym).length
+                  const n = monthBill(txs, c, ym).rows.length
                   return (
                     <button key={c.id} type="button" className="w-full text-left flex items-center gap-2.5 py-2.5" onClick={() => openCredit(c)}>
                       <AccountIcon name={c.name} size={28} />
                       <span className="flex-1 min-w-0">
                         <span className="block text-[15px]">{c.name}</span>
-                        <span className="block text-[11px] text-muted">{n ? `${n} 笔分期中` : owed ? '点开记还款' : '没有欠款'}</span>
+                        <span className="block text-[11px] text-muted">{n ? `本月 ${n} 笔要还` : owed ? '点开记还款' : '没有欠款'}</span>
                       </span>
                       <span className="text-right">
                         <span className={`block num font-semibold ${owed > 0 ? 'text-expense' : 'text-muted text-sm'}`}>{owed > 0 ? `欠 ${fmtYuan(owed)}` : '已还清'}</span>
@@ -283,63 +346,133 @@ export function Accounts() {
 
       <div className="text-xs text-muted mt-4 leading-relaxed">
         点账户输入实际余额。一致就什么都不记；不一致时，差额会记成一条「余额校准」，出现在流水里但不计入收入支出，随时可以删除或改成一笔正常收支。
-        {credits.length ? ' 白条：下单时记支出（账户选白条、填分几期），平台扣款时点开白条记还款，记成转账，不会把同一笔算两次。' : ''}
+        {credits.length
+          ? ' 白条：下单时记支出（账户选白条、填分几期），到期日按这个账户的还款日算。平台扣款时点开白条，勾上还的是哪几笔再记还款，记成转账，不会把同一笔算两次。'
+          : ''}
       </div>
 
       {/* 白条弹层：分期明细 + 一键还款 + 核对待还 */}
       <Sheet open={Boolean(creditTarget2)} onClose={() => setCreditTarget2(null)} title={creditTarget2 ? `${creditTarget2.name} · ${(bal[creditTarget2.id] ?? 0) < 0 ? `欠 ${fmtYuan(-(bal[creditTarget2.id] ?? 0), { symbol: true })}` : '已还清'}` : ''}>
         {creditTarget2 ? (
           <>
-            {plans.length ? (
+            {bill && bill.rows.length ? (
               <>
-                <div className="text-xs text-muted mb-1">分期中</div>
-                <div className="mb-4">
-                  {plans.map((p) => {
-                    const { icon, title } = planTitle(p.tx.category_id, p.tx.note)
-                    const n = p.plan.length
+                <div className="flex items-center justify-between mb-1">
+                  <span className="text-xs text-muted">
+                    {Number(ym.slice(5))} 月账单 · 勾上的算进金额
+                  </span>
+                  <button
+                    type="button"
+                    className="text-[11px] text-brand-ink px-1"
+                    onClick={() => {
+                      const all = picked.size < bill.rows.length ? new Set(bill.rows.map((r) => r.tx.id)) : new Set<string>()
+                      setPicked(all)
+                      setRepayInput(yuanStr(pickSum(all)))
+                    }}
+                  >
+                    {picked.size < bill.rows.length ? '全选' : '全不选'}
+                  </button>
+                </div>
+                <div className="mb-3">
+                  {bill.rows.map((r) => {
+                    const { icon, title } = planTitle(r.tx.category_id, r.tx.note)
+                    const on = picked.has(r.tx.id)
                     return (
-                      <div key={p.tx.id} className="flex items-center gap-2.5 py-2 border-t border-line first:border-t-0">
+                      <button
+                        key={r.tx.id}
+                        type="button"
+                        className={`w-full text-left flex items-center gap-2.5 py-2 border-t border-line first:border-t-0 ${on ? 'bg-brand-soft' : ''}`}
+                        onClick={() => togglePick(r.tx.id)}
+                      >
+                        <span className={`w-[19px] h-[19px] rounded-md shrink-0 flex items-center justify-center text-[12px] font-bold ${on ? 'bg-brand text-on-brand' : 'border-2 border-line'}`}>
+                          {on ? '✓' : ''}
+                        </span>
                         <span className="text-xl w-7 text-center shrink-0">{icon}</span>
                         <span className="flex-1 min-w-0">
                           <span className="block text-sm truncate">{title}</span>
                           <span className="block text-[11px] text-muted num">
-                            {Number(p.tx.date.slice(5, 7))}/{Number(p.tx.date.slice(8))} 下单 ¥{fmtYuan(p.tx.amount)} · {n === 1 ? '下月一次还' : `分 ${n} 期`}
+                            {Number(r.tx.date.slice(5, 7))}/{Number(r.tx.date.slice(8))} 下单 ¥{fmtYuan(r.tx.amount)}
+                            {r.due.of > 1 ? ` · 第 ${r.due.seq}/${r.due.of} 期` : ''}
+                            {creditTarget2.repay_day ? ` · ${Number(r.due.date.slice(5, 7))}/${Number(r.due.date.slice(8))} 到期` : ' · 待扣款'}
                           </span>
                         </span>
-                        <span className="text-right shrink-0">
-                          <span className="block num text-sm font-medium">¥{fmtYuan((p.current ?? p.plan[p.done] ?? p.plan[n - 1]).amount)}</span>
-                          <span className="block num text-[11px] text-muted">{p.current ? `本月第 ${p.current.seq}/${n} 期` : `${p.done}/${n} 期已到期`}</span>
-                        </span>
-                      </div>
+                        <span className="num text-sm font-medium shrink-0">¥{fmtYuan(r.due.amount)}</span>
+                      </button>
                     )
                   })}
+                </div>
+                {/* 三行小结：这个月的账清没清，一眼看出来。「已还」是本月转进这个白条的钱加总 */}
+                <div className="text-xs flex flex-col gap-1 mb-4 pt-2.5 border-t border-line">
+                  <span className="flex justify-between">
+                    <span className="text-muted">本月该还</span>
+                    <span className="num font-medium">{fmtYuan(bill.total, { symbol: true })}</span>
+                  </span>
+                  <span className="flex justify-between">
+                    <span className="text-muted">本月已还</span>
+                    <span className="num font-medium text-income">{fmtYuan(bill.paid, { symbol: true })}</span>
+                  </span>
+                  <span className="flex justify-between">
+                    <span className="text-muted">还差</span>
+                    <span className={`num font-medium ${bill.left > 0 ? 'text-expense' : 'text-muted'}`}>{fmtYuan(bill.left, { symbol: true })}</span>
+                  </span>
                 </div>
               </>
             ) : null}
 
-            <div className="text-xs text-muted mb-1">记一笔还款</div>
-            <ChipGroup
-              options={assets.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> }))}
-              value={fromAcc?.id ?? ''}
-              onChange={setRepayFrom}
-              className="mb-2"
-            />
+            <div className="text-xs text-muted mb-1">{editingRepay ? `改这笔还款 · ${editingRepay.date}` : '记一笔还款'}</div>
+            {editingRepay ? null : (
+              <ChipGroup
+                options={assets.map((a) => ({ id: a.id, label: a.name, node: <AccountIcon name={a.name} size={18} /> }))}
+                value={fromAcc?.id ?? ''}
+                onChange={setRepayFrom}
+                className="mb-2"
+              />
+            )}
             <div className="flex items-center gap-2 mb-1">
               <span className="text-sm text-muted flex-1 truncate">
-                {fromAcc?.name ?? '?'} → {creditTarget2.name}
+                {(editingRepay ? (editingRepay.account_id ? nameOf(editingRepay.account_id) : '?') : (fromAcc?.name ?? '?'))} → {creditTarget2.name}
               </span>
               <span className="text-xl">¥</span>
               <input inputMode="decimal" className="w-32 num text-xl font-semibold bg-bg rounded-xl px-3 py-2 text-right" value={repayInput} onChange={(e) => setRepayInput(e.target.value)} />
             </div>
-            <div className="text-[11px] text-muted mb-3">金额按本月应还填好，扣得不一样可以改。记成转账，不进收支统计。</div>
+            {/* 勾了几单却填了别的数，多半是勾错了。提醒但不拦——平台合并扣款、收零头都可能 */}
+            {pickedSum > 0 && repayCents !== null && repayCents > 0 && pickedSum !== repayCents ? (
+              <div className="text-[11px] text-adjust mb-3">
+                勾选的是 {fmtYuan(pickedSum, { symbol: true })}，填的是 {fmtYuan(repayCents, { symbol: true })}，对不上。确认没勾错就照样记。
+              </div>
+            ) : (
+              <div className="text-[11px] text-muted mb-3">金额跟着勾选自动变，扣得不一样可以自己改。记成转账，不进收支统计。</div>
+            )}
             <button
               type="button"
-              disabled={busy || !fromAcc || !repayCents || repayCents <= 0}
+              disabled={busy || (!editingRepay && !fromAcc) || !repayCents || repayCents <= 0}
               className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold disabled:opacity-40"
               onClick={repay}
             >
-              记这笔还款
+              {editingRepay ? '保存修改' : '记这笔还款'}
             </button>
+            {editingRepay ? (
+              <button type="button" className="w-full rounded-2xl bg-bg text-muted py-3 font-medium mt-2" onClick={() => creditTarget2 && openCredit(creditTarget2)}>
+                取消，回到记新的一笔
+              </button>
+            ) : recentRepays.length ? (
+              <>
+                <div className="text-xs text-muted mt-4 mb-1">最近的还款 · 点一条可以改勾选</div>
+                <div className="mb-1">
+                  {recentRepays.map((t) => (
+                    <button key={t.id} type="button" className="w-full text-left flex items-center gap-2.5 py-2 border-t border-line first:border-t-0" onClick={() => editRepay(t)}>
+                      <span className="flex-1 min-w-0 text-sm num">
+                        {Number(t.date.slice(5, 7))}/{Number(t.date.slice(8))}
+                        <span className="text-muted"> · {t.account_id ? nameOf(t.account_id) : '?'}</span>
+                      </span>
+                      <span className="text-[11px] text-muted shrink-0">{t.settles?.length ? `结清 ${t.settles.length} 单` : '没指明结清哪几单'}</span>
+                      <span className="num text-sm font-medium shrink-0">¥{fmtYuan(t.amount)}</span>
+                      <span className="text-muted text-xs shrink-0">›</span>
+                    </button>
+                  ))}
+                </div>
+              </>
+            ) : null}
             <button
               type="button"
               className="w-full rounded-2xl bg-brand-soft text-brand-ink py-3 font-medium mt-2"
