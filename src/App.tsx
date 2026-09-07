@@ -26,15 +26,22 @@ function UpdateBanner() {
     },
   })
   if (!needRefresh[0]) return null
+  // 浮在顶部，不占页面高度。原来是顶部一整条实体，一冒出来整个页面被往下挤一截、
+  // 收起时又弹回去（用户 2026-09-07 反馈）。定位方式照抄 Toast：fixed + 整条不吃点击、
+  // 只有药丸本身可点，否则这条透明的横条会把它盖住的东西全吃掉。
+  // 顶部距离 = 刘海安全区再加 12px，不然在主屏 App 里会顶到状态栏上。
+  // z-40 是刻意的：要压过内容（流水页吸顶栏是 z-10），但要让弹层（Sheet z-50）盖住它。
   return (
-    <button
-      type="button"
-      className="w-full bg-brand text-on-brand text-sm py-3 px-4 flex items-center justify-center gap-2 safe-top"
-      onClick={() => void updateServiceWorker(true)}
-    >
-      <span>有新版本</span>
-      <span className="rounded-full bg-white/20 px-2.5 py-0.5 text-xs">点此更新</span>
-    </button>
+    <div className="pointer-events-none fixed inset-x-0 z-40 flex justify-center px-4 top-[calc(env(safe-area-inset-top)+12px)]">
+      <button
+        type="button"
+        className="pointer-events-auto flex items-center gap-2 rounded-full bg-brand text-on-brand text-sm font-medium pl-4 pr-1.5 py-1.5 shadow-lg active:opacity-90"
+        onClick={() => void updateServiceWorker(true)}
+      >
+        <span>有新版本</span>
+        <span className="rounded-full bg-white/30 px-2.5 py-1 text-xs">点此更新</span>
+      </button>
+    </div>
   )
 }
 
