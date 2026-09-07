@@ -10,6 +10,19 @@ import { checkForUpdate, hardReload } from '../lib/sw'
 import { RestoreFailed, useStore } from '../lib/store'
 import type { Snapshot } from '../types'
 
+/**
+ * 可点的状态格右上角的小转圈箭头。
+ * 三个格子长得一模一样，其中两个能点一个不能，不给记号根本看不出来
+ * ——用户原话：「同步看不出是个按钮」。
+ */
+function TapMark() {
+  return (
+    <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.6" strokeLinecap="round" strokeLinejoin="round" className="inline-block ml-1 align-[-1px]">
+      <path d="M20 12a8 8 0 1 1-2.4-5.7M20 3.5V8h-4.5" />
+    </svg>
+  )
+}
+
 export function Settings() {
   const nav = useNavigate()
   // 按需订阅：原来 useStore() 全订阅，每次 toast/同步/记账都会重渲染整个设置页
@@ -204,8 +217,11 @@ export function Settings() {
       {/* 状态卡：同步 / 备份 / 缓存 三格并排，一眼看健康度。细节只在出问题时才展开成一句话。 */}
       <div className="card p-3 mb-3">
         <div className="grid grid-cols-3 gap-1.5">
-          <button type="button" className="rounded-xl bg-bg px-2.5 py-2 text-left" onClick={() => void refresh()}>
-            <span className="block text-[10.5px] text-muted">同步</span>
+          <button type="button" className="rounded-xl bg-bg px-2.5 py-2 text-left active:opacity-60" onClick={() => void refresh()}>
+            <span className="block text-[10.5px] text-muted">
+              同步
+              <TapMark />
+            </span>
             <span className={`block text-[13px] font-semibold ${syncFailed ? 'text-expense' : ''}`}>
               <Dot tone={syncing ? 'muted' : syncFailed ? 'bad' : lastSync ? 'ok' : 'muted'} />
               {syncing ? '同步中…' : syncFailed ? '失败' : lastSync ? fmtIsoZh(lastSync) : '尚未'}
@@ -213,13 +229,16 @@ export function Settings() {
           </button>
           <button
             type="button"
-            className="rounded-xl bg-bg px-2.5 py-2 text-left"
+            className="rounded-xl bg-bg px-2.5 py-2 text-left active:opacity-60"
             onClick={() => {
               setBackupChecked(false)
               void loadBackupStatus().finally(() => setBackupChecked(true))
             }}
           >
-            <span className="block text-[10.5px] text-muted">自动备份</span>
+            <span className="block text-[10.5px] text-muted">
+              自动备份
+              <TapMark />
+            </span>
             <span className={`block text-[13px] font-semibold ${backupTone === 'warn' ? 'text-adjust' : ''}`}>
               <Dot tone={backupTone === 'ok' ? 'ok' : backupTone === 'warn' ? 'warn' : 'muted'} />
               {backupText}

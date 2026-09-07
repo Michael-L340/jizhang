@@ -19,6 +19,8 @@ export function Accounts() {
   const showToast = useStore((s) => s.showToast)
   const lastSync = useStore((s) => s.lastSync)
   const syncFailed = useStore((s) => s.syncFailed)
+  const syncing = useStore((s) => s.syncing)
+  const refresh = useStore((s) => s.refresh)
   const accounts = useActiveAccounts()
   const catMap = useCategoryMap()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
@@ -159,9 +161,18 @@ export function Accounts() {
             资产 {fmtYuan(totalOf(bal) + debt, { symbol: true })} · 白条待还 {fmtYuan(debt, { symbol: true })}
           </div>
         ) : null}
-        <div className={`text-xs mt-1 ${syncFailed ? 'text-adjust' : 'text-muted'}`}>
-          {lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}
-          {syncFailed ? ' · 最近一次同步失败' : ''}
+        {/* 同步失败时这里是用户最先看见的地方，得能就地重试——
+            以前只有设置页那个不像按钮的状态格能点，等于没有。 */}
+        <div className={`text-xs mt-1 flex items-center gap-2 ${syncFailed ? 'text-adjust' : 'text-muted'}`}>
+          <span>
+            {lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}
+            {syncFailed ? ' · 最近一次同步失败' : ''}
+          </span>
+          {syncFailed ? (
+            <button type="button" className="chip shrink-0" style={{ padding: '2px 9px' }} disabled={syncing} onClick={() => void refresh()}>
+              {syncing ? '同步中…' : '重试'}
+            </button>
+          ) : null}
         </div>
       </div>
 

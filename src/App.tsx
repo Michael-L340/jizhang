@@ -52,8 +52,15 @@ function Root() {
     const onVisible = () => {
       if (document.visibilityState === 'visible') void refresh()
     }
+    // 断网时同步失败后，只要 App 一直开着就再也不会重试（visibilitychange 不触发）。
+    // 地铁里失败、出站后网络回来，这一下把它补上。
+    const onOnline = () => void refresh()
     document.addEventListener('visibilitychange', onVisible)
-    return () => document.removeEventListener('visibilitychange', onVisible)
+    window.addEventListener('online', onOnline)
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible)
+      window.removeEventListener('online', onOnline)
+    }
   }, [refresh])
 
   if (auth === 'loading') {
