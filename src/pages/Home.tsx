@@ -1,6 +1,6 @@
 import { lazy, Suspense, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
-import { AccountIcon } from '../components/AccountIcon'
+import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
@@ -177,7 +177,9 @@ export function Home() {
         <div className="num text-3xl font-semibold tracking-tight mb-3">{fmtYuan(assetTotal, { symbol: true })}</div>
         <div className="grid grid-cols-2 gap-2">
           {assets.map((a) => (
-            <Link key={a.id} to="/accounts" className="rounded-xl bg-bg px-3 py-2.5 flex items-center gap-2">
+            // 底色是各家品牌色兑白到 7%（accountTint）。原来是 bg-bg，而它等于页面背景色，
+            // 格子压在白卡片上根本分不开，四个账户看着像一段文字
+            <Link key={a.id} to="/accounts" className="rounded-xl px-3 py-2.5 flex items-center gap-2" style={{ background: accountTint(a.name) }}>
               <AccountIcon name={a.name} size={28} />
               <span className="min-w-0">
                 <span className="block text-xs text-muted truncate">{a.name}</span>

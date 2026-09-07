@@ -147,3 +147,17 @@ export function AccountIcon({ name, size = 40 }: Props) {
 export function accountColor(name: string): string {
   return brandOf(name).color
 }
+
+/**
+ * 账户格子的底色：品牌色兑白到很淡的一层。
+ * 首页那四个格子原来用 `bg-bg`（#faf7f2），而这个值正好等于页面背景色、格子却压在白卡片上，
+ * 四个账户糊成一片文字（用户 2026-09-07 反馈，看过五个方案后选了品牌浅底）。
+ * 不用 CSS 的 `color-mix`：iOS 16.2 以前的 Safari 不认它，而且失败是静默的
+ * ——整条 background 声明被丢掉，格子退回透明，在手机上根本看不出来是浏览器不支持。
+ * 这里直接算成十六进制，任何浏览器都一样。
+ */
+export function accountTint(name: string, pct = 0.07): string {
+  const n = parseInt(brandOf(name).color.slice(1), 16)
+  const toWhite = (c: number) => Math.round(255 + (c - 255) * pct)
+  return `#${[(n >> 16) & 255, (n >> 8) & 255, n & 255].map((c) => toWhite(c).toString(16).padStart(2, '0')).join('')}`
+}

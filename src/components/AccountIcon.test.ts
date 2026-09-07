@@ -3,7 +3,7 @@
 // 底板一个是圆、一个是圆角方，而招行的图形右边还挂着六条横杠会把重心带偏。
 // 这里守住的是「以后加别的银行时不会又歪掉」。
 import { describe, expect, it } from 'vitest'
-import { accountColor, BRANDS, brandOf } from './AccountIcon'
+import { accountColor, accountTint, BRANDS, brandOf } from './AccountIcon'
 
 const box = (vb: string) => vb.trim().split(/\s+/).map(Number)
 
@@ -57,6 +57,21 @@ describe('账户图标', () => {
     expect(new Set(colors).size).toBe(4)
     expect(brandOf('中行')).toBe(brandOf('中国银行'))
     expect(brandOf('招行')).toBe(brandOf('招商银行'))
+  })
+
+  it('格子底色看得见，又不至于压过卡片', () => {
+    // 首页四个账户格子的底 = 品牌色兑白。两头都得守住：
+    // 兑得太淡（比如退回 bg-bg 那种）在白卡片上就分不开；兑得太浓会盖过上面的总资产数字。
+    const rgb = (hex: string) => [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16))
+    for (const name of ['中国银行', '招商银行', '支付宝', '微信']) {
+      const t = accountTint(name)
+      expect(t, name).toMatch(/^#[0-9a-f]{6}$/)
+      const c = rgb(t)
+      // 离纯白至少 8/255，否则等于没上色
+      expect(Math.max(...c.map((v) => 255 - v)), `${name} 的底色 ${t} 太淡`).toBeGreaterThanOrEqual(8)
+      // 仍然是浅底，灰色的账户名压在上面要读得出
+      expect(Math.min(...c), `${name} 的底色 ${t} 太深`).toBeGreaterThanOrEqual(215)
+    }
   })
 
   it('不认识的名字有兜底，不会崩', () => {
