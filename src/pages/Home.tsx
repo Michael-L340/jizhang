@@ -6,11 +6,10 @@ import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitA
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
+import { categoryColor } from '../lib/palette'
 import { useActiveAccounts, useStore } from '../lib/store'
 
 const Chart = lazy(() => import('../components/Chart'))
-
-const PIE_COLORS = ['#2f6fed', '#f5a524', '#1f9d55', '#e5484d', '#7c5cff', '#0ea5e9', '#f97316']
 
 export function Home() {
   const txs = useStore((s) => s.transactions)
@@ -38,6 +37,10 @@ export function Home() {
   const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
   const dueTotal = useMemo(() => [...dueInMonth(txs, credits, ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
+  // 和统计页共用 categoryColor：分类颜色跟着名字走，不跟名次走。
+  // 以前这里是一串写死的颜色按名次发，同一个分类在两页颜色不一样，对着看会错乱；
+  // 而且那串还是 09-05 换暖色主题之前的冷色。
+  const pieColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
   const recent = useMemo(() => sortTxs(txs).slice(0, 5), [txs])
 
   const td = today()
@@ -59,7 +62,7 @@ export function Home() {
 
   const pieOption = useMemo(
     () => ({
-      color: PIE_COLORS,
+      color: pieColors,
       // series 的 value 是元，fmtYuan 只接受分，必须先折回分再格式化
       tooltip: { trigger: 'item', valueFormatter: (v: number) => `¥${fmtYuan(Math.round(v * 100))}` },
       series: [
@@ -73,7 +76,7 @@ export function Home() {
         },
       ],
     }),
-    [agg],
+    [agg, pieColors],
   )
 
   return (
@@ -214,7 +217,7 @@ export function Home() {
             <div className="flex-1 min-w-0 flex flex-col gap-1.5">
               {agg.slice(0, 5).map((a, i) => (
                 <div key={a.id} className="flex items-center gap-2 text-sm">
-                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: PIE_COLORS[i % PIE_COLORS.length] }} />
+                  <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: pieColors[i % pieColors.length] }} />
                   <span className="flex-1 truncate">{a.name}</span>
                   <span className="num text-muted text-xs">{sum.expense ? Math.round((a.amount / sum.expense) * 100) : 0}%</span>
                   <span className="num w-20 text-right">{fmtYuan(a.amount)}</span>

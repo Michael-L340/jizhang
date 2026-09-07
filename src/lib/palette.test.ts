@@ -144,3 +144,20 @@ describe('一级支出分类的配色约束', () => {
     expect(categoryColor('其他')).not.toBe(categoryColor('意外开支'))
   })
 })
+
+describe('分类颜色只有一个来源', () => {
+  // 首页曾经自带一串写死的颜色、按名次发色：同一个分类在首页和统计页颜色不一样，
+  // 两页对着看会错乱；而且那串还是换暖色主题之前的冷色，主题变了它不会跟着变。
+  // 页面里不许再出现写死的颜色，一律走 categoryColor。
+  it('首页不许写死十六进制颜色', () => {
+    const src = readFileSync(new URL('../pages/Home.tsx', import.meta.url), 'utf8')
+    const hits = src.match(/#[0-9a-fA-F]{6}\b/g) ?? []
+    expect(hits, `Home.tsx 里写死了颜色：${hits.join(' ')}`).toEqual([])
+  })
+
+  // 统计页暂时不纳入这条守卫：它还有一批 09-05 换暖色主题之前留下的写死颜色
+  // （趋势线用旧的支出红 #e5484d / 收入绿 #1f9d55、余额线用旧品牌蓝 #2f6fed、
+  // 坐标轴是冷灰），那批和分类配色无关，用户明确说先放着。收拾那批时把
+  // Stats.tsx 加进上面这条断言，别再留第二个例外。
+  it.todo('统计页的图表颜色也要跟着主题走（旧冷色待清理）')
+})

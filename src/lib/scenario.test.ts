@@ -211,6 +211,34 @@ describe('真人使用：改一笔已经勾过结清的还款', () => {
   })
 })
 
+describe('真人使用：删掉一笔还款再撤销', () => {
+  it('删掉还款：被它结清的订单回到账单；撤销：结清关系原样回来', async () => {
+    const cup = buy({ account_id: pdd.id, date: '2026-09-01', amount: 1900 })
+    const cable = buy({ account_id: pdd.id, date: '2026-09-03', amount: 900 })
+    await st().addTx(cup)
+    await st().addTx(cable)
+    const deduct = pay({ to_account_id: pdd.id, amount: 1900, date: '2026-09-08', settles: [cup.id] })
+    await st().addTx(deduct)
+    expect(monthBill(st().transactions, pdd, '2026-09').rows.map((r) => r.tx.id)).toEqual([cable.id])
+
+    // 面板里「删掉这笔还款」
+    expect(await st().removeTx(deduct.id)).toBe(true)
+    let txs = st().transactions
+    invariants(txs)
+    expect(settledIds(txs).size).toBe(0)
+    expect(monthBill(txs, pdd, '2026-09').rows.map((r) => r.tx.id).sort()).toEqual([cable.id, cup.id].sort())
+    expect(balances(txs, accounts)[pdd.id]).toBe(-2800)
+
+    // 撤销：原样加回去，id 和 settles 都不变
+    expect(await st().addTx(deduct)).toBe(true)
+    txs = st().transactions
+    invariants(txs)
+    expect([...settledIds(txs)]).toEqual([cup.id])
+    expect(monthBill(txs, pdd, '2026-09').rows.map((r) => r.tx.id)).toEqual([cable.id])
+    expect(balances(txs, accounts)[pdd.id]).toBe(-900)
+  })
+})
+
 describe('真人使用：导出、导入、备份格式', () => {
   it('带 settles 和 repay_day 的账本，导出再导入逐字段一致', async () => {
     const cup = buy({ account_id: pdd.id, amount: 1900 })

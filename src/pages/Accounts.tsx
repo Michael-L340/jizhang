@@ -173,6 +173,26 @@ export function Accounts() {
     return ids.length ? ids : null
   }
 
+  /**
+   * 删掉正在改的这笔还款。结清关系挂在这条记录上，删了它，被它结清的订单
+   * 自动回到账单里，不用另外去取消勾选。
+   */
+  async function deleteRepay() {
+    const t = editingRepay
+    if (!t) return
+    const n = t.settles?.length ?? 0
+    if (!window.confirm(`删掉 ${t.date} 这笔 ¥${fmtYuan(t.amount)} 的还款？${n ? `被它结清的 ${n} 单会回到账单里。` : ''}`)) return
+    setBusy(true)
+    const ok = await removeTx(t.id)
+    setBusy(false)
+    if (!ok) return
+    setCreditTarget2(null)
+    showToast(`已删掉这笔还款 ¥${fmtYuan(t.amount)}`, async () => {
+      // 撤销就是把原样那条加回去：id 和 settles 都不变，结清关系跟着一起回来
+      if (await addTx(t)) showToast('已恢复这笔还款')
+    })
+  }
+
   async function repay() {
     if (!creditTarget2 || !repayCents || repayCents <= 0) return
     const credit = creditTarget2
@@ -459,9 +479,14 @@ export function Accounts() {
               {editingRepay ? '保存修改' : '记这笔还款'}
             </button>
             {editingRepay ? (
-              <button type="button" className="w-full rounded-2xl bg-bg text-muted py-3 font-medium mt-2" onClick={() => creditTarget2 && openCredit(creditTarget2)}>
-                取消，回到记新的一笔
-              </button>
+              <>
+                <button type="button" disabled={busy} className="w-full rounded-2xl bg-expense-soft text-expense py-3 font-medium mt-2 disabled:opacity-40" onClick={deleteRepay}>
+                  删掉这笔还款
+                </button>
+                <button type="button" className="w-full rounded-2xl bg-bg text-muted py-3 font-medium mt-2" onClick={() => creditTarget2 && openCredit(creditTarget2)}>
+                  取消，回到记新的一笔
+                </button>
+              </>
             ) : recentRepays.length ? (
               <>
                 <div className="text-xs text-muted mt-4 mb-1">最近的还款 · 点一条可以改勾选</div>
