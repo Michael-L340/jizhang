@@ -21,6 +21,8 @@
   --color-brand-ink: #8a6026;
   --color-brand-soft: #fdf2e4;
   --color-expense: #c95a4e;
+  /* 支出色的浅底，用在同步失败这类提示条上。和 --color-brand-soft 同一个套路 */
+  --color-expense-soft: #fbeae7;
   --color-income: #4d8a5e;
   --color-transfer: #8a6bb5;
   --color-adjust: #b07d1e;
