@@ -331,7 +331,9 @@ export function Entry() {
       category_id: type === 'expense' ? childId ?? parentId : type === 'income' ? incomeCatId : null,
       note: note.trim() || null,
       installments: onCredit ? instN : null,
-      settles: null,
+      // 结清关系在账户页那个面板里改，这一页不显示它。这里必须原样带回去——
+      // 写 null 的话，从流水点开一笔还款只改了个金额，勾过的结清就被悄悄抹掉了
+      settles: editing?.settles ?? null,
       created_at: editing?.created_at ?? nowIso(),
     }
     const ok = editing ? await editTx(tx) : await addTx(tx)

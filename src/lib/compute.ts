@@ -510,9 +510,12 @@ export function installmentPlan(t: Pick<Transaction, 'date' | 'amount' | 'instal
  * 已经被某笔还款「勾选结清」的支出 id。
  * settles 挂在还款那一侧，所以删掉还款记录，这里自然就不再包含它了。
  */
-export function settledIds(txs: Transaction[]): Set<string> {
+export function settledIds(txs: Transaction[], ignoreRepayId?: string): Set<string> {
   const out = new Set<string>()
-  for (const t of txs) if (t.settles) for (const id of t.settles) out.add(id)
+  for (const t of txs) {
+    if (!t.settles || t.id === ignoreRepayId) continue
+    for (const id of t.settles) out.add(id)
+  }
   return out
 }
 
@@ -602,8 +605,12 @@ export interface MonthBill {
  * 分期订单只出本期那一份，所以各行加起来正好等于「本月该还」。
  * 一行 = 一整个订单的话，分期订单显示整单金额，勾选加总就和本月应还对不上了。
  */
-export function monthBill(txs: Transaction[], acc: Account, ym: string): MonthBill {
-  const settled = settledIds(txs)
+/**
+ * @param ignoreRepayId 正在修改的那笔还款。它结清的订单要重新出现在账单里，
+ * 否则改勾选时那几单根本不显示，想取消都取消不了。
+ */
+export function monthBill(txs: Transaction[], acc: Account, ym: string, ignoreRepayId?: string): MonthBill {
+  const settled = settledIds(txs, ignoreRepayId)
   const rows: Omit<BillRow, 'afterRepay'>[] = []
   const repayDates: string[] = []
   let paid = 0

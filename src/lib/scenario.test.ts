@@ -181,6 +181,36 @@ describe('真人使用：拼多多先用后付逐笔勾选', () => {
   })
 })
 
+describe('真人使用：改一笔已经勾过结清的还款', () => {
+  it('改勾选时，被这笔结清的订单要重新出现在账单里，否则取消都取消不了', async () => {
+    const cup = buy({ account_id: pdd.id, date: '2026-09-01', amount: 1900 })
+    const cable = buy({ account_id: pdd.id, date: '2026-09-03', amount: 900 })
+    await st().addTx(cup)
+    await st().addTx(cable)
+    const deduct = pay({ to_account_id: pdd.id, amount: 1900, date: '2026-09-08', settles: [cup.id] })
+    await st().addTx(deduct)
+    const txs = st().transactions
+
+    // 平时：杯子已结清，账单里没有它
+    expect(monthBill(txs, pdd, '2026-09').rows.map((r) => r.tx.id)).toEqual([cable.id])
+    // 点进这笔扣款要改勾选时：杯子必须重新出现，否则界面上根本没有那个勾可以取消
+    const editing = monthBill(txs, pdd, '2026-09', deduct.id)
+    expect(editing.rows.map((r) => r.tx.id).sort()).toEqual([cable.id, cup.id].sort())
+    // 别的还款结清的不受影响
+    expect(settledIds(txs, deduct.id).size).toBe(0)
+  })
+
+  it('从流水页改一笔还款的金额，不能把勾过的结清悄悄抹掉', async () => {
+    const cup = buy({ account_id: pdd.id, amount: 1900 })
+    await st().addTx(cup)
+    const deduct = pay({ to_account_id: pdd.id, amount: 1900, settles: [cup.id] })
+    await st().addTx(deduct)
+    // 流水页改金额时会重建整条记录，settles 必须原样带回去
+    expect(await st().editTx({ ...deduct, amount: 2000, settles: deduct.settles })).toBe(true)
+    expect([...settledIds(st().transactions)]).toEqual([cup.id])
+  })
+})
+
 describe('真人使用：导出、导入、备份格式', () => {
   it('带 settles 和 repay_day 的账本，导出再导入逐字段一致', async () => {
     const cup = buy({ account_id: pdd.id, amount: 1900 })

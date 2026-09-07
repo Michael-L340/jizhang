@@ -102,11 +102,12 @@ export function Accounts() {
   const [creditOpen, setCreditOpen] = usePersistedState('jz_acc_creditOpen', false)
   const [creditTarget2, setCreditTarget2] = useState<Account | null>(null)
   // 面板按「一行 = 这个月该还的一笔」画：分期只出本期那一份，各行之和 = 本月该还
-  const bill = useMemo(() => (creditTarget2 ? monthBill(txs, creditTarget2, ym) : null), [txs, creditTarget2, ym])
   /** 勾选的行（存支出 id）。默认全勾，金额就是本月该还，和以前的行为一样 */
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
   /** 正在修改的那笔还款；null = 在记新的一笔 */
   const [editingRepay, setEditingRepay] = useState<Transaction | null>(null)
+  // 改某笔还款时要把它自己排除掉，否则被它结清的那几单不在账单里，取消都取消不了
+  const bill = useMemo(() => (creditTarget2 ? monthBill(txs, creditTarget2, ym, editingRepay?.id) : null), [txs, creditTarget2, ym, editingRepay])
   // 这个白条上最近的几笔还款，点一条可以回去改勾选（勾错了不用删掉重记）
   const recentRepays = useMemo(
     () =>
