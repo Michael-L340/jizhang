@@ -22,7 +22,14 @@ function readCache(): Cache | null {
     if (!raw) return null
     const c = JSON.parse(raw) as Cache
     if (!Array.isArray(c.accounts) || !Array.isArray(c.categories) || !Array.isArray(c.transactions)) return null
-    return c
+    // 冷启动先拿缓存渲染，而这份缓存可能是加新列之前的版本写的，那些键根本不存在。
+    // undefined 不等于 null，会一路走进算式：dayInMonth(ym, undefined) 算出 "2026-09-NaN"，
+    // 「本月应还」在首屏就是错的（等一次同步回来才会自愈）。在入口补齐，别让 undefined 流出去。
+    return {
+      ...c,
+      accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null })),
+      transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null })),
+    }
   } catch {
     return null
   }

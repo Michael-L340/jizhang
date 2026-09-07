@@ -815,6 +815,30 @@ describe('loadBackupStatus', () => {
 // 离线记账 —— 断网时写不进云端的那几笔进待传队列，联网后自动补
 //   手工复现方式：开飞行模式记一笔，关掉飞行模式看它自己传上去
 // ══════════════════════════════════════════════════════════════
+describe('旧版本写的缓存', () => {
+  it('缺少新列的旧缓存要在入口补成 null，不能让 undefined 流进算式', async () => {
+    // 加列之前的缓存长这样：账户没有 repay_day，流水没有 settles / installments
+    ls.map.set(
+      CACHE_KEY,
+      JSON.stringify({
+        at: '2026-09-01T00:00:00.000Z',
+        accounts: [{ id: 'jd', name: '京东白条', kind: 'credit', sort: 5, is_archived: false }],
+        categories: [],
+        transactions: [{ id: 't1', date: '2026-09-06', type: 'expense', amount: 599, account_id: 'jd', to_account_id: null, category_id: null, note: null, created_at: '2026-09-06T00:00:00.000Z' }],
+      }),
+    )
+    vi.resetModules()
+    const again = await import('./store')
+    api.hasSession.mockResolvedValue(false)
+    await again.useStore.getState().init()
+    const s2 = again.useStore.getState()
+    // undefined 会让 dayInMonth 算出 "2026-09-NaN"，首屏的「本月应还」就是错的
+    expect(s2.accounts[0].repay_day).toBeNull()
+    expect(s2.transactions[0].settles).toBeNull()
+    expect(s2.transactions[0].installments).toBeNull()
+  })
+})
+
 describe('离线记账：待上传队列', () => {
   it('断网记一笔：留在界面上、进队列、算保存成功', async () => {
     api.insertTx.mockRejectedValueOnce(offline())
