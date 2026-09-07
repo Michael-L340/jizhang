@@ -53,6 +53,7 @@ function Root() {
   const flushOutbox = useStore((s) => s.flushOutbox)
   const noteHidden = useStore((s) => s.noteHidden)
   const noteVisible = useStore((s) => s.noteVisible)
+  const mode = useStore((s) => s.mode)
 
   useEffect(() => {
     void init()
@@ -89,6 +90,15 @@ function Root() {
   }
   return (
     <div className="app-shell">
+      {/* 里页面的记号：屏幕最顶上一条 2px 的深焦糖细线。
+          每一页都在——只在首页做记号的话，你在统计页长按完还得跑回首页才能确认。
+          外人看了只会当成设计的一部分，所以它不写字、不用报警色。
+          fixed 而不是塞进文档流：切换时页面不能跳，哪怕只跳 2px。
+          top 取安全区，否则在刘海屏上会钻到状态栏底下被系统时钟压住。
+          z-30 压过内容（流水页吸顶栏 z-10），但让更新胶囊（z-40）和弹层（z-50）盖住它。 */}
+      {mode === 'inner' ? (
+        <div className="fixed inset-x-0 z-30 h-0.5 bg-brand-ink" style={{ top: 'env(safe-area-inset-top)' }} aria-hidden />
+      ) : null}
       <UpdateBanner />
       {auth === 'out' ? <Login /> : <Outlet />}
       <Toast />

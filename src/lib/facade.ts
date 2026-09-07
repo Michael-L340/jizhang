@@ -18,8 +18,12 @@ export type Mode = 'outer' | 'inner'
 /** 切走 App 超过这么久再回来，自动退回外页面（用户 2026-09-07 定 60 秒） */
 export const INNER_TTL_MS = 60_000
 
-/** 长按 ＋ 多久算切换（用户 2026-09-07 定 2.5 秒；2 秒嫌容易按住出神误切） */
-export const HOLD_MS = 2500
+/**
+ * 长按 ＋ 多久算切换。用户 2026-09-07 试过 2.5 秒嫌久，定 1.5 秒。
+ * 按短了误触概率会升——但手指移动超过 10px 就取消，加上离开 60 秒自动回外页面，
+ * 真按住出神切进去了也兜得住。
+ */
+export const HOLD_MS = 1500
 
 /** 这个账户的偏移量（分）。白条和没设过的都是 0 */
 export function offsetOf(a: Account): number {
