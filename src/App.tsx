@@ -43,6 +43,7 @@ function Root() {
   const auth = useStore((s) => s.auth)
   const init = useStore((s) => s.init)
   const refresh = useStore((s) => s.refresh)
+  const flushOutbox = useStore((s) => s.flushOutbox)
 
   useEffect(() => {
     void init()
@@ -53,15 +54,19 @@ function Root() {
       if (document.visibilityState === 'visible') void refresh()
     }
     // 断网时同步失败后，只要 App 一直开着就再也不会重试（visibilitychange 不触发）。
-    // 地铁里失败、出站后网络回来，这一下把它补上。
-    const onOnline = () => void refresh()
+    // 地铁里失败、出站后网络回来，这一下把它补上：先补传欠的那几笔，再同步一次。
+    // 两件事都要做——refresh 碰上同步锁会静默早退，只靠它补传可能一直不发生。
+    const onOnline = () => {
+      void flushOutbox()
+      void refresh()
+    }
     document.addEventListener('visibilitychange', onVisible)
     window.addEventListener('online', onOnline)
     return () => {
       document.removeEventListener('visibilitychange', onVisible)
       window.removeEventListener('online', onOnline)
     }
-  }, [refresh])
+  }, [refresh, flushOutbox])
 
   if (auth === 'loading') {
     return <div className="app-shell items-center justify-center text-muted text-sm">加载中…</div>

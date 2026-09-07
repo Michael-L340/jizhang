@@ -16,6 +16,7 @@
 - `transfer` 和 `adjust` 永远不进收入/支出统计（`compute.ts` 里的 `isFlow`）。
 - 账户余额 = Σ收入 − Σ支出 + Σ转入 − Σ转出 + Σ校准，没有初始余额字段。
 - 分类只归档（`is_archived`）不删除；数据库改动只新增 `supabase/migrations/000N_*.sql`，不改旧文件。
+- 写入失败分两类，别只写「失败就回滚」：`api.isPermanentError` 为真（`23xxx`/`42xxx` 错误码）才回滚，其余（没网、超时、登录过期）进 `lib/outbox.ts` 的待上传队列，联网后补传。默认可重传——误判成永久失败是当场丢账，误判成网络问题只是队列里卡一条、用户看得见。
 - 白条账户 `kind = 'credit'`（京东白条、花呗、拼多多、美团月付），余额为负 = 欠款。**下单记支出**（账户选白条，支出算在下单那个月）、**平台扣款记转账**（银行 → 白条）、利息单独记支出。`installments` 只对白条上的支出有意义，null 按 1 期算，第 k 期在下单月之后第 k 个月到期；「本月应还」是从它算出来的，还款不预排流水。
 
 ## 改动流程
@@ -25,7 +26,7 @@
 4. `npm run deploy` 发布。它按顺序做：check → test → **版本号第三位自动 +1 并打 tag**（v1.0.1、v1.0.2……可到两位数如 v1.0.12）→ 构建 → 发到 gh-pages → 推 main 和 tag。所以**先 commit 再 deploy**（工作区不干净会被拒），**不要手改 `package.json` 的 version**。 大功能（比如 1.1.0 的白条）用 `npm run deploy:minor`，第二位 +1、第三位归零，其余步骤一样。改坏了 `git revert` 回退再 deploy，版本号照常 +1。
 
 ## 测试纪律
-- 动了 `lib/store.ts` / `lib/compute.ts` / `lib/pending.ts` 就要补测试。这三个文件的 bug 大多是时序或边界问题，肉眼和手动操作都很难稳定复现。
+- 动了 `lib/store.ts` / `lib/compute.ts` / `lib/pending.ts` / `lib/outbox.ts` 就要补测试。这三个文件的 bug 大多是时序或边界问题，肉眼和手动操作都很难稳定复现。
 - `store.test.ts` 的隔离手段：`vi.mock('./api')` 换掉唯一联网的那层，`vi.resetModules()` 每例重建 store 模块（避开 `pendingTx` / `persistTimer` 这些模块级单例串味），`vi.useFakeTimers()` 让 500ms 去抖和 10s 分类窗口变成确定性推进。照这个模式加新用例。
 - **新写的测试必须先证明它会红**：把对应的修复改回出 bug 前的写法，确认用例真的变红，再改回来。不会红的测试是负资产，它让人以为有保护，其实没有。
 - 单测跑在 node 环境（`vite.config.ts` 的 `test.environment`），没有 DOM。纯逻辑放 `lib/`，页面里只留渲染，这样才测得到。

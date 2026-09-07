@@ -18,6 +18,8 @@ export function Home() {
   const syncing = useStore((s) => s.syncing)
   const syncFailed = useStore((s) => s.syncFailed)
   const refresh = useStore((s) => s.refresh)
+  const outboxCount = useStore((s) => s.outboxCount)
+  const flushOutbox = useStore((s) => s.flushOutbox)
   const accounts = useActiveAccounts()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const accMap = useAccountMap()
@@ -83,7 +85,22 @@ export function Home() {
 
       {/* 同步失败时首页要看得见：账户页那行字要翻到账户页才看得到，
           而首页是打开最多的一页。文案必须一行放得下，所以只说结论不解释原因。 */}
-      {syncFailed ? (
+      {outboxCount > 0 ? (
+        <div className="card mb-3 flex items-center gap-2 px-3 py-2.5 bg-brand-soft border border-brand">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="text-brand-ink shrink-0">
+            <path d="M12 16V4M8 8l4-4 4 4M4 17v2a1 1 0 001 1h14a1 1 0 001-1v-2" />
+          </svg>
+          <span className="flex-1 min-w-0 truncate text-xs text-brand-ink">{outboxCount} 笔还没上传，联网后自动补</span>
+          <button
+            type="button"
+            className="shrink-0 rounded-full bg-brand text-on-brand text-xs font-medium px-3 py-1 disabled:opacity-60"
+            disabled={syncing}
+            onClick={() => void flushOutbox()}
+          >
+            {syncing ? '上传中' : '立即上传'}
+          </button>
+        </div>
+      ) : syncFailed ? (
         <div className="card mb-3 flex items-center gap-2 px-3 py-2.5 bg-expense-soft border border-expense/25">
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="text-expense shrink-0">
             <path d="M12 9v4.5M12 17h.01M10.6 3.9L2.5 17.6A1.6 1.6 0 003.9 20h16.2a1.6 1.6 0 001.4-2.4L13.4 3.9a1.6 1.6 0 00-2.8 0z" />

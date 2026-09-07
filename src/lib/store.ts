@@ -6,11 +6,14 @@ import * as api from './api'
 import { cacheBytes, type BackupStatus } from './backup'
 import { nowIso } from './date'
 import { applyPending, DELETED, type Pending } from './pending'
+import { packOutbox, unpackOutbox, type Outbox, type OutboxDump } from './outbox'
 
 const CACHE_KEY = 'jz_cache_v1'
 
 interface Cache extends Snapshot {
   at: string
+  /** 待上传队列。旧版本写的缓存没有这个键，unpackOutbox 会返回空队列 */
+  outbox?: OutboxDump
 }
 
 function readCache(): Cache | null {
@@ -30,8 +33,8 @@ function readCache(): Cache | null {
  * 返回占用的字节数（口径见 backup.ts 的 cacheBytes：UTF-16，键也算）。
  * 抛错交给调用方处理，不再静默吞掉。
  */
-function writeCache(s: Snapshot): number {
-  const c: Cache = { accounts: s.accounts, categories: s.categories, transactions: s.transactions, at: nowIso() }
+function writeCache(s: Snapshot, outbox: Outbox): number {
+  const c: Cache = { accounts: s.accounts, categories: s.categories, transactions: s.transactions, at: nowIso(), outbox: packOutbox(outbox) }
   const json = JSON.stringify(c)
   localStorage.setItem(CACHE_KEY, json)
   return cacheBytes([[CACHE_KEY, json]])
@@ -62,9 +65,13 @@ export interface State extends Snapshot {
   backup: BackupStatus | null
   /** 备份状态读失败（网络不通 / 登录过期）。和「从来没备份过」要分开显示 */
   backupFailed: boolean
+  /** 还没传上云端的记录条数。>0 说明本机比云端多／少几笔，备份里也还没有 */
+  outboxCount: number
 
   init: () => Promise<void>
   refresh: () => Promise<void>
+  /** 把待上传队列补传到云端。联网时自动调，用户也能手动点 */
+  flushOutbox: () => Promise<void>
   /** 去抖写入本机缓存，从当前 state 现读，不接受外部快照 */
   persist: () => void
   /**
@@ -101,6 +108,13 @@ export interface State extends Snapshot {
 // 所以 refresh 落地前先把在途补丁叠回去。
 const pendingTx: Pending<Transaction> = new Map()
 const pendingCat: Pending<Category> = new Map()
+
+// ── 待上传队列 ────────────────────────────────────────────────
+// 上面那两张补丁表管的是「请求飞在路上」，60 秒就过期；这一张管的是「请求根本没发出去」，
+// 只有真的传上去才删、还要写进缓存跨会话保留。详见 outbox.ts 顶部。
+const outboxTx: Outbox = new Map()
+/** 补传是串行的，防止 online 事件和 refresh 各触发一次、同一条被传两遍 */
+let flushing = false
 
 // 补丁不能一写完就删，那只挡住了一个方向的时序。
 // 反过来的顺序照样出事：refresh 先发出 GET（此刻服务端还没有这笔）→ 用户立刻记一笔、
@@ -152,6 +166,15 @@ function settle(map: Map<string, number>, pending: Map<string, unknown>, id: str
 function drop(map: Map<string, number>, pending: Map<string, unknown>, id: string): void {
   map.delete(id)
   pending.delete(id)
+}
+
+/**
+ * 写失败且不是数据被拒 —— 也就是没网、网太慢、登录过期 —— 就进待传队列。
+ * 补丁表那条要一并删掉：两张表管的是同一个 id 的话，队列才是权威的那个。
+ */
+function enqueue(id: string, v: Transaction | typeof DELETED): void {
+  drop(settledTx, pendingTx, id)
+  outboxTx.set(id, v)
 }
 
 /** 单次 fetchAll 的超时。没有它，iOS 后台冻结时飞在路上的请求可能永远不 settle */
@@ -206,11 +229,14 @@ export const useStore = create<State>((set, get) => ({
   cacheDegraded: false,
   backup: null,
   backupFailed: false,
+  outboxCount: 0,
 
   async init() {
     const cache = readCache()
     if (cache) {
-      set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, lastSync: cache.at })
+      // 队列要在拉云端之前装回来，否则第一次 refresh 会把上次没传上去的那几笔冲掉
+      for (const [id, v] of unpackOutbox(cache.outbox)) outboxTx.set(id, v)
+      set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, lastSync: cache.at, outboxCount: outboxTx.size })
       try {
         set({ cacheBytes: cacheBytes([[CACHE_KEY, localStorage.getItem(CACHE_KEY) ?? '']]) })
       } catch {
@@ -246,10 +272,14 @@ export const useStore = create<State>((set, get) => ({
       const merged: Snapshot = {
         accounts: snap.accounts,
         categories: applyPending(snap.categories, pendingCat),
-        transactions: applyPending(snap.transactions, pendingTx),
+        // 两层叠加，顺序不能反：先盖在途补丁，再盖待传队列。
+        // 队列在最上面，因为那是用户改完、云端至今不知道的最新状态。
+        transactions: applyPending(applyPending(snap.transactions, pendingTx), outboxTx),
       }
       set({ ...merged, loaded: true, lastSync: nowIso(), syncFailed: false })
       get().persist()
+      // 网通了，把欠的补上。不 await：补传失败不该让这次同步显示成失败
+      void get().flushOutbox()
     } catch (e) {
       if (my !== fetchSeq) return
       // 首次加载成功之后失败也要留痕，否则断网/登录过期/项目休眠全都无声
@@ -261,13 +291,50 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  /**
+   * 把待传队列补上去。串行、一条一条来，中途再断网就停下，剩下的留到下次。
+   *
+   * 三个调用点：每次 refresh 成功之后、浏览器 online 事件、用户手动点「立即上传」。
+   * 所以必须能重入而不重复发送 —— flushing 那把锁就是干这个的。
+   */
+  async flushOutbox() {
+    if (flushing || get().auth !== 'in' || outboxTx.size === 0) return
+    flushing = true
+    try {
+      // 先拷一份再遍历：循环体里会删 outboxTx，边删边遍历行为不确定
+      for (const [id, v] of [...outboxTx.entries()]) {
+        try {
+          if (v === DELETED) await api.deleteTx(id)
+          else await api.upsertTx(v)
+          // 只删「我刚传的那一版」。这一条在等响应的几百毫秒里可能又被改过
+          // （改的那次也没网，于是队列里换成了新版本）；无条件 delete 会把新版本一起抹掉，
+          // 结果云端是旧值、界面是新值、队列空了——再也没有东西会去纠正它。
+          if (outboxTx.get(id) === v) outboxTx.delete(id)
+        } catch (e) {
+          if (!api.isPermanentError(e)) break // 还是没网，后面的也别试了
+          // 数据被拒：重传一万次也是同样结果，只能扔掉并告诉用户。
+          // 界面上也要一起撤掉，否则会留下一条「本机有、云端永远没有」的幽灵记录。
+          // 同样只删我传的那一版：新版本也许是合法的，该留给下一轮试。
+          if (outboxTx.get(id) !== v) continue
+          outboxTx.delete(id)
+          if (v !== DELETED) set((st) => ({ transactions: st.transactions.filter((x) => x.id !== id) }))
+          get().showToast(`有 1 笔上传被拒绝，已从本机移除：${api.friendlyError(e)}`)
+        }
+      }
+    } finally {
+      flushing = false
+      set({ outboxCount: outboxTx.size })
+      get().persist()
+    }
+  },
+
   persist() {
     if (persistTimer) clearTimeout(persistTimer)
     persistTimer = setTimeout(() => {
       persistTimer = null
       const { accounts, categories, transactions } = get()
       try {
-        set({ cacheBytes: writeCache({ accounts, categories, transactions }), cacheDegraded: false })
+        set({ cacheBytes: writeCache({ accounts, categories, transactions }, outboxTx), cacheDegraded: false })
       } catch {
         // 配额满或被禁用。云端数据不受影响，但离线看到的会是旧的，必须让用户知道
         if (!get().cacheDegraded) {
@@ -314,7 +381,10 @@ export const useStore = create<State>((set, get) => ({
     } catch {
       /* ignore */
     }
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncing: false, syncingSince: null, backup: null, backupFailed: false })
+    // 队列也要清：换个账号登进来，把上一个账号的记录补传过去是灾难。
+    // 代价是退出登录会丢掉还没传上去的那几笔，所以退出前要拦一下（见 Settings.tsx）。
+    outboxTx.clear()
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
   },
 
   async addTx(t) {
@@ -329,13 +399,22 @@ export const useStore = create<State>((set, get) => ({
       settle(settledTx, pendingTx, t.id)
       return true
     } catch (e) {
-      // 失败必须立刻删：留着的话那份旧快照落地时会把一条根本没进云端的记录塞回来，
-      // 用户明明看到「保存失败」，账本里却多出一笔幽灵记录
-      drop(settledTx, pendingTx, t.id)
-      set((s) => ({ transactions: s.transactions.filter((x) => x.id !== t.id) }))
+      // 数据被服务器拒了：立刻删干净。留着的话那份旧快照落地时会把一条根本没进云端的
+      // 记录塞回来，用户明明看到「保存失败」，账本里却多出一笔幽灵记录
+      if (api.isPermanentError(e)) {
+        drop(settledTx, pendingTx, t.id)
+        set((s) => ({ transactions: s.transactions.filter((x) => x.id !== t.id) }))
+        get().persist()
+        get().showToast(`保存失败：${api.friendlyError(e)}`)
+        return false
+      }
+      // 没网：这笔留在界面上，进待传队列，联网后自动补。
+      // 返回 true 是故意的——对用户来说这笔账**已经记下了**，页面该照常收尾。
+      enqueue(t.id, t)
+      set({ outboxCount: outboxTx.size })
       get().persist()
-      get().showToast(`保存失败：${api.friendlyError(e)}`)
-      return false
+      get().showToast('没网，已存在本机，联网后自动上传')
+      return true
     }
   },
 
@@ -349,12 +428,21 @@ export const useStore = create<State>((set, get) => ({
       settle(settledTx, pendingTx, t.id)
       return true
     } catch (e) {
-      drop(settledTx, pendingTx, t.id)
-      // 用 map 换回旧值而不是插回去：这条可能已被并发删除，插回去会让它复活
-      if (before) set((s) => ({ transactions: s.transactions.map((x) => (x.id === t.id ? before : x)) }))
+      if (api.isPermanentError(e)) {
+        drop(settledTx, pendingTx, t.id)
+        // 用 map 换回旧值而不是插回去：这条可能已被并发删除，插回去会让它复活
+        if (before) set((s) => ({ transactions: s.transactions.map((x) => (x.id === t.id ? before : x)) }))
+        get().persist()
+        get().showToast(`修改失败：${api.friendlyError(e)}`)
+        return false
+      }
+      // 没网：改完的样子留在界面上，队列里存最终状态。
+      // 这条本来就在队列里（断网时记的）也没关系——一个 id 只有一条，直接覆盖。
+      enqueue(t.id, t)
+      set({ outboxCount: outboxTx.size })
       get().persist()
-      get().showToast(`修改失败：${api.friendlyError(e)}`)
-      return false
+      get().showToast('没网，改动已存在本机，联网后自动上传')
+      return true
     }
   },
 
@@ -368,13 +456,23 @@ export const useStore = create<State>((set, get) => ({
       settle(settledTx, pendingTx, id)
       return true
     } catch (e) {
-      drop(settledTx, pendingTx, id)
-      // 位置无所谓：列表都靠 groupByDay/sortTxs 重排。但要幂等，
-      // 万一 refresh 已经把它拉回来了，不能插成两条
-      if (row) set((s) => (s.transactions.some((x) => x.id === id) ? s : { transactions: [row, ...s.transactions] }))
+      if (api.isPermanentError(e)) {
+        drop(settledTx, pendingTx, id)
+        // 位置无所谓：列表都靠 groupByDay/sortTxs 重排。但要幂等，
+        // 万一 refresh 已经把它拉回来了，不能插成两条
+        if (row) set((s) => (s.transactions.some((x) => x.id === id) ? s : { transactions: [row, ...s.transactions] }))
+        get().persist()
+        get().showToast(`删除失败：${api.friendlyError(e)}`)
+        return false
+      }
+      // 没网：界面上就当删了，队列里记一条「删除」。
+      // 就算这笔本来也没传上去过（断网记的、断网又删的），补传时 delete 一个
+      // 云端不存在的 id 是安全的空操作，不用额外记「它到底进没进过云端」。
+      enqueue(id, DELETED)
+      set({ outboxCount: outboxTx.size })
       get().persist()
-      get().showToast(`删除失败：${api.friendlyError(e)}`)
-      return false
+      get().showToast('没网，删除已存在本机，联网后自动上传')
+      return true
     }
   },
 

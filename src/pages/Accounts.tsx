@@ -21,6 +21,7 @@ export function Accounts() {
   const syncFailed = useStore((s) => s.syncFailed)
   const syncing = useStore((s) => s.syncing)
   const refresh = useStore((s) => s.refresh)
+  const outboxCount = useStore((s) => s.outboxCount)
   const accounts = useActiveAccounts()
   const catMap = useCategoryMap()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
@@ -167,6 +168,7 @@ export function Accounts() {
           <span>
             {lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}
             {syncFailed ? ' · 最近一次同步失败' : ''}
+            {outboxCount > 0 ? ` · ${outboxCount} 笔待上传` : ''}
           </span>
           {syncFailed ? (
             <button type="button" className="chip shrink-0" style={{ padding: '2px 9px' }} disabled={syncing} onClick={() => void refresh()}>

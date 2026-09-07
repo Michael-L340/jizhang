@@ -24,7 +24,10 @@ const api = vi.hoisted(() => ({
   signOut: vi.fn(),
   hasSession: vi.fn(),
   onAuthChange: vi.fn(() => () => {}),
+  upsertTx: vi.fn(),
   friendlyError: (e: unknown) => String((e as { message?: string })?.message ?? e),
+  // 和真的 api.ts 保持同一套判据：带 23xxx/42xxx 错误码的才是「数据被拒」，其余一律可重传
+  isPermanentError: (e: unknown) => /^(23|42)/.test(String((e as { code?: string })?.code ?? '')),
   isDuplicateName: (e: unknown) => (e as { code?: string })?.code === '23505' || /duplicate key/i.test(String((e as { message?: string })?.message ?? e)),
   configured: true,
 }))
@@ -95,6 +98,12 @@ function snap(transactions: Transaction[] = [], categories: Category[] = []): Sn
 let store: typeof import('./store')
 const st = () => store.useStore.getState()
 const ids = () => st().transactions.map((t) => t.id)
+
+// 写入失败分两类，走的是完全不同的两条路，测试里必须挑明是哪一类：
+//   offline() 没网 —— 记录留在界面上并进待传队列，返回 true（离线记账）
+//   denied()  数据被服务器拒 —— 回滚并报错，返回 false（带 23xxx/42xxx 错误码）
+const offline = () => Object.assign(new Error('Failed to fetch'), { name: 'TypeError' })
+const denied = () => Object.assign(new Error('violates foreign key constraint'), { code: '23503' })
 
 beforeEach(async () => {
   vi.useFakeTimers()
@@ -207,7 +216,7 @@ describe('S3 失败回滚不牵连并发操作', () => {
     const p2 = st().addTx(tx('t2'))
     expect(await p2).toBe(true)
 
-    d.reject(new Error('网络不通'))
+    d.reject(denied())
     expect(await p1).toBe(false)
     expect(ids()).toEqual(['t2']) // 修复前整个数组被打回，t2 一起没了
   })
@@ -221,7 +230,7 @@ describe('S3 失败回滚不牵连并发操作', () => {
     const p1 = st().removeTx('t1') // 撤销
     expect(await st().addTx(tx('t2'))).toBe(true) // 立刻再记一笔
 
-    d.reject(new Error('网络不通'))
+    d.reject(denied())
     expect(await p1).toBe(false)
     expect(ids().sort()).toEqual(['t1', 't2']) // 修复前 t2 会被抹掉
   })
@@ -235,7 +244,7 @@ describe('S3 失败回滚不牵连并发操作', () => {
     // 模拟 refresh 之外的路径把它放了回来（在途补丁已被清掉的极端时序）
     store.useStore.setState({ transactions: [tx('t1')] })
 
-    d.reject(new Error('网络不通'))
+    d.reject(denied())
     await p
     expect(ids().filter((x) => x === 't1')).toHaveLength(1)
   })
@@ -249,14 +258,14 @@ describe('S3 失败回滚不牵连并发操作', () => {
     // 另一条路径把它删了
     store.useStore.setState({ transactions: [] })
 
-    d.reject(new Error('网络不通'))
+    d.reject(denied())
     expect(await p).toBe(false)
     expect(ids()).toEqual([]) // 若回滚写成 insert，这里会冒出一条僵尸记录
   })
 
   it('修改失败换回的是旧值，不是新值', async () => {
     store.useStore.setState({ transactions: [tx('t1', { amount: 1000 })] })
-    api.updateTx.mockRejectedValueOnce(new Error('网络不通'))
+    api.updateTx.mockRejectedValueOnce(denied())
     expect(await st().editTx(tx('t1', { amount: 8888 }))).toBe(false)
     expect(st().transactions[0].amount).toBe(1000)
   })
@@ -281,7 +290,7 @@ describe('S2 本机缓存', () => {
     st().showToast('随便一句')
     st().persist()
     await vi.advanceTimersByTimeAsync(600)
-    expect(Object.keys(JSON.parse(ls.getItem(CACHE_KEY)!)).sort()).toEqual(['accounts', 'at', 'categories', 'transactions'])
+    expect(Object.keys(JSON.parse(ls.getItem(CACHE_KEY)!)).sort()).toEqual(['accounts', 'at', 'categories', 'outbox', 'transactions'])
   })
 
   it('缓存占用按 UTF-16 算：(键长 + 值长) × 2', async () => {
@@ -532,7 +541,7 @@ describe('反向时序：同步先出门、写入先完成', () => {
     api.fetchAll.mockReturnValueOnce(fetchD.promise)
     const rp = st().refresh()
 
-    api.insertTx.mockRejectedValueOnce(new Error('网络不通'))
+    api.insertTx.mockRejectedValueOnce(denied())
     expect(await st().addTx(tx('ghost'))).toBe(false)
 
     fetchD.resolve(snap([]))
@@ -546,7 +555,7 @@ describe('反向时序：同步先出门、写入先完成', () => {
     api.fetchAll.mockReturnValueOnce(fetchD.promise)
     const rp = st().refresh()
 
-    api.deleteTx.mockRejectedValueOnce(new Error('网络不通'))
+    api.deleteTx.mockRejectedValueOnce(denied())
     expect(await st().removeTx('t1')).toBe(false)
 
     fetchD.resolve(snap([tx('t1')]))
@@ -798,5 +807,148 @@ describe('loadBackupStatus', () => {
     await flying
     expect(st().backup).toBeNull()
     expect(st().backupFailed).toBe(false)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 离线记账 —— 断网时写不进云端的那几笔进待传队列，联网后自动补
+//   手工复现方式：开飞行模式记一笔，关掉飞行模式看它自己传上去
+// ══════════════════════════════════════════════════════════════
+describe('离线记账：待上传队列', () => {
+  it('断网记一笔：留在界面上、进队列、算保存成功', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    expect(await st().addTx(tx('t1'))).toBe(true) // 修复前是 false，那笔会被删掉
+    expect(ids()).toContain('t1')
+    expect(st().outboxCount).toBe(1)
+  })
+
+  it('数据被服务器拒了：照旧回滚并报错，不进队列', async () => {
+    api.insertTx.mockRejectedValueOnce(denied())
+    expect(await st().addTx(tx('t1'))).toBe(false)
+    expect(ids()).not.toContain('t1')
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('队列里的那笔不会被 refresh 冲掉（服务端快照里根本没有它）', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.fetchAll.mockResolvedValueOnce(snap([tx('t2')]))
+    api.upsertTx.mockResolvedValue(undefined)
+    await st().refresh()
+    expect(ids()).toContain('t1') // 只叠在途补丁的话这里会没有——补丁 60 秒就过期了
+    expect(ids()).toContain('t2')
+  })
+
+  it('refresh 成功后自动补传，传完队列清空', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.upsertTx.mockResolvedValue(undefined)
+    api.fetchAll.mockResolvedValueOnce(snap([]))
+    await st().refresh()
+    await vi.waitFor(() => expect(st().outboxCount).toBe(0))
+    expect(api.upsertTx).toHaveBeenCalledTimes(1)
+    expect(api.upsertTx.mock.calls[0][0].id).toBe('t1')
+  })
+
+  it('断网记一笔又改一笔金额：队列里只有一条，传的是改完的值', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1', { amount: 100 }))
+    api.updateTx.mockRejectedValueOnce(offline())
+    await st().editTx(tx('t1', { amount: 999 }))
+    expect(st().outboxCount).toBe(1)
+    api.upsertTx.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.upsertTx).toHaveBeenCalledTimes(1)
+    expect(api.upsertTx.mock.calls[0][0].amount).toBe(999)
+  })
+
+  it('断网记一笔又删掉：不该 upsert，只发一次 delete', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.deleteTx.mockRejectedValueOnce(offline())
+    await st().removeTx('t1')
+    expect(ids()).not.toContain('t1')
+    api.deleteTx.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.upsertTx).not.toHaveBeenCalled()
+    expect(api.deleteTx).toHaveBeenLastCalledWith('t1')
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('补传到一半又断网：传成功的删掉，剩下的留着', async () => {
+    api.insertTx.mockRejectedValue(offline())
+    await st().addTx(tx('t1'))
+    await st().addTx(tx('t2'))
+    expect(st().outboxCount).toBe(2)
+    api.upsertTx.mockResolvedValueOnce(undefined).mockRejectedValueOnce(offline())
+    await st().flushOutbox()
+    expect(st().outboxCount).toBe(1)
+  })
+
+  it('补传时被服务器拒：从队列和界面上一起去掉，不留幽灵记录', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.upsertTx.mockRejectedValueOnce(denied())
+    await st().flushOutbox()
+    expect(st().outboxCount).toBe(0)
+    expect(ids()).not.toContain('t1') // 留着就是一条云端永远不会有的记录
+  })
+
+  it('队列写进缓存，重开 App 还在', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    await vi.advanceTimersByTimeAsync(600) // 缓存写入有 500ms 去抖
+
+    vi.resetModules()
+    const again = await import('./store')
+    api.hasSession.mockResolvedValue(false) // 不联网，只看缓存装回来没有
+    await again.useStore.getState().init()
+    expect(again.useStore.getState().outboxCount).toBe(1)
+    expect(again.useStore.getState().transactions.map((t) => t.id)).toContain('t1')
+  })
+
+  it('退出登录会清掉队列（换账号后补传过去是灾难）', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.signOut.mockResolvedValue(undefined)
+    await st().signOut()
+    expect(st().outboxCount).toBe(0)
+    // 光看计数器不算数：它和清队列写在同一条语句里，队列没清干净照样显示 0。
+    // 真正要证的是「再登进来也传不出去」，所以直接让它补传一次。
+    api.upsertTx.mockResolvedValue(undefined)
+    store.useStore.setState({ auth: 'in' })
+    await st().flushOutbox()
+    expect(api.upsertTx).not.toHaveBeenCalled()
+    expect(api.deleteTx).not.toHaveBeenCalled()
+  })
+
+  it('补传途中这一条又被改了：不能把新版本一起删掉', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1', { amount: 100 }))
+    const d = deferred<void>()
+    api.upsertTx.mockReturnValueOnce(d.promise)
+    const p = st().flushOutbox()
+    // 旧值还在路上时，用户又改了这一笔，而改的那次也没网
+    api.updateTx.mockRejectedValueOnce(offline())
+    await st().editTx(tx('t1', { amount: 999 }))
+    d.resolve() // 旧值这时才传成功
+    await p
+    // 修复前这里会变成 0：云端是 100、界面是 999、队列空了，再没有东西会纠正它
+    expect(st().outboxCount).toBe(1)
+    api.upsertTx.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.upsertTx.mock.calls[api.upsertTx.mock.calls.length - 1][0].amount).toBe(999)
+  })
+
+  it('同一时刻两次补传只发一轮请求', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    const d = deferred<void>()
+    api.upsertTx.mockReturnValueOnce(d.promise)
+    const a = st().flushOutbox()
+    const b = st().flushOutbox() // 第二次应该直接早退
+    d.resolve()
+    await Promise.all([a, b])
+    expect(api.upsertTx).toHaveBeenCalledTimes(1)
   })
 })

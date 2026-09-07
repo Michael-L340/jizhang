@@ -43,6 +43,7 @@ export function Settings() {
   const cacheDegraded = useStore((st) => st.cacheDegraded)
   const backup = useStore((st) => st.backup)
   const backupFailed = useStore((st) => st.backupFailed)
+  const outboxCount = useStore((st) => st.outboxCount)
   const loadBackupStatus = useStore((st) => st.loadBackupStatus)
   // 备份状态一天才变一次，进这一页时读一次就够。它走 auth.getUser()，是一次真正的网络请求，
   // 不要塞进 refresh() 那套时序机制里跟着每次同步跑。
@@ -155,6 +156,9 @@ export function Settings() {
         const warn: string[] = []
         if (meta.synced === false) warn.push('注意：这个备份文件导出时本机还没同步过云端，它自己标了「未同步」，里面的账可能不全。')
         if (!trustworthy) warn.push('注意：这次打开 App 后还没成功同步过。万一恢复中途失败，自动退回用的是本机现在这份数据，可能比云端少几条。')
+        // 待传队列不会被恢复清掉——那几笔是用户真记过的账，丢了没处找。
+        // 但恢复完它们会补传上去，结果是「备份 + 这几笔」，得先说清楚，不能让人以为恢复完就是备份原样。
+        if (outboxCount > 0) warn.push(`注意：还有 ${outboxCount} 笔没上传到云端。恢复完成后它们会自动补上去，所以最终结果是「这个备份文件 + 这 ${outboxCount} 笔」，不是备份文件原样。`)
         const ok = window.confirm(
           `整库恢复会先删掉云端现在的 ${accounts.length} 个账户、${categories.length} 个分类、${transactions.length} 条流水，` +
             `再按这个文件重建成 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水。\n\n` +
@@ -307,11 +311,17 @@ export function Settings() {
         <Item
           icon="🚪"
           label="退出登录"
-          hint="本机缓存会清除，云端不受影响"
+          hint={outboxCount > 0 ? `还有 ${outboxCount} 笔没上传，退出会丢掉` : '本机缓存会清除，云端不受影响'}
           action="退出"
           danger
           onClick={async () => {
-            if (window.confirm('退出登录？本机缓存会清除，云端数据不受影响。')) {
+            // 退出会清掉待传队列（换账号后把上一个账号的记录传过去是灾难），
+            // 所以还有没传上去的时候必须说清楚，不能只说「云端不受影响」
+            const warn =
+              outboxCount > 0
+                ? `还有 ${outboxCount} 笔没上传到云端，退出登录会把它们丢掉，无法找回。确定退出？`
+                : '退出登录？本机缓存会清除，云端数据不受影响。'
+            if (window.confirm(warn)) {
               await signOut()
               nav('/')
             }
