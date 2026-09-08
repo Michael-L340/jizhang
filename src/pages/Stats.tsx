@@ -233,6 +233,13 @@ export function Stats() {
           type: 'bar',
           stack: 'x',
           barMaxWidth: 26,
+          // 从左往右一根根展开，而不是所有柱子一起从底下长上来。每根晚 26ms，
+          // 12 根扫完约 0.3 秒——够看出方向，又不会让人等。
+          // 延迟只看 dataIndex 不看 seriesIndex：同一根柱子的五段必须同时出现，
+          // 否则一根柱子会自己分层往上冒。
+          animationDuration: 420,
+          animationEasing: 'cubicOut' as const,
+          animationDelay: (i: number) => i * 26,
           // 段与段之间留一道白缝，五段叠在一起才分得开（和饼图同一个做法）
           itemStyle: { borderColor: CHART.gap, borderWidth: 1 },
           data: c.data.map((v) => v / 100),
@@ -502,7 +509,7 @@ export function Stats() {
         <div className="flex items-start justify-between mb-2">
           <div>
             <div className="text-sm text-muted">
-              账户余额{balAsOf >= today() ? '（当前）' : ` · 截至${unit === 'day' ? fmtDateZh(balAsOf, false) : fmtMonthZh(monthOf(balAsOf)) + '末'}`}
+              总资产{balAsOf >= today() ? '（当前）' : ` · 截至${unit === 'day' ? fmtDateZh(balAsOf, false) : fmtMonthZh(monthOf(balAsOf)) + '末'}`}
             </div>
             <div className="num text-lg font-semibold leading-tight">{fmtYuan(bal.total[bal.total.length - 1] ?? 0, { symbol: true })}</div>
           </div>
@@ -522,7 +529,11 @@ export function Stats() {
         <Suspense fallback={<div style={{ height: 230 }} />}>
           <Chart option={balOption} height={230} onAxisClick={gotoLedger} />
         </Suspense>
-        <div className="text-[11px] text-muted mt-1">每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录；点一下可以看当时的流水。</div>
+        {/* 「余额」两个字会被读成净资产。这里把口径说死：四个资产账户之和，白条欠款不减 */}
+        <div className="text-[11px] text-muted mt-1">
+          总资产 = 中国银行 + 招商银行 + 支付宝 + 微信，<b className="font-medium">不扣白条欠款</b>（白条在首页和账户页单独一行）。
+          每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录；点一下看明细，再点一下看当时的流水。
+        </div>
       </div>
 
       <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />

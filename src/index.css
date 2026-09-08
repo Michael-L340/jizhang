@@ -26,6 +26,10 @@
   --color-income: #4d8a5e;
   --color-transfer: #8a6bb5;
   --color-adjust: #b07d1e;
+  /* 统计页那条账户余额曲线。余额既不是收入也不是支出，用红/绿会被读成「一笔钱的方向」，
+     所以单独给一个色。用户 2026-09-08 试过暖色的深焦糖，说还是换回原来这个蓝。
+     它只给图表用，界面上没有别的地方是这个颜色。 */
+  --color-balance: #2f6fed;
 }
 
 html, body, #root { height: 100%; }

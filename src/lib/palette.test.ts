@@ -168,7 +168,7 @@ describe('分类颜色只有一个来源', () => {
   it('CHART 里每个色值都等于 index.css 的对应 token', () => {
     expect(CHART.expense).toBe(themeColor('expense'))
     expect(CHART.income).toBe(themeColor('income'))
-    expect(CHART.balance).toBe(themeColor('brand-ink'))
+    expect(CHART.balance).toBe(themeColor('balance'))
     expect(CHART.axis).toBe(themeColor('line'))
     expect(CHART.label).toBe(themeColor('muted'))
     expect(CHART.gap).toBe(themeColor('card'))

@@ -143,8 +143,8 @@ export const CHART = {
   expense: '#c95a4e',
   /** 收入趋势线 = --color-income */
   income: '#4d8a5e',
-  /** 余额线 = --color-brand-ink。余额既不是收也不是支，用 App 自己的深焦糖 */
-  balance: '#8a6026',
+  /** 余额线 = --color-balance。余额既不是收也不是支，红绿都会读错，所以单独一个色 */
+  balance: '#2f6fed',
   /** 坐标轴和网格线 = --color-line */
   axis: '#ece6dd',
   /** 轴上的数字 = --color-muted */
