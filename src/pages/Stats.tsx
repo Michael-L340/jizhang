@@ -8,7 +8,7 @@ import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthT
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { gridTopFor, legendRows } from '../lib/chart'
-import { shiftSeries } from '../lib/facade'
+import { adjustTotals, shiftSeries, visibleTxs } from '../lib/facade'
 import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
@@ -213,10 +213,14 @@ export function Stats() {
     }
   }, [lineMode, keys, labels, trendTotal, trendByCat, fewPoints, unit, trendKind])
 
-  // 里外页面：外模式把整条曲线按偏移量平移。形状、涨跌、拐点全是真的，只有高度不同。
+  // 里外页面：外模式先把被修饰账户的校准从流水里摘掉，再按「偏移量 + 该账户校准合计」平移。
+  // 两件事必须配对，理由和算式写在 facade.ts 的 shiftSeries 上。
+  // adjustTotals 要拿全量 txs 算——curveTxs 里校准已经没了。
+  const curveTxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
+  const adjusts = useMemo(() => adjustTotals(txs, accounts), [txs, accounts])
   const bal = useMemo(
-    () => shiftSeries(balanceSeries(txs, accounts, keys, unit), accounts, mode),
-    [txs, accounts, keys, unit, mode],
+    () => shiftSeries(balanceSeries(curveTxs, accounts, keys, unit), accounts, mode, adjusts),
+    [curveTxs, accounts, keys, unit, mode, adjusts],
   )
   // 大数字其实是「最后一个桶结束时」的余额。切到 8 月它就是 8/31 收盘值，
   // 而账户页显示的是当前值，两个页面对不上会让人以为同步坏了。

@@ -5,7 +5,7 @@ import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, debtOf, dueInMonth, monthBill, monthByAccount, splitAccounts } from '../lib/compute'
 import { fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
-import { applyFacade, normalizeOffset, offsetFor } from '../lib/facade'
+import { applyFacade, normalizeOffset, offsetFor, visibleTxs } from '../lib/facade'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
@@ -30,6 +30,9 @@ export function Accounts() {
   const catMap = useCategoryMap()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
+  // 外页面藏掉被修饰账户的校准：卡片右下的「本月 ±」和副标题的「上次校准」都要走它。
+  // 余额 0.00 底下挂一行「本月 +6,391.00」是最露馅的一处。余额本身仍然拿真实 txs 算。
+  const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
   // 不用 totalOf(bal) + debt：debt 只加回负余额，某个白条多还成正数时那笔会留在合计里，
   // 而下面的卡片列表里没有它，两个数就对不上（首页同样的理由，同样的算法）
   // 里外页面：外页面把资产账户的余额加上各自的偏移量。白条不参与，
@@ -40,13 +43,13 @@ export function Accounts() {
   // 注意：adjust 记录只在「有差额」时才产生，所以这里得到的是「上次校准」而不是「上次核对」。
   const lastAdjusts = useMemo(() => {
     const m = new Map<string, string>()
-    for (const t of txs) {
+    for (const t of vtxs) {
       if (t.type !== 'adjust' || !t.account_id) continue
       const cur = m.get(t.account_id)
       if (!cur || t.created_at > cur) m.set(t.account_id, t.created_at)
     }
     return m
-  }, [txs])
+  }, [vtxs])
   const [target, setTarget] = useState<Account | null>(null)
   const [input, setInput] = useState('')
   // 里页面第二个框：这个账户在外页面显示多少
@@ -143,7 +146,7 @@ export function Accounts() {
   }
 
   const ym = monthOf(today())
-  const byAcc = useMemo(() => monthByAccount(txs, ym), [txs, ym])
+  const byAcc = useMemo(() => monthByAccount(vtxs, ym), [vtxs, ym])
   const nameOf = (id: string): string => accounts.find((a) => a.id === id)?.name ?? ''
   // 占比条跟着屏幕上的数字走，否则外页面「各占多少」和四张卡对不上
   const shares = useMemo(() => balanceShares(dispBal, assets.map((a) => a.id)), [dispBal, assets])

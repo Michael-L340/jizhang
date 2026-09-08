@@ -4,7 +4,7 @@ import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
-import { applyFacade } from '../lib/facade'
+import { applyFacade, visibleTxs } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { categoryColor } from '../lib/palette'
@@ -36,6 +36,10 @@ export function Home() {
   // 只有余额被修饰——上面的本月收支、储蓄率、下面的饼图和流水全是真的。
   // 白条不参与（applyFacade 里挡了），所以下面算欠款仍然用真实的 bal。
   const shown = useMemo(() => applyFacade(bal, accounts, mode), [bal, accounts, mode])
+  // 外页面要藏掉被修饰账户的「余额校准」——余额显示 0.00、流水里却挂着一条 +6,391 就露馅了。
+  // 只有下面那个「最近流水」用它：上面的 bal 必须拿真实流水算，否则修饰过的余额也跟着变。
+  // 本月收支、储蓄率、饼图不受影响，校准本来就不进收支统计。
+  const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
   // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 本月应还」
   const debt = debtOf(bal, credits)
   const assetTotal = useMemo(() => assets.reduce((s, a) => s + (shown[a.id] ?? 0), 0), [assets, shown])
@@ -47,7 +51,7 @@ export function Home() {
   // 以前这里是一串写死的颜色按名次发，同一个分类在两页颜色不一样，对着看会错乱；
   // 而且那串还是 09-05 换暖色主题之前的冷色。
   const pieColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
-  const recent = useMemo(() => sortTxs(txs).slice(0, 5), [txs])
+  const recent = useMemo(() => sortTxs(vtxs).slice(0, 5), [vtxs])
 
   const td = today()
   const dayStat = useMemo(() => {

@@ -10,6 +10,7 @@ import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
+import { visibleTxs } from '../lib/facade'
 import { CHILD_NONE, CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -26,6 +27,10 @@ export function Ledger() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
+  const mode = useStore((s) => s.mode)
+  // 外页面藏掉被修饰账户的校准记录。列表、搜索、每日小计、顶上的月度合计全走它，
+  // 少了这一条任何一处都能把里页面的校准漏出去。
+  const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
   const accMap = useAccountMap()
   const catMap = useCategoryMap()
   const nav = useNavigate()
@@ -123,13 +128,13 @@ export function Ledger() {
   const label = (c: Category) => (c.is_archived ? `${c.name}（已归档）` : c.name)
 
   const list = useMemo(() => {
-    const base = searching ? searchTx(txs, q, names) : txs
+    const base = searching ? searchTx(vtxs, q, names) : vtxs
     const rootOf = (id: string) => {
       const c = catMap.get(id)
       return c ? (c.parent_id ?? c.id) : undefined
     }
     return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, filter, rootOf, creditIds))
-  }, [txs, ym, filter, catMap, searching, q, names, creditIds])
+  }, [vtxs, ym, filter, catMap, searching, q, names, creditIds])
 
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
