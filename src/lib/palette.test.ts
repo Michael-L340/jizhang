@@ -169,7 +169,6 @@ describe('分类颜色只有一个来源', () => {
     expect(CHART.expense).toBe(themeColor('expense'))
     expect(CHART.income).toBe(themeColor('income'))
     expect(CHART.balance).toBe(themeColor('brand-ink'))
-    expect(CHART.avg).toBe(themeColor('ink'))
     expect(CHART.axis).toBe(themeColor('line'))
     expect(CHART.label).toBe(themeColor('muted'))
     expect(CHART.gap).toBe(themeColor('card'))

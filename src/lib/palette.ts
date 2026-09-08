@@ -145,8 +145,6 @@ export const CHART = {
   income: '#4d8a5e',
   /** 余额线 = --color-brand-ink。余额既不是收也不是支，用 App 自己的深焦糖 */
   balance: '#8a6026',
-  /** 日均线 = --color-ink。中性深色，和五个分类色都不撞 */
-  avg: '#33302b',
   /** 坐标轴和网格线 = --color-line */
   axis: '#ece6dd',
   /** 轴上的数字 = --color-muted */
