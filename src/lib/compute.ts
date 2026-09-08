@@ -269,7 +269,13 @@ export function bucketEnd(key: string, unit: Unit): string {
   return unit === 'day' ? key : monthRange(key).end
 }
 
-/** 每个时间桶结束时的各账户余额与总额（从有记录以来累计，不受区间起点影响） */
+/**
+ * 每个时间桶结束时的各账户余额与总额（从有记录以来累计，不受区间起点影响）。
+ *
+ * 合计**只加 accounts 里的账户**。别改回 totalOf(running)：applyTx 会给清单之外的
+ * 账户也建一个键，统计页只传资产账户进来，白条的欠款就会悄悄混进「合计」，
+ * 和首页「总资产」差出一个白条待还（2026-09-08 实测差 81.77，v1.1.0 白条上线就在了）。
+ */
 export function balanceSeries(
   txs: Transaction[],
   accounts: Account[],
@@ -291,8 +297,13 @@ export function balanceSeries(
       applyTx(sorted[i], running)
       i++
     }
-    for (const a of accounts) byAccount[a.id].push(running[a.id] ?? 0)
-    total.push(totalOf(running))
+    let sum = 0
+    for (const a of accounts) {
+      const v = running[a.id] ?? 0
+      byAccount[a.id].push(v)
+      sum += v
+    }
+    total.push(sum)
   }
   return { total, byAccount }
 }

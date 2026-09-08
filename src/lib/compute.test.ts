@@ -273,6 +273,24 @@ describe('balanceSeries', () => {
     expect(keys).toEqual(['2026-08', '2026-09'])
     expect(h.byAccount.wx).toEqual([7000, 7000])
   })
+
+  // 2026-09-08 用户报「统计页账户余额比首页总资产少 81.77」，差额正好是白条待还。
+  // applyTx 会给 accounts 之外的账户也建一个键，合计原来是 totalOf(running) 把整张表加了一遍，
+  // 而统计页只把资产账户传进来，白条就这么混进了「只算资产」的合计。
+  it('合计只加传进来的账户：白条不能混进资产合计', () => {
+    const jd: Account = { id: 'jd', name: '京东白条', kind: 'credit', sort: 9, is_archived: false, repay_day: 17, facade_offset: null }
+    const txs = [
+      tx({ type: 'income', amount: 500000, account_id: 'cmb', category_id: 'salary', date: '2026-09-01' }),
+      tx({ type: 'expense', amount: 8177, account_id: 'jd', category_id: 'lunch', date: '2026-09-05' }),
+    ]
+    // accounts 里没有 jd —— 统计页就是这么传的（只传资产）
+    const h = balanceSeries(txs, accounts, ['2026-09'], 'month')
+    expect(h.byAccount.jd).toBeUndefined()
+    expect(h.total).toEqual([500000])
+    // 而且合计必须恒等于各条线之和，两个数字画在同一张图上
+    expect(h.total[0]).toBe(accounts.reduce((s, a) => s + h.byAccount[a.id][0], 0))
+    expect(jd.kind).toBe('credit')
+  })
 })
 
 describe('二级分类的排序：按用得多少，不是按最近用过谁', () => {
