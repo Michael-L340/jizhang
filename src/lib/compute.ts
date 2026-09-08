@@ -717,3 +717,20 @@ export function previewRepay(bill: CreditBill, cents: number): { hits: { due: In
   }
   return { hits, extra: left }
 }
+
+/**
+ * 把账单行按到期日分组。面板上「往后还有 N 期」一长条列下来，
+ * 分期多了之后 11/1 和 12/1 的行混在一起看不出断点（用户 2026-09-08 反馈）。
+ * 已经排好序，这里只是切段，不再排一次。
+ */
+export function groupByDue(rows: BillRow[]): { date: string; rows: BillRow[]; total: number }[] {
+  const out: { date: string; rows: BillRow[]; total: number }[] = []
+  for (const r of rows) {
+    const last = out[out.length - 1]
+    if (last && last.date === r.due.date) {
+      last.rows.push(r)
+      last.total += r.due.amount
+    } else out.push({ date: r.due.date, rows: [r], total: r.due.amount })
+  }
+  return out
+}

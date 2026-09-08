@@ -3,7 +3,7 @@
 // 底板一个是圆、一个是圆角方，而招行的图形右边还挂着六条横杠会把重心带偏。
 // 这里守住的是「以后加别的银行时不会又歪掉」。
 import { describe, expect, it } from 'vitest'
-import { accountColor, accountTint, BRANDS, brandOf } from './AccountIcon'
+import { accountColor, accountTint, BRANDS, brandOf, CREDIT_CARD } from './AccountIcon'
 
 const box = (vb: string) => vb.trim().split(/\s+/).map(Number)
 
@@ -74,6 +74,34 @@ describe('账户图标', () => {
     }
   })
 
+  it('白条卡面上下左右都居中——几何验的，不是眼睛验的', () => {
+    // 先用过系统 emoji 💳，两次被用户指出没居中：不同平台把这个字形画在 em 盒里的位置不同，
+    // 靠字体基线对齐永远是猜。改成自画之后，居中变成一条能断言的等式。
+    const c = CREDIT_CARD
+    const [vx, vy, vw, vh] = BRANDS.GENERIC_BANK.viewBox.trim().split(/\s+/).map(Number)
+    expect([c.cx, c.cy], '卡心必须落在 viewBox 正中').toEqual([vx + vw / 2, vy + vh / 2])
+    expect(c.right - c.cx, '左右到卡心等距').toBe(c.cx - c.left)
+    expect(c.bottom - c.cy, '上下到卡心等距').toBe(c.cy - c.top)
+
+    // 按命令解析，别按奇偶分 x/y：H 只带一个 x、V 只带一个 y，圆弧那三个标志位也不是坐标
+    const xs: number[] = []
+    const ys: number[] = []
+    for (const a of brandOf('白条').art!) {
+      for (const [, cmd, argStr] of a.d.matchAll(/([MHVAZ])([^MHVAZ]*)/g)) {
+        const n = (argStr.match(/-?\d*\.?\d+/g) ?? []).map(Number)
+        if (cmd === 'M') xs.push(n[0]), ys.push(n[1])
+        else if (cmd === 'H') xs.push(...n)
+        else if (cmd === 'V') ys.push(...n)
+        else if (cmd === 'A') xs.push(n[5]), ys.push(n[6]) // A rx ry rot large sweep x y
+      }
+    }
+    expect([Math.min(...xs), Math.max(...xs)], '所有图形的左右边').toEqual([c.left, c.right])
+    expect([Math.min(...ys), Math.max(...ys)], '所有图形的上下边').toEqual([c.top, c.bottom])
+    // 卡面本身也要留在 viewBox 里，不能顶到圆形底板的边
+    expect(c.left).toBeGreaterThan(vx + 1)
+    expect(c.right).toBeLessThan(vx + vw - 1)
+  })
+
   it('不认识的名字有兜底，不会崩', () => {
     expect(brandOf('随便什么').scale).toBeGreaterThan(0)
     expect(accountColor('')).toMatch(/^#[0-9a-f]{6}$/i)
@@ -85,13 +113,13 @@ describe('账户图标', () => {
     expect(brandOf('美团月付').image).toMatch(/brand\/meituan-v\d+\.png$/)
     expect(brandOf('花呗').image).toMatch(/brand\/huabei-v\d+\.png$/)
     expect(brandOf('花呗').imageLight).toBe(true) // 白底标要加边
-    // 「白条」分组和认不出平台的先用后付用 💳（用户 2026-09-08 选的），不是位图也不是自绘
+    // 「白条」分组和认不出平台的先用后付用自画的多色信用卡，不是位图也不是单色 path
     expect(brandOf('白条').image).toBeUndefined()
-    expect(brandOf('白条').emoji).toBe('💳')
-    expect(brandOf('先用后付').emoji).toBe('💳')
-    expect(brandOf('美团月付').emoji).toBeUndefined() // 认得出的平台仍旧用官方图标
-    // 自绘图标一个都不能带 emoji，否则 path 白画了
-    for (const [k, b] of Object.entries(BRANDS)) expect(b.emoji, k).toBeUndefined()
+    expect(brandOf('白条').art?.length).toBe(4)
+    expect(brandOf('先用后付').art).toBe(brandOf('白条').art)
+    expect(brandOf('美团月付').art).toBeUndefined() // 认得出的平台仍旧用官方图标
+    // 单色自绘图标一个都不能带 art，否则 path 白画了
+    for (const [k, b] of Object.entries(BRANDS)) expect(b.art, k).toBeUndefined()
     // 四家颜色（图表里的线和圆点用）各不相同
     expect(new Set(['京东白条', '花呗', '拼多多', '美团月付'].map(accountColor)).size).toBe(4)
   })

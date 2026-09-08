@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { applyTx, creditBill, currentDueDate, dueDateOf, dueNow, previewRepay, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { applyTx, creditBill, currentDueDate, dueDateOf, dueNow, groupByDue, previewRepay, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -1111,5 +1111,36 @@ describe('还款分配预告', () => {
   it('0 或负数不炸', () => {
     expect(previewRepay(bill, 0)).toEqual({ hits: [], extra: 0 })
     expect(previewRepay(bill, -100)).toEqual({ hits: [], extra: 0 })
+  })
+})
+
+describe('账单按到期日分组', () => {
+  const hb: Account = { id: 'hb', name: '花呗', kind: 'credit', sort: 0, is_archived: false, repay_day: 1, facade_offset: null }
+  const drink = tx({ id: 'drink', type: 'expense', amount: 5200, account_id: 'hb', date: '2026-09-08', installments: 6 })
+  const metro = tx({ id: 'metro', type: 'expense', amount: 2800, account_id: 'hb', date: '2026-09-08', installments: 3 })
+
+  it('同一个到期日的行归一组，组内之和 = 那一期要还的钱', () => {
+    const b = creditBill([drink, metro], hb, '2026-09-08')
+    const gs = groupByDue(b.upcoming)
+    expect(gs.map((g) => [g.date, g.rows.length, g.total])).toEqual([
+      ['2026-11-01', 2, 866 + 933], // 饮料第 2/6 期 + 通勤第 2/3 期
+      ['2026-12-01', 2, 866 + 934],
+      ['2027-01-01', 1, 866],
+      ['2027-02-01', 1, 866],
+      ['2027-03-01', 1, 870],
+    ])
+    // 切段不重排也不丢行
+    expect(gs.flatMap((g) => g.rows)).toEqual(b.upcoming)
+    expect(gs.reduce((s, g) => s + g.total, 0)).toBe(b.upcoming.reduce((s, r) => s + r.due.amount, 0))
+  })
+
+  it('空清单出空数组；三期全逾期就切成三组，日期各不相同', () => {
+    expect(groupByDue([])).toEqual([])
+    // 2027-03-01 打开：通勤那三期（10/1、11/1、12/1）全逾期，各成一组
+    const late = creditBill([metro], hb, '2027-03-01')
+    expect(groupByDue(late.upcoming)).toEqual([])
+    const gs = groupByDue(late.rows)
+    expect(gs.map((g) => g.date)).toEqual(['2026-10-01', '2026-11-01', '2026-12-01'])
+    expect(new Set(gs.map((g) => g.date)).size).toBe(gs.length)
   })
 })

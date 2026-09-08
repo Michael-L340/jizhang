@@ -36,8 +36,8 @@ interface Brand {
   image?: string
   /** 位图是白底的（花呗的标本身是白底蓝球），加一圈极淡的边，不然在白卡片上没轮廓 */
   imageLight?: boolean
-  /** 用系统 emoji 当图标。有它时 path / viewBox / image 都不用 */
-  emoji?: string
+  /** 多色图形（几何全部从 24×24 的中心往外量）。有它时 path / image 都不用 */
+  art?: { d: string; fill: string }[]
 }
 
 // 白条平台用 App Store 上的官方图标（位图，128px，裁成圆）。开源图标库里这几家只有线条画，
@@ -72,19 +72,43 @@ const GENERIC_WALLET: Brand = {
   path: 'M4 6h13a2 2 0 0 1 2 2v1h-2.5a3 3 0 0 0 0 6H21v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm12.5 5H22v2h-5.5a1 1 0 0 1 0-2Z',
 }
 
-// 「白条」分组 / 认不出平台的先用后付。浅焦糖底（--color-brand-soft）+ 💳，
-// 用户 2026-09-08 看过五个自绘形状之后选了 emoji 本尊。
-// 我提过它是蓝灰的、和整套暖焦糖不同调，也跟着系统字体走（iOS / Windows 各画各的），
-// 用户看过对比图后仍然要这个——**这是用户的决定，别再改回自绘 SVG**。
+/**
+ * 卡面几何。**全部从中心 (12,12) 往外量**，所以「居中」是算出来的，不是拿眼睛调的。
+ * 先用过系统 emoji 💳，两次被指出没居中：不同平台（Apple / Noto / Segoe）把这个字形
+ * 画在 em 盒里的位置各不相同，靠字体基线对齐永远是猜，而且换台设备就变。改成自己画。
+ */
+const CARD = { cx: 12, cy: 12, w: 17, h: 11, r: 1.9, band: 3.1 } as const
+const n2 = (v: number) => String(Math.round(v * 100) / 100)
+/** 圆角矩形。x0/y0/x1/y1 是绝对坐标，顺时针 */
+function rr(x0: number, y0: number, x1: number, y1: number, r: number): string {
+  const [a, b, c, d, e] = [x0, y0, x1, y1, r].map(n2)
+  return `M${n2(x0 + r)} ${b}H${n2(x1 - r)}A${e} ${e} 0 0 1 ${c} ${n2(y0 + r)}V${n2(y1 - r)}A${e} ${e} 0 0 1 ${n2(x1 - r)} ${d}H${n2(x0 + r)}A${e} ${e} 0 0 1 ${a} ${n2(y1 - r)}V${n2(y0 + r)}A${e} ${e} 0 0 1 ${n2(x0 + r)} ${b}Z`
+}
+const CARD_L = CARD.cx - CARD.w / 2
+const CARD_R = CARD.cx + CARD.w / 2
+const CARD_T = CARD.cy - CARD.h / 2
+const CARD_B = CARD.cy + CARD.h / 2
+
+// 「白条」分组 / 认不出平台的先用后付。浅焦糖底（--color-brand-soft）+ 一张信用卡。
+// 配色照用户 2026-09-08 挑的那个 💳：蓝卡身、顶部深蓝磁条、左边白签名条、右下金芯片。
 // 底板留浅焦糖：和四家平台的彩色官方图标并排时它退后一步，像个分组而不是第五个平台。
 const GENERIC_CREDIT: Brand = {
   color: '#8a6026',
   plate: 'light',
   plateColor: '#fdf2e4',
-  scale: 0.58,
+  scale: 0.72,
   viewBox: '0 0 24 24',
   path: '',
-  emoji: '💳',
+  art: [
+    { d: rr(CARD_L, CARD_T, CARD_R, CARD_B, CARD.r), fill: '#35a9e0' },
+    // 磁条：上面两个角跟着卡身圆，下边是直的
+    {
+      d: `M${n2(CARD_L + CARD.r)} ${n2(CARD_T)}H${n2(CARD_R - CARD.r)}A${n2(CARD.r)} ${n2(CARD.r)} 0 0 1 ${n2(CARD_R)} ${n2(CARD_T + CARD.r)}V${n2(CARD_T + CARD.band)}H${n2(CARD_L)}V${n2(CARD_T + CARD.r)}A${n2(CARD.r)} ${n2(CARD.r)} 0 0 1 ${n2(CARD_L + CARD.r)} ${n2(CARD_T)}Z`,
+      fill: '#22405a',
+    },
+    { d: rr(CARD_L + 2.1, CARD.cy - 0.6, CARD_L + 9.1, CARD.cy + 1.3, 0.95), fill: '#eef3f6' },
+    { d: rr(CARD_R - 3.3, CARD_B - 2.5, CARD_R - 0.6, CARD_B - 0.7, 0.45), fill: '#f6c63c' },
+  ],
 }
 
 /**
@@ -92,6 +116,9 @@ const GENERIC_CREDIT: Brand = {
  * 位图（四家白条平台）和 emoji（白条分组）没有 path 可守，不进这里。
  */
 export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, GENERIC_BANK, GENERIC_WALLET }
+
+/** 白条卡面的几何，供测试验证「上下左右都居中」 */
+export const CREDIT_CARD = { ...CARD, left: CARD_L, right: CARD_R, top: CARD_T, bottom: CARD_B }
 
 export function brandOf(name: string): Brand {
   const n = name.trim()
@@ -117,20 +144,19 @@ export function brandOf(name: string): Brand {
 
 export function AccountIcon({ name, size = 40 }: Props) {
   const b = brandOf(name)
-  if (b.emoji) {
-    // 用 SVG <text> 而不是 flex 居中：flex 居中的是**行盒**，emoji 字形是坐在基线上的，
-    // 底下那截 descender 空间会把它顶得偏上、看起来没对齐（用户 2026-09-08 一眼看出来）。
-    // dominant-baseline="central" 对齐的是 em 盒的几何中心，emoji 正是按 em 盒设计的方图。
+  if (b.art) {
+    // 多色图形自己画：整张卡是从 viewBox 中心 (12,12) 往外量出来的，天然上下左右都居中，
+    // 而且不依赖任何字体——换设备、换系统都长一个样
     return (
       <span
         className="inline-flex items-center justify-center shrink-0"
         style={{ width: size, height: size, background: b.plateColor ?? '#fff', borderRadius: '50%', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.09)' }}
         aria-hidden
       >
-        <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
-          <text x="12" y="12" textAnchor="middle" dominantBaseline="central" fontSize={24 * b.scale}>
-            {b.emoji}
-          </text>
+        <svg width={size} height={size} viewBox={b.viewBox} xmlns="http://www.w3.org/2000/svg">
+          {b.art.map((a) => (
+            <path key={a.fill} d={a.d} fill={a.fill} />
+          ))}
         </svg>
       </span>
     )

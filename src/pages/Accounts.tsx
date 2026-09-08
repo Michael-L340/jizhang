@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
-import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
+import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
 import type { BillRow, CreditBill } from '../lib/compute'
 import { daysBetween, fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
 import { applyFacade, normalizeOffset, offsetFor, visibleTxs } from '../lib/facade'
@@ -316,6 +316,41 @@ export function Accounts() {
     })
   }
 
+  /**
+   * 按到期日切段渲染。分期多了之后 11/1 和 12/1 的行会混在一起看不出断点，
+   * 所以每个到期日单独一段，段头写日期 + 这一期合计；点段头整组勾选，
+   * 「提前还一期」一下就选好了（用户 2026-09-08 提的）。
+   * 只有一个日期时不画段头——一条横线加个标题反而更碎。
+   */
+  function billSection(rows: BillRow[]) {
+    const groups = groupByDue(rows)
+    if (groups.length <= 1) return rows.map(billLine)
+    return groups.map((g) => {
+      const keys = g.rows.map(keyOf)
+      const allOn = keys.every((k) => picked.has(k))
+      return (
+        <div key={g.date} className="mt-1.5 first:mt-0">
+          <button
+            type="button"
+            className="w-full flex items-baseline justify-between px-1 py-1 text-[11px]"
+            onClick={() => {
+              const next = new Set(picked)
+              for (const k of keys) allOn ? next.delete(k) : next.add(k)
+              setPicked(next)
+              setRepayInput(yuanStr(pickSum(next)))
+            }}
+          >
+            <span className={allOn ? 'text-brand-ink font-medium' : 'text-muted'}>
+              {mmdd(g.date)} 到期 · {g.rows.length} 笔
+            </span>
+            <span className={`num ${allOn ? 'text-brand-ink font-medium' : 'text-muted'}`}>{fmtYuan(g.total, { symbol: true })}</span>
+          </button>
+          <div className="border-t border-line">{g.rows.map(billLine)}</div>
+        </div>
+      )
+    })
+  }
+
   /** 白条面板里一行账单。本期和「往后」两段共用，只是往后那段整体灰一档 */
   function billLine(r: BillRow) {
     const { icon, title } = planTitle(r.tx.category_id, r.tx.note)
@@ -521,7 +556,7 @@ export function Accounts() {
                     {picked.size < billRows.length ? '全选' : '全不选'}
                   </button>
                 </div>
-                <div className="mb-3">{bill.rows.map(billLine)}</div>
+                <div className="mb-3">{billSection(bill.rows)}</div>
                 {/* 三行小结：这一期的账清没清，一眼看出来。「已还」是分配到本期这几行的钱 */}
                 <div className="text-xs flex flex-col gap-1 mb-4 pt-2.5 border-t border-line">
                   <span className="flex justify-between">
@@ -550,7 +585,7 @@ export function Accounts() {
                 {bill.upcoming.length ? (
                   <>
                     <div className="text-xs text-muted mb-1">往后还有 {bill.upcoming.length} 期 · 勾上就是提前还</div>
-                    <div className="mb-3">{bill.upcoming.map(billLine)}</div>
+                    <div className="mb-3">{billSection(bill.upcoming)}</div>
                   </>
                 ) : null}
               </>
