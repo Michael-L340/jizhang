@@ -47,3 +47,98 @@ export function legendRows(names: string[], width: number, m: LegendMetrics = LE
 export function gridTopFor(rows: number): number {
   return rows === 0 ? 16 : 12 + rows * 17
 }
+
+// ---------- x 轴标签 ----------
+
+/**
+ * x 轴要标哪几个桶、每个标什么。
+ *
+ * **年份永远带着**（用户 2026-09-08 定）：`25.10`、`26.1`。省掉年份省不出多少宽度，
+ * 却要人自己数「这是哪一年的 7 月」。代价是全标经常装不下，于是有了下面的降级。
+ *
+ * 从「每个都标」开始逐级往下降，取**第一个装得下的**级别：
+ *   按月：全标 → 每季度（1/4/7/10 月）→ 每半年（1/7 月）→ 每年（1 月）
+ *   按日：全标 → 每 2/3/5/7/10/14 天 → 每月 1 号 → 每季度首日 → 每年 1 月 1 日
+ *
+ * 「装得下」= 相邻两个被标出来的标签，中心距 ≥ 两个半宽之和 + 4px 余量。
+ * 原来是 `interval: keys.length <= 14 ? 0 : ...`，只看个数不看宽度——近一年按月是 12 个，
+ * 走的是「全标」，而 `25.10` 有 27.5px、一格只有 22px，糊成一片。
+ *
+ * 降到某一级只剩不到 2 个标签就停住，宁可挤一点也不能一个刻度都没有。
+ */
+export function axisLabels(
+  keys: string[],
+  unit: 'day' | 'month',
+  width: number,
+  fontSize = 10,
+): { show: boolean[]; text: string[] } {
+  const text = keys.map((k) =>
+    unit === 'month' ? `${k.slice(2, 4)}.${+k.slice(5)}` : `${k.slice(2, 4)}/${+k.slice(5, 7)}/${+k.slice(8, 10)}`,
+  )
+  if (keys.length < 2) return { show: keys.map(() => true), text }
+
+  const w = text.map((t) => textWidth(t, fontSize))
+  const slot = width / keys.length
+  const QUARTER = ['01', '04', '07', '10']
+  const levels: boolean[][] = [keys.map(() => true)]
+  if (unit === 'day') {
+    // 跨了三个月以上就直接用「每月 1 号」——它比「每 14 天」有意义得多：
+    // 7/1 8/1 9/1 一眼知道是月初，而 7/15 7/29 8/12 只是等距落点。
+    // 区间在一两个月之内时月初太少（只有一两个刻度），才退回等距。
+    const first = keys.map((k) => k.slice(8) === '01')
+    if (first.filter(Boolean).length >= 3) levels.push(first)
+    for (const step of [2, 3, 5, 7, 10, 14]) levels.push(keys.map((_, i) => i % step === 0))
+    levels.push(first)
+    levels.push(keys.map((k) => k.slice(8) === '01' && QUARTER.includes(k.slice(5, 7))))
+    levels.push(keys.map((k) => k.slice(5) === '01-01'))
+  } else {
+    levels.push(keys.map((k) => QUARTER.includes(k.slice(5, 7))))
+    levels.push(keys.map((k) => k.slice(5, 7) === '01' || k.slice(5, 7) === '07'))
+    levels.push(keys.map((k) => k.slice(5, 7) === '01'))
+  }
+
+  const fits = (idx: number[]): boolean => {
+    for (let n = 1; n < idx.length; n++) {
+      const need = (w[idx[n - 1]] + w[idx[n]]) / 2 + 4
+      if ((idx[n] - idx[n - 1]) * slot < need) return false
+    }
+    return true
+  }
+
+  let show = levels[0]
+  for (const lv of levels) {
+    const idx = lv.flatMap((s, i) => (s ? [i] : []))
+    if (idx.length < 2) break
+    show = lv
+    if (fits(idx)) break
+  }
+  return { show, text }
+}
+
+// ---------- 图例缩写 ----------
+
+/** 一级分类名里的通用后缀。剥掉它们剩下的才是区别性的那几个字 */
+const GENERIC = ['消费', '开支', '支出', '生活']
+
+/**
+ * 图例用的短名：「非经常生活消费」→「非经常」，「经常生活开支」→「经常」。
+ *
+ * 不写死映射表——分类名是用户数据，改个名字表就失效了。改成剥通用后缀，
+ * 剥到只剩 2 个字就停（再剥下去「日常开支」会变成空的）。
+ *
+ * **撞名就整组回退用原名**：同时有「日常开支」和「日常餐饮」时两个都会变成「日常」，
+ * 那还不如都写全——图例里两个一模一样的名字比长名字糟得多。
+ *
+ * 只给图例和 x 轴用。提示框里仍然是全名，那里空间够，而且要能对得上分类管理页。
+ */
+export function shortLabels(names: string[]): string[] {
+  const short = names.map((n) => {
+    let s = n
+    for (;;) {
+      const hit = GENERIC.find((g) => s.endsWith(g) && s.length - g.length >= 2)
+      if (!hit) return s
+      s = s.slice(0, -hit.length)
+    }
+  })
+  return new Set(short).size === short.length ? short : names
+}

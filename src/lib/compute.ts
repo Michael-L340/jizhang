@@ -1,6 +1,6 @@
 // 所有余额与统计的纯函数。不依赖任何其他模块（date.ts 除外），方便单测。
 import type { Account, Category, Transaction, TxType } from '../types'
-import { addDays, dayInMonth, lastMonths, monthOf, monthRange, shiftMonth, today } from './date'
+import { addDays, dayInMonth, daysInMonth, lastMonths, monthOf, monthRange, shiftMonth, today } from './date'
 
 /** 收支统计只看这两种类型；transfer / adjust 永远不进收支 */
 export function isFlow(t: Transaction): t is Transaction & { type: 'expense' | 'income' } {
@@ -262,6 +262,25 @@ export function monthlySeries(txs: Transaction[], endYm: string, n = 12): { ym: 
     else row.expense += t.amount
   }
   return months.map((ym) => map.get(ym)!)
+}
+
+/**
+ * 每个桶的「日均」。给统计页堆叠柱上那条线用。
+ *
+ * **除以已过天数，不是当月总天数**（用户 2026-09-08 定）：本月才过 8 天就花了 1,674，
+ * 日均是 209 而不是 56——他要看的是当下的燃烧速度。代价是月初那个点会明显冲高，
+ * 随着天数增加自己回落；页面上把最后一段画成虚线提示「这个月还没走完」。
+ *
+ * 按日返回空数组：当天的「日均」就是当天总额，画出来是贴着柱顶的一条重复线。
+ * 未来的桶（今天之后）已过天数是 0，返回 0 而不是 NaN。
+ */
+export function dailyAverage(keys: string[], unit: Unit, totals: number[], ref: string = today()): number[] {
+  if (unit === 'day') return []
+  const nowYm = monthOf(ref)
+  return keys.map((k, i) => {
+    const days = k < nowYm ? daysInMonth(k) : k === nowYm ? +ref.slice(8, 10) : 0
+    return days > 0 ? Math.round((totals[i] ?? 0) / days) : 0
+  })
 }
 
 /** 时间桶的结束日期：按日就是当天，按月是当月最后一天 */

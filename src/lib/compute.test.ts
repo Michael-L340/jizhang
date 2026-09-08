@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { activePlans, applyTx, dueDateOf, monthBill, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, dueInMonth, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { activePlans, applyTx, dueDateOf, monthBill, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyAverage, dailyCumulative, debtOf, dueInMonth, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -1015,5 +1015,33 @@ describe('白条', () => {
     expect(activePlans([old], jd, '2026-10')).toEqual([])
     // 11 月：b 已经还完（只有 10 月一期）
     expect(activePlans([a, b, c], jd, '2026-11').map((x) => x.tx.id)).toEqual(['a', 'c'])
+  })
+})
+
+describe('dailyAverage：堆叠柱上那条日均线', () => {
+  it('过去的月份除当月天数，2 月按实际 28 / 29 天', () => {
+    // 用户 2026-09-08 定的是「除以已过天数」，过去的月份已过 = 整月
+    expect(dailyAverage(['2026-01', '2026-02'], 'month', [310000, 280000], '2026-09-08')).toEqual([10000, 10000])
+    expect(dailyAverage(['2024-02'], 'month', [290000], '2026-09-08')).toEqual([10000]) // 闰年 29 天
+  })
+
+  it('本月除的是已过天数，不是当月总天数——这就是它和 ÷30 的差别', () => {
+    // 9 月过了 8 天花了 1674.33，日均 209.29 而不是 55.81
+    expect(dailyAverage(['2026-09'], 'month', [167433], '2026-09-08')).toEqual([20929])
+  })
+
+  it('还没到的月份返回 0，不能是 NaN', () => {
+    expect(dailyAverage(['2026-12'], 'month', [0], '2026-09-08')).toEqual([0])
+  })
+
+  it('按日返回空数组：当天的「日均」就是当天总额，画出来是条重复线', () => {
+    expect(dailyAverage(['2026-09-07', '2026-09-08'], 'day', [1000, 2000], '2026-09-08')).toEqual([])
+  })
+
+  it('跨年也对得上，长度永远等于桶数', () => {
+    const keys = ['2025-11', '2025-12', '2026-01']
+    const r = dailyAverage(keys, 'month', [300000, 310000, 310000], '2026-09-08')
+    expect(r).toEqual([10000, 10000, 10000])
+    expect(r).toHaveLength(keys.length)
   })
 })
