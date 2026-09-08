@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { axisLabels, gridTopFor, LEGEND, legendRows, shortLabels, textWidth } from './chart'
+import { axisLabels, gridTopFor, LEGEND, legendRows, pairedAxisMax, shortLabels, textWidth } from './chart'
 
 describe('textWidth', () => {
   it('中文按一个字宽算', () => {
@@ -142,5 +142,46 @@ describe('图例缩写', () => {
     const full = ['非经常生活消费', '日常开支', '经常生活开支', '娱乐消费', '意外开支', '日均消费']
     expect(legendRows(full, 329)).toBe(2)
     expect(legendRows(shortLabels(full), 329)).toBe(1)
+  })
+})
+
+describe('双轴对齐', () => {
+  const totals = [1370, 1690, 2120, 1850, 1100, 1800, 1990, 1830, 2360, 1680, 1870]
+  const days = [31, 30, 31, 31, 28, 31, 30, 31, 30, 31, 31]
+  const avg = totals.map((t, i) => t / days[i])
+
+  it('柱轴留一成头，最高那根到 88% 左右', () => {
+    const m = pairedAxisMax(2360, 78.7, 31)
+    expect(m.bar).toBe(3000)
+    expect(2360 / m.bar).toBeGreaterThan(0.75)
+    expect(2360 / m.bar).toBeLessThan(0.92)
+  })
+
+  it('线轴 = 柱轴 ÷ 标准天数，于是线压在柱顶轮廓上', () => {
+    const m = pairedAxisMax(Math.max(...totals), Math.max(...avg), 31)
+    const ratio = totals.map((t, i) => avg[i] / m.line / (t / m.bar))
+    // 两根轴各自 auto 是 0.32（线埋在柱子肚子里），只对齐格数是 0.82（还在横切）
+    expect(Math.min(...ratio)).toBeGreaterThan(0.94)
+    expect(Math.max(...ratio)).toBeLessThan(1.10)
+  })
+
+  it('短月份的线抬到柱顶之上，长月份压到柱顶之下——那道缝就是月长', () => {
+    const m = pairedAxisMax(Math.max(...totals), Math.max(...avg), 31)
+    const above = (i: number) => avg[i] / m.line > totals[i] / m.bar
+    expect(above(4)).toBe(true) // 2 月 28 天
+    expect(above(2)).toBe(false) // 12 月 31 天
+  })
+
+  it('顶永远盖得住数据，不会把最高那根柱子或最高那个点切掉', () => {
+    for (const v of [1, 9, 10, 99, 100, 101, 2360, 999999]) {
+      const m = pairedAxisMax(v, v, 30)
+      expect(m.bar).toBeGreaterThanOrEqual(v)
+      expect(m.line).toBeGreaterThanOrEqual(v)
+    }
+  })
+
+  it('传 0 或负数不炸，给一个能用的量程', () => {
+    expect(pairedAxisMax(0, 0, 30).bar).toBeGreaterThan(0)
+    expect(pairedAxisMax(-5, -5, 0).line).toBeGreaterThan(0)
   })
 })

@@ -7,10 +7,10 @@ import { Sheet } from '../components/Sheet'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, dailyAverage, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
-import { axisLabels, gridTopFor, legendRows, shortLabels } from '../lib/chart'
+import { axisLabels, gridTopFor, legendRows, pairedAxisMax, shortLabels } from '../lib/chart'
 import { adjustTotals, shiftSeries, visibleTxs } from '../lib/facade'
 import { CHILD_NONE } from '../lib/filter'
-import { categoryColor, childColors } from '../lib/palette'
+import { categoryColor, CHART, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
 
@@ -18,6 +18,8 @@ const Chart = lazy(() => import('../components/Chart'))
 const yuan = (v: number) => `¥${fmtYuan(Math.round(v * 100))}`
 /** 日均那条线的名字。提示框和图例都按它认人，别写成字面量散在各处 */
 const AVG = '日均消费'
+/** 垫在日均线底下的白色粗线，让它压过彩色柱子也看得清。不进图例、不进提示框 */
+const HALO = '日均消费·垫底'
 /** 现在点一下只出提示框，得告诉用户还能再点一下，否则会以为点坏了 */
 const TAP = '<div style="margin-top:5px;font-size:11px;opacity:.6">再点一下看流水 ›</div>'
 /**
@@ -175,15 +177,15 @@ export function Stats() {
         // 柱子必须留边距，否则首尾两根会被画到轴外面只剩一半
         boundaryGap: lineMode === 'stack' ? true : fewPoints,
         axisTick: { show: false },
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10, color: '#7a808c', interval: (i: number) => trendAxis.show[i] ?? false },
+        axisLine: { lineStyle: { color: CHART.axis } },
+        axisLabel: { fontSize: 10, color: CHART.label, interval: (i: number) => trendAxis.show[i] ?? false },
       },
-      yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f1f4' } }, axisLabel: { fontSize: 10, color: '#7a808c', formatter: axisMoney } },
+      yAxis: { type: 'value', splitLine: { lineStyle: { color: CHART.axis } }, axisLabel: { fontSize: 10, color: CHART.label, formatter: axisMoney } },
     }
     if (lineMode === 'total') {
       return {
         ...base,
-        color: [trendKind === 'expense' ? '#e5484d' : '#1f9d55'],
+        color: [trendKind === 'expense' ? CHART.expense : CHART.income],
         legend: { show: false },
         grid: { ...base.grid, top: 16 },
         series: [
@@ -195,7 +197,7 @@ export function Stats() {
             symbolSize: 7,
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
-            label: { show: fewPoints, position: 'top', fontSize: 10, color: '#7a808c', formatter: (p: { value: number }) => yuan(p.value) },
+            label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
             data: trendTotal.map((v) => v / 100),
           },
         ],
@@ -219,57 +221,92 @@ export function Stats() {
     const top = gridTopFor(legendRows(short, chartW))
 
     if (lineMode === 'stack') {
+      // 双轴对齐：两根轴都取「好看步长 × 5 格」，网格线一一对上，线也就稳定地贴着柱顶跑。
+      // lineMax 只看**完整**的桶——本月才过几天，日均是完整月的三五倍，
+      // 拿它定量程会把前面十一个月全压进柱子肚子里（改之前就是这个样子）。
+      const barMax = keys.reduce((m, _, i) => Math.max(m, trendByCat.reduce((t, c) => t + c.data[i], 0) / 100), 0)
+      const isClosed = (i: number) => !(openEnd && i === avg.length - 1)
+      const closed = avg.filter((_, i) => isClosed(i))
+      const lineMax = closed.length ? Math.max(...closed) / 100 : 0
+      const hasLine = lineMax > 0
+      // 「标准桶天数」取完整桶的中位数。bucketEnd 按月给的是当月最后一天，日号就是天数。
+      const dayCounts = keys.filter((_, i) => isClosed(i)).map((k) => +bucketEnd(k, unit).slice(8, 10)).sort((a, b) => a - b)
+      const ax = pairedAxisMax(barMax, lineMax, dayCounts[dayCounts.length >> 1] ?? 30)
+      const tick = (max: number) => ({ max, interval: max / 5 })
       return {
         ...base,
-        color: [...names.map((n, i) => categoryColor(n, i)), '#33302b'],
-        grid: { ...base.grid, top },
-        legend,
+        // 颜色按 series 顺序发：五个分类、垫底白线、日均线
+        color: [...names.map((n, i) => categoryColor(n, i)), CHART.gap, CHART.avg],
+        grid: { ...base.grid, top: hasLine ? top : gridTopFor(legendRows(shortLabels(names), chartW)) },
+        legend: hasLine ? legend : { ...legend, data: names },
         tooltip: {
           ...base.tooltip,
-          order: 'seriesDesc',
           axisPointer: { type: 'shadow' },
           formatter: (ps: { dataIndex: number; marker: string; seriesName: string; value: number }[]) => {
             if (!ps.length) return ''
-            const bars = ps.filter((p) => p.seriesName !== AVG && p.value > 0).sort((a, b) => b.value - a.value)
+            const bars = ps.filter((p) => p.seriesName !== AVG && p.seriesName !== HALO && p.value > 0).sort((a, b) => b.value - a.value)
             const sum = bars.reduce((t, p) => t + p.value, 0)
-            const pct = (v: number) => (sum > 0 ? `${Math.round((v / sum) * 100)}%` : '')
+            if (!bars.length) return [full(ps[0].dataIndex), '无支出'].join('<br/>') + TAP
             const rows = bars.map(
               (p) =>
-                `${p.marker}${p.seriesName}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span><span style="float:right;margin-left:16px;opacity:.6">${pct(p.value)}</span>`,
+                `${p.marker}${p.seriesName}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span><span style="float:right;margin-left:16px;opacity:.6">${Math.round((p.value / sum) * 100)}%</span>`,
             )
-            if (!rows.length) return [full(ps[0].dataIndex), '无支出'].join('<br/>') + TAP
-            const a = ps.find((p) => p.seriesName === AVG)
-            const days = +bucketEnd(keys[ps[0].dataIndex], unit).slice(8, 10)
-            const passed = keys[ps[0].dataIndex] === monthOf(today()) ? +today().slice(8, 10) : days
+            const at = ps[0].dataIndex
+            // 日均那条线在本月是断开的，所以这里从 avg 现取，不靠 ps 里有没有那个系列
+            const days = keys[at] === monthOf(today()) ? +today().slice(8, 10) : +bucketEnd(keys[at], unit).slice(8, 10)
             const tail = [
               `<span style="opacity:.75">合计</span><span style="float:right;margin-left:16px;font-weight:600">${yuan(sum)}</span>`,
-              ...(a ? [`<span style="opacity:.75">日均 · ${passed} 天</span><span style="float:right;margin-left:16px;font-weight:600">${yuan(a.value)}</span>`] : []),
+              ...(avg.length ? [`<span style="opacity:.75">日均 · ${days} 天</span><span style="float:right;margin-left:16px;font-weight:600">${yuan(avg[at] / 100)}</span>`] : []),
             ]
-            return [full(ps[0].dataIndex), ...rows, '<div style="border-top:1px solid rgba(255,255,255,.22);margin:5px 0"></div>', ...tail].join('<br/>') + TAP
+            return [full(at), ...rows, '<div style="border-top:1px solid rgba(255,255,255,.22);margin:5px 0"></div>', ...tail].join('<br/>') + TAP
           },
         },
-        yAxis: [
-          base.yAxis,
-          { type: 'value', splitLine: { show: false }, axisLabel: { fontSize: 10, color: '#7a808c', formatter: axisMoney } },
-        ],
+        yAxis: hasLine
+          ? [
+              { ...base.yAxis, ...tick(ax.bar) },
+              { type: 'value', ...tick(ax.line), splitLine: { show: false }, axisLabel: { fontSize: 10, color: CHART.label, formatter: axisMoney } },
+            ]
+          : base.yAxis,
         series: [
-          ...trendByCat.map((c) => ({ name: c.name, type: 'bar', stack: 'x', barMaxWidth: 26, data: c.data.map((v) => v / 100) })),
-          ...(avg.length
+          ...trendByCat.map((c) => ({
+            name: c.name,
+            type: 'bar',
+            stack: 'x',
+            barMaxWidth: 26,
+            // 段与段之间留一道白缝，五段叠在一起才分得开（和饼图同一个做法）
+            itemStyle: { borderColor: CHART.gap, borderWidth: 1 },
+            data: c.data.map((v) => v / 100),
+          })),
+          ...(hasLine
             ? [
+                // 垫底的白线：真画一条粗的白线在下面，比 shadowBlur 干净，
+                // 也比它稳（canvas 的阴影在某些机器上会糊成一团）
+                {
+                  name: HALO,
+                  type: 'line',
+                  yAxisIndex: 1,
+                  smooth: false,
+                  showSymbol: false,
+                  silent: true,
+                  lineStyle: { width: 5, color: CHART.gap },
+                  z: 2,
+                  data: avg.map((v, i) => (isClosed(i) ? v / 100 : null)),
+                },
                 {
                   name: AVG,
                   type: 'line',
                   yAxisIndex: 1,
-                  smooth: true,
+                  // 柱子是硬边，配直线段比平滑曲线利落
+                  smooth: false,
+                  symbol: 'circle',
                   symbolSize: 5,
                   showSymbol: keys.length <= 40,
-                  lineStyle: { width: 2 },
+                  itemStyle: { color: CHART.avg, borderColor: CHART.gap, borderWidth: 1.5 },
+                  lineStyle: { width: 1.8 },
                   z: 3,
-                  data: avg.map((v, i) =>
-                    openEnd && i === avg.length - 1
-                      ? { value: v / 100, lineStyle: { type: 'dashed' }, symbol: 'emptyCircle', symbolSize: 8 }
-                      : v / 100,
-                  ),
+                  // 本月还没走完，÷ 已过天数会冲到完整月的三五倍——不画进线里，
+                  // 数字放在卡片上方那行小字和提示框里，一个都不少
+                  data: avg.map((v, i) => (isClosed(i) ? v / 100 : null)),
                 },
               ]
             : []),
@@ -324,15 +361,15 @@ export function Stats() {
         data: balAxis.text,
         boundaryGap: fewPoints,
         axisTick: { show: false },
-        axisLine: { lineStyle: { color: '#e6e8ec' } },
-        axisLabel: { fontSize: 10, color: '#7a808c', interval: (i: number) => balAxis.show[i] ?? false },
+        axisLine: { lineStyle: { color: CHART.axis } },
+        axisLabel: { fontSize: 10, color: CHART.label, interval: (i: number) => balAxis.show[i] ?? false },
       },
-      yAxis: { type: 'value', splitLine: { lineStyle: { color: '#f0f1f4' } }, axisLabel: { fontSize: 10, color: '#7a808c', formatter: axisMoney } },
+      yAxis: { type: 'value', splitLine: { lineStyle: { color: CHART.axis } }, axisLabel: { fontSize: 10, color: CHART.label, formatter: axisMoney } },
     }
     if (balMode === 'total') {
       return {
         ...common,
-        color: ['#2f6fed'],
+        color: [CHART.balance],
         legend: { show: false },
         series: [
           {
@@ -343,7 +380,7 @@ export function Stats() {
             symbolSize: 7,
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
-            label: { show: fewPoints, position: 'top', fontSize: 10, color: '#7a808c', formatter: (p: { value: number }) => yuan(p.value) },
+            label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
             data: bal.total.map((v) => v / 100),
           },
         ],
@@ -503,6 +540,13 @@ export function Stats() {
               ))}
             </div>
             <div className="num text-lg font-semibold leading-tight">{fmtYuan(trendSum, { symbol: true })}</div>
+            {/* 本月那个点没画进线里（÷ 已过天数会冲到完整月的三五倍，量程一撑，前面十一个月全压扁），
+                所以把数字摆在这儿。提示框里也有一份。 */}
+            {lineMode === 'stack' && openEnd && avg.length ? (
+              <div className="text-[11px] text-muted mt-0.5">
+                本月日均 {fmtYuan(avg[avg.length - 1], { symbol: true })} · {+today().slice(8, 10)} 天
+              </div>
+            ) : null}
           </div>
           <div className="inline-flex rounded-full bg-bg p-0.5">
             {(['total', 'category', 'stack'] as const).map((m) => (
@@ -529,7 +573,7 @@ export function Stats() {
           {lineMode === 'stack'
             ? `每根柱是${unit === 'day' ? '当天' : '当月'}${trendKind === 'expense' ? '支出' : '收入'}总额，按一级分类分段`
             : `每个点是${unit === 'day' ? '当天' : '当月'}${trendKind === 'expense' ? '支出' : '收入'}总额${lineMode === 'category' ? '，按分类分开' : ''}`}
-          {lineMode === 'stack' && avg.length ? '；线是日均（当月总额 ÷ 已过天数），走右轴' : ''}。点一下看明细，再点一下看
+          {lineMode === 'stack' && avg.length ? '；线是日均（当月总额 ÷ 已过天数），走右轴，本月还没走完不画进线里' : ''}。点一下看明细，再点一下看
           {unit === 'day' ? '当天' : '当月'}的流水。
           {unit === 'month' && monthOf(tEnd) === monthOf(today()) ? '本月还没结束，显示的是目前的总计。' : ''}
         </div>

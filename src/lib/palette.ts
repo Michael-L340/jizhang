@@ -128,3 +128,29 @@ export function childShade(parentColor: string, sort: number): string {
   const ramp = childColors(parentColor, 6)
   return ramp[(((sort - 1) % 6) + 6) % 6]
 }
+
+/**
+ * 图表上**不属于任何分类**的那些颜色：趋势线、余额线、日均线、坐标轴。
+ *
+ * 必须写死十六进制——ECharts 画在 canvas 上，认不了 `var(--color-expense)`。
+ * 但写死就会和主题脱节：09-05 主题换成暖色之后，统计页还留着一批冷色
+ * （支出红 #e5484d、收入绿 #1f9d55、余额蓝 #2f6fed、冷灰坐标轴），
+ * 在暖奶油底上格外脏。所以 `palette.test.ts` 从 index.css 的 @theme 现读来守这张表，
+ * 改了主题不改这里，测试直接红。
+ */
+export const CHART = {
+  /** 支出趋势线 = --color-expense */
+  expense: '#c95a4e',
+  /** 收入趋势线 = --color-income */
+  income: '#4d8a5e',
+  /** 余额线 = --color-brand-ink。余额既不是收也不是支，用 App 自己的深焦糖 */
+  balance: '#8a6026',
+  /** 日均线 = --color-ink。中性深色，和五个分类色都不撞 */
+  avg: '#33302b',
+  /** 坐标轴和网格线 = --color-line */
+  axis: '#ece6dd',
+  /** 轴上的数字 = --color-muted */
+  label: '#918a80',
+  /** 堆叠柱各段之间的缝 = --color-card。和饼图的分段白线同一个做法 */
+  gap: '#ffffff',
+} as const

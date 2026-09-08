@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { categoryColor, childColors, childShade, hexToHsl } from './palette'
+import { categoryColor, CHART, childColors, childShade, hexToHsl } from './palette'
 
 /** 两个颜色在 RGB 空间的距离。粗糙但够用：肉眼能分辨大约要 40 以上 */
 function dist(a: string, b: string): number {
@@ -155,9 +155,23 @@ describe('分类颜色只有一个来源', () => {
     expect(hits, `Home.tsx 里写死了颜色：${hits.join(' ')}`).toEqual([])
   })
 
-  // 统计页暂时不纳入这条守卫：它还有一批 09-05 换暖色主题之前留下的写死颜色
-  // （趋势线用旧的支出红 #e5484d / 收入绿 #1f9d55、余额线用旧品牌蓝 #2f6fed、
-  // 坐标轴是冷灰），那批和分类配色无关，用户明确说先放着。收拾那批时把
-  // Stats.tsx 加进上面这条断言，别再留第二个例外。
-  it.todo('统计页的图表颜色也要跟着主题走（旧冷色待清理）')
+  // 2026-09-08 收拾干净了：那批 09-05 之前留下的冷色（支出红 #e5484d、收入绿 #1f9d55、
+  // 余额蓝 #2f6fed、冷灰坐标轴）全部换成 palette.CHART，这里跟着从例外升级成守卫。
+  it('统计页也不许写死十六进制颜色', () => {
+    const src = readFileSync(new URL('../pages/Stats.tsx', import.meta.url), 'utf8')
+    const hits = src.match(/#[0-9a-fA-F]{6}\b/g) ?? []
+    expect(hits, `Stats.tsx 里写死了颜色：${hits.join(' ')}`).toEqual([])
+  })
+
+  // CHART 是图表上唯一允许出现十六进制的地方，代价是它可能和主题脱节。
+  // 从 index.css 现读来对账，改了主题不改这张表就红在这里。
+  it('CHART 里每个色值都等于 index.css 的对应 token', () => {
+    expect(CHART.expense).toBe(themeColor('expense'))
+    expect(CHART.income).toBe(themeColor('income'))
+    expect(CHART.balance).toBe(themeColor('brand-ink'))
+    expect(CHART.avg).toBe(themeColor('ink'))
+    expect(CHART.axis).toBe(themeColor('line'))
+    expect(CHART.label).toBe(themeColor('muted'))
+    expect(CHART.gap).toBe(themeColor('card'))
+  })
 })
