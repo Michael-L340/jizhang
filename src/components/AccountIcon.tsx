@@ -36,6 +36,8 @@ interface Brand {
   image?: string
   /** 位图是白底的（花呗的标本身是白底蓝球），加一圈极淡的边，不然在白卡片上没轮廓 */
   imageLight?: boolean
+  /** 用系统 emoji 当图标。有它时 path / viewBox / image 都不用 */
+  emoji?: string
 }
 
 // 白条平台用 App Store 上的官方图标（位图，128px，裁成圆）。开源图标库里这几家只有线条画，
@@ -70,20 +72,26 @@ const GENERIC_WALLET: Brand = {
   path: 'M4 6h13a2 2 0 0 1 2 2v1h-2.5a3 3 0 0 0 0 6H21v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm12.5 5H22v2h-5.5a1 1 0 0 1 0-2Z',
 }
 
-// 「白条」分组 / 认不出平台的先用后付：一张卡的形状，两段矩形中间留一道空隙当磁条。
-// 浅焦糖底 + 焦糖色卡（用户 2026-09-06 定：形状选卡片、颜色学浅底深字），
-// 和四家平台的彩色官方图标并排时它退后一步，像个分组而不是第五个平台。
+// 「白条」分组 / 认不出平台的先用后付。浅焦糖底（--color-brand-soft）+ 💳，
+// 用户 2026-09-08 看过五个自绘形状之后选了 emoji 本尊。
+// 我提过它是蓝灰的、和整套暖焦糖不同调，也跟着系统字体走（iOS / Windows 各画各的），
+// 用户看过对比图后仍然要这个——**这是用户的决定，别再改回自绘 SVG**。
+// 底板留浅焦糖：和四家平台的彩色官方图标并排时它退后一步，像个分组而不是第五个平台。
 const GENERIC_CREDIT: Brand = {
   color: '#8a6026',
   plate: 'light',
   plateColor: '#fdf2e4',
-  scale: 0.72,
+  scale: 0.58,
   viewBox: '0 0 24 24',
-  path: 'M2 6a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v1.5H2V6Zm0 4.5h20V18a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2v-7.5Zm3 4h6v1.8H5v-1.8Z',
+  path: '',
+  emoji: '💳',
 }
 
-/** 全部品牌，供测试逐个检查形状与大小是否统一 */
-export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, GENERIC_BANK, GENERIC_WALLET, GENERIC_CREDIT }
+/**
+ * 全部**自绘**品牌，供测试逐个检查形状与大小是否统一。
+ * 位图（四家白条平台）和 emoji（白条分组）没有 path 可守，不进这里。
+ */
+export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, GENERIC_BANK, GENERIC_WALLET }
 
 export function brandOf(name: string): Brand {
   const n = name.trim()
@@ -109,6 +117,24 @@ export function brandOf(name: string): Brand {
 
 export function AccountIcon({ name, size = 40 }: Props) {
   const b = brandOf(name)
+  if (b.emoji) {
+    // 用 SVG <text> 而不是 flex 居中：flex 居中的是**行盒**，emoji 字形是坐在基线上的，
+    // 底下那截 descender 空间会把它顶得偏上、看起来没对齐（用户 2026-09-08 一眼看出来）。
+    // dominant-baseline="central" 对齐的是 em 盒的几何中心，emoji 正是按 em 盒设计的方图。
+    return (
+      <span
+        className="inline-flex items-center justify-center shrink-0"
+        style={{ width: size, height: size, background: b.plateColor ?? '#fff', borderRadius: '50%', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.09)' }}
+        aria-hidden
+      >
+        <svg width={size} height={size} viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg">
+          <text x="12" y="12" textAnchor="middle" dominantBaseline="central" fontSize={24 * b.scale}>
+            {b.emoji}
+          </text>
+        </svg>
+      </span>
+    )
+  }
   if (b.image) {
     return (
       <img

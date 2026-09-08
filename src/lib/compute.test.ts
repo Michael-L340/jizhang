@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { activePlans, applyTx, dueDateOf, monthBill, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, dueInMonth, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { applyTx, creditBill, currentDueDate, dueDateOf, dueNow, previewRepay, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -839,11 +839,6 @@ describe('balanceShares', () => {
 
 describe('白条', () => {
   const acc = (id: string, kind: Account['kind'], repay_day: number | null = null): Account => ({ id, name: id, kind, sort: 0, is_archived: false, repay_day, facade_offset: null })
-  // 花呗、美团的还款日是 1 号；用 1 号时「下单后最近的 1 号」正好等于旧规则的「下单次月」，
-  // 所以下面沿用旧断言的那几条能证明改还款日没有破坏原来的行为
-  const jd = acc('jd', 'credit', 1)
-  const jd17 = acc('jd', 'credit', 17)
-  const pdd = acc('pdd', 'credit', null)
   const credit = (p: Partial<Transaction> = {}): Transaction => tx({ type: 'expense', amount: 100, account_id: 'jd', category_id: 'c1', ...p })
 
   it('splitAccounts / debtOf：白条分出去，欠款只算负数', () => {
@@ -889,131 +884,232 @@ describe('白条', () => {
     expect(installmentPlan(credit({ date: '2026-09-05', amount: 1800, installments: null }), 1)).toEqual([{ seq: 1, of: 1, ym: '2026-10', date: '2026-10-01', amount: 1800 }])
   })
 
-  it('dueInMonth：只看白条账户上的支出，按账户汇总当月到期的那一期', () => {
-    const hb = acc('hb', 'credit', 1)
-    const txs = [
-      credit({ date: '2026-09-05', amount: 120000, installments: 3 }), // 10/11/12 各 400
-      credit({ date: '2026-09-20', amount: 1800, installments: null, account_id: 'hb' }), // 10 月 18
-      credit({ date: '2026-08-01', amount: 6000, installments: 2 }), // 9 月、10 月各 30
-      credit({ date: '2026-09-05', amount: 99900, account_id: 'boc' }), // 不是白条
-      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 40000, date: '2026-10-10' }), // 10 月已还 400，要从应还里扣掉
-    ]
-    expect([...dueInMonth(txs, [jd, hb], '2026-10')]).toEqual([
-      ['jd', 3000],
-      ['hb', 1800],
-    ])
-    expect([...dueInMonth(txs, [jd, hb], '2027-01')]).toEqual([])
-  })
-
-  it('dueInMonth：当月已经转进白条的还款要扣掉，还清了就不再列出来', () => {
-    const hb = acc('hb', 'credit', 1)
-    const txs = [
-      credit({ date: '2026-09-05', amount: 120000, installments: 3 }), // 10 月应还 400
-      credit({ date: '2026-09-20', amount: 1800, account_id: 'hb' }), // 10 月应还 18
-      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 10000, date: '2026-10-03' }), // 先还了 100
-      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'hb', amount: 1800, date: '2026-10-03' }), // 花呗还清
-      tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 5000, date: '2026-11-01' }), // 下个月的，不算 10 月
-    ]
-    expect([...dueInMonth(txs, [jd, hb], '2026-10')]).toEqual([['jd', 30000]])
-    // 多还了也不会变成负数
-    const more = [...txs, tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 90000, date: '2026-10-05' })]
-    expect([...dueInMonth(more, [jd, hb], '2026-10')]).toEqual([])
-  })
-
-  it('京东 17 号：9/6 下单当月就要还，不是下个月', () => {
-    // 上线前 App 把这两笔算成 10 月到期，「本月应还」显示 0，实际 9/17 就得还
-    const txs = [credit({ id: 'a', date: '2026-09-06', amount: 599 }), credit({ id: 'b', date: '2026-09-06', amount: 6579 })]
-    expect([...dueInMonth(txs, [jd17], '2026-09')]).toEqual([['jd', 7178]])
-    expect([...dueInMonth(txs, [jd17], '2026-10')]).toEqual([])
-  })
-
-  it('勾选结清：结清的那单不再算应还，还款里对应的那部分也不能再减一遍', () => {
-    const cup = credit({ id: 'cup', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
-    const cable = credit({ id: 'cable', account_id: 'pdd', date: '2026-09-03', amount: 900 })
-    // 先用后付：没结清就一直算欠着
-    expect([...dueInMonth([cup, cable], [pdd], '2026-09')]).toEqual([['pdd', 2800]])
-    // 扣了 19 并指明结清杯子：只剩数据线 9
-    const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, date: '2026-09-08', settles: ['cup'] })
-    expect([...dueInMonth([cup, cable, pay], [pdd], '2026-09')]).toEqual([['pdd', 900]])
-    // 关键：杯子已经被排除在应还之外，这 19 块不能再从剩下的 9 块里扣一遍
-    expect(dueInMonth([cup, cable, pay], [pdd], '2026-09').get('pdd')).toBe(900)
-  })
-
-  it('先用后付：上个月没结清的，这个月照样算欠着', () => {
-    const old = credit({ id: 'old', account_id: 'pdd', date: '2026-08-20', amount: 500 })
-    expect([...dueInMonth([old], [pdd], '2026-09')]).toEqual([['pdd', 500]])
-    expect([...dueInMonth([old], [pdd], '2026-07')]).toEqual([]) // 下单之前不算
-  })
-
-  it('monthBill：一行 = 这个月该还的一笔，分期只出本期那份，各行之和 = 本月该还', () => {
-    const mouse = credit({ id: 'mouse', date: '2026-09-06', amount: 599 })
-    const fan = credit({ id: 'fan', date: '2026-09-06', amount: 6579 })
-    const monitor = credit({ id: 'monitor', date: '2026-09-06', amount: 60000, installments: 6 })
-    const bill = monthBill([mouse, fan, monitor], jd17, '2026-09')
-    expect(bill.rows.map((r) => [r.tx.id, r.due.amount, r.due.seq, r.due.of, r.selectable])).toEqual([
-      ['monitor', 10000, 1, 6, false], // 分期不给勾，按账单走
-      ['fan', 6579, 1, 1, true],
-      ['mouse', 599, 1, 1, true],
-    ])
-    // 这条是列法二的全部意义：各行加起来正好是本月该还，勾选加总才不会对不上
-    expect(bill.rows.reduce((s, r) => s + r.due.amount, 0)).toBe(bill.total)
-    expect(bill.total).toBe(17178)
-    expect(bill.paid).toBe(0)
-    expect(bill.left).toBe(17178)
-  })
-
-  it('monthBill：已还的算进 paid，勾选结清的不再列出来', () => {
-    const cup = credit({ id: 'cup', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
-    const cable = credit({ id: 'cable', account_id: 'pdd', date: '2026-09-03', amount: 900 })
-    const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, date: '2026-09-08', settles: ['cup'] })
-    const bill = monthBill([cup, cable, pay], pdd, '2026-09')
-    expect(bill.rows.map((r) => r.tx.id)).toEqual(['cable'])
-    expect(bill.total).toBe(900)
-    expect(bill.paid).toBe(1900)
-    expect(bill.left).toBe(0)
-  })
-
-  it('本月还过款之后才下的单要标出来（平台的账单周期 App 不知道）', () => {
-    // 还款日 17 号：13 号还完本期账单，14 号又下一单。按「下单后最近的 17 号」它归本月，
-    // 但多半已经进了下一期账单，平台那边其实结清了，而 App 会显示「还差 ¥50」。
-    const before = credit({ id: 'before', date: '2026-09-10', amount: 10000 })
-    const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'jd', amount: 10000, date: '2026-09-13' })
-    const after = credit({ id: 'after', date: '2026-09-14', amount: 5000 })
-    const bill = monthBill([before, pay, after], jd17, '2026-09')
-    expect(bill.rows.map((r) => [r.tx.id, r.afterRepay])).toEqual([
-      ['after', true],
-      ['before', false],
-    ])
-    expect(bill.afterRepayTotal).toBe(5000)
-    expect(bill.left).toBe(5000) // 逻辑不改，只是把这 50 标出来让人自己判断
-    // 没还过款的月份不标
-    expect(monthBill([before, after], jd17, '2026-09').rows.every((r) => !r.afterRepay)).toBe(true)
-    // 先用后付没有账单周期这回事，不标
-    const p1 = credit({ id: 'p1', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
-    const p2 = credit({ id: 'p2', account_id: 'pdd', date: '2026-09-14', amount: 900 })
-    const ppay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, date: '2026-09-08' })
-    expect(monthBill([p1, p2, ppay], pdd, '2026-09').rows.every((r) => !r.afterRepay)).toBe(true)
-  })
-
   it('settledIds：删掉还款记录，结清关系跟着消失', () => {
     const pay = tx({ type: 'transfer', account_id: 'boc', to_account_id: 'pdd', amount: 1900, settles: ['cup', 'cable'] })
     expect([...settledIds([pay])].sort()).toEqual(['cable', 'cup'])
     expect(settledIds([]).size).toBe(0) // 还款没了，谁都不算已结清
   })
 
-  it('activePlans：还没还完的才列，本月那一期和已到期期数算对，最新下单排前面', () => {
-    const old = credit({ id: 'old', date: '2026-05-01', amount: 3000, installments: 3 }) // 6/7/8，9 月已完
-    const a = credit({ id: 'a', date: '2026-09-05', amount: 120000, installments: 3, settles: null, created_at: '2026-09-05T01:00:00.000Z' })
-    const b = credit({ id: 'b', date: '2026-09-05', amount: 1800, created_at: '2026-09-05T02:00:00.000Z' })
-    const c = credit({ id: 'c', date: '2026-08-01', amount: 6000, installments: 4 }) // 9/10/11/12
-    const r = activePlans([old, a, b, c], jd, '2026-10')
-    expect(r.map((x) => x.tx.id)).toEqual(['b', 'a', 'c'])
-    expect(r[1].current).toEqual({ seq: 1, of: 3, ym: '2026-10', date: '2026-10-01', amount: 40000 })
-    expect(r[1].done).toBe(0)
-    expect(r[2].current?.seq).toBe(2)
-    expect(r[2].done).toBe(1)
-    expect(activePlans([old], jd, '2026-10')).toEqual([])
-    // 11 月：b 已经还完（只有 10 月一期）
-    expect(activePlans([a, b, c], jd, '2026-11').map((x) => x.tx.id)).toEqual(['a', 'c'])
+})
+
+describe('白条账单周期', () => {
+  const acc = (id: string, repay_day: number | null): Account => ({ id, name: id, kind: 'credit', sort: 0, is_archived: false, repay_day, facade_offset: null })
+  const hb = acc('hb', 1)
+  const jd17 = acc('jd', 17)
+  const pdd = acc('pdd', null)
+  const buy = (p: Partial<Transaction> = {}): Transaction => tx({ type: 'expense', amount: 100, account_id: 'hb', category_id: 'c1', ...p })
+  const pay = (p: Partial<Transaction> = {}): Transaction => tx({ type: 'transfer', account_id: 'boc', to_account_id: 'hb', amount: 100, ...p })
+
+  it('currentDueDate：今天之后最近的那个还款日，当天算本期', () => {
+    // 和 dueDateOf 差一个等号：下单当天算下一期，但还款日当天打开 App，面对的是今天要扣的这笔
+    expect(currentDueDate('2026-09-08', 1)).toBe('2026-10-01')
+    expect(currentDueDate('2026-10-01', 1)).toBe('2026-10-01')
+    expect(currentDueDate('2026-10-02', 1)).toBe('2026-11-01')
+    expect(currentDueDate('2026-09-08', 17)).toBe('2026-09-17')
+    expect(currentDueDate('2026-09-17', 17)).toBe('2026-09-17')
+    expect(currentDueDate('2026-10-20', 17)).toBe('2026-11-17')
+    // 还款日 31 落回月末
+    expect(currentDueDate('2026-02-10', 31)).toBe('2026-02-28')
+    // 先用后付没有周期
+    expect(currentDueDate('2026-09-08', null)).toBeNull()
+  })
+
+  it('9/8 打开花呗：本期是 10/1 那一期，不是「9 月没有到期的」', () => {
+    // 用户 2026-09-08 实测：面板整块空白 + 金额栏兜底填了全部欠款，看着像在催一次还清
+    const o = buy({ id: 'o', date: '2026-09-08', amount: 2000, installments: 3 })
+    const b = creditBill([o], hb, '2026-09-08')
+    expect(b.dueDate).toBe('2026-10-01')
+    expect(b.rows.map((r) => [r.due.seq, r.due.amount, r.state])).toEqual([[1, 666, 'current']])
+    expect(b.total).toBe(666)
+    expect(b.left).toBe(666)
+    expect(b.upcoming.map((r) => [r.due.seq, r.due.date, r.due.amount])).toEqual([
+      [2, '2026-11-01', 666],
+      [3, '2026-12-01', 668],
+    ])
+  })
+
+  it('提前还清：还款从最早一期往后顶，之后每一期打开都是已还清', () => {
+    const o = buy({ id: 'o', date: '2026-09-08', amount: 2000, installments: 3 })
+    const p = pay({ id: 'p', date: '2026-09-08', amount: 2000 })
+    // 9/8 当天：本期抵完，多的顶到后两期
+    const now = creditBill([o, p], hb, '2026-09-08')
+    expect(now.left).toBe(0)
+    expect(now.prepaid).toBe(1334)
+    expect(now.upcoming.map((r) => r.paid)).toEqual([666, 668])
+    // 10/2、11/2 再打开：本期也是还清的，不会再冒出来
+    for (const [day, seq] of [['2026-10-02', 2], ['2026-11-02', 3]] as const) {
+      const later = creditBill([o, p], hb, day)
+      expect(later.rows.map((r) => r.due.seq), day).toEqual([seq])
+      expect(later.left, day).toBe(0)
+    }
+    // 余额也是 0，标题和账单说的是同一件事
+    expect(balances([o, p], [hb]).hb).toBe(0)
+  })
+
+  it('提前还一部分：抵完本期，零头顶到下一期', () => {
+    const o = buy({ id: 'o', date: '2026-09-08', amount: 2000, installments: 3 })
+    const p = pay({ id: 'p', date: '2026-09-08', amount: 1000 })
+    const b = creditBill([o, p], hb, '2026-09-08')
+    expect([b.total, b.paid, b.left]).toEqual([666, 666, 0])
+    expect(b.upcoming.map((r) => [r.due.seq, r.paid])).toEqual([[2, 334], [3, 0]])
+    // 11/2 打开：第 2 期没还完的 332 变成逾期滚进本期，和第 3 期一起列出来
+    const nov = creditBill([o, p], hb, '2026-11-02')
+    expect(nov.rows.map((r) => [r.due.seq, r.state])).toEqual([
+      [2, 'overdue'],
+      [3, 'current'],
+    ])
+    expect([nov.total, nov.paid, nov.left]).toEqual([1334, 334, 1000])
+    const oct = creditBill([o, p], hb, '2026-10-02')
+    expect([oct.rows[0].due.seq, oct.total, oct.paid, oct.left]).toEqual([2, 666, 334, 332])
+  })
+
+  it('逾期没还的滚进本期，不会从账单里消失', () => {
+    // 京东 17 号：9/6 下单 9/17 到期，拖到 10/20 还没还
+    const mouse = buy({ id: 'mouse', account_id: 'jd', date: '2026-09-06', amount: 599 })
+    const fan = buy({ id: 'fan', account_id: 'jd', date: '2026-09-06', amount: 6579 })
+    // 先守住上线前算错过的那条：9/6 下单，本期就是 9/17，不是下个月
+    const soon = creditBill([mouse, fan], jd17, '2026-09-08')
+    expect(soon.dueDate).toBe('2026-09-17')
+    expect([soon.total, soon.overdueTotal, soon.left]).toEqual([7178, 0, 7178])
+    const b = creditBill([mouse, fan], jd17, '2026-10-20')
+    expect(b.dueDate).toBe('2026-11-17')
+    expect(b.rows.map((r) => [r.tx.id, r.state])).toEqual([
+      ['fan', 'overdue'],
+      ['mouse', 'overdue'],
+    ])
+    expect(b.total).toBe(7178)
+    expect(b.overdueTotal).toBe(7178)
+    expect(b.left).toBe(7178)
+  })
+
+  it('先用后付跨月还款也算数', () => {
+    // 8/20 下单 8/25 还清，9 月不该再显示欠着
+    const o = buy({ id: 'o', account_id: 'pdd', date: '2026-08-20', amount: 1000 })
+    const p = pay({ id: 'p', to_account_id: 'pdd', date: '2026-08-25', amount: 1000 })
+    expect(creditBill([o, p], pdd, '2026-08-26').left).toBe(0)
+    expect(creditBill([o, p], pdd, '2026-09-15').left).toBe(0)
+    expect(balances([o, p], [pdd]).pdd).toBe(0)
+    // 没还的照样一直算欠着；下单之前不算
+    expect(creditBill([o], pdd, '2026-09-15').left).toBe(1000)
+    expect(creditBill([o], pdd, '2026-08-01').rows).toEqual([])
+  })
+
+  it('勾选结清优先于往前顶，同一笔钱不会扣两次', () => {
+    const cup = buy({ id: 'cup', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
+    const cable = buy({ id: 'cable', account_id: 'pdd', date: '2026-09-03', amount: 900 })
+    const p = pay({ id: 'p', to_account_id: 'pdd', date: '2026-09-08', amount: 1900, settles: ['cup'] })
+    const b = creditBill([cup, cable, p], pdd, '2026-09-08')
+    expect(b.rows.map((r) => r.tx.id)).toEqual(['cable'])
+    expect(b.left).toBe(900) // 那 19 块已经指名结清杯子，不能再抵数据线
+    expect(b.paid).toBe(0)
+  })
+
+  it('dueNow：各账户还差多少，还清了就不列出来', () => {
+    const a = buy({ id: 'a', date: '2026-09-08', amount: 2000, installments: 3 })
+    const b = buy({ id: 'b', account_id: 'jd', date: '2026-09-06', amount: 599 })
+    const notCredit = buy({ id: 'x', account_id: 'boc', date: '2026-09-06', amount: 99900 })
+    expect([...dueNow([a, b, notCredit], [hb, jd17], '2026-09-08')]).toEqual([
+      ['hb', 666],
+      ['jd', 599],
+    ])
+    const p = pay({ id: 'p', to_account_id: 'jd', account_id: 'boc', date: '2026-09-08', amount: 599 })
+    expect([...dueNow([a, b, notCredit, p], [hb, jd17], '2026-09-08')]).toEqual([['hb', 666]])
+    // 多还了也不会变成负数
+    const more = pay({ id: 'more', to_account_id: 'jd', account_id: 'boc', date: '2026-09-08', amount: 90000 })
+    expect([...dueNow([b, more], [jd17], '2026-09-08')]).toEqual([])
+  })
+
+  it('改某笔还款时把它自己排除掉，否则改不动', () => {
+    const o = buy({ id: 'o', date: '2026-09-08', amount: 2000, installments: 3 })
+    const p = pay({ id: 'p', date: '2026-09-08', amount: 2000 })
+    const b = creditBill([o, p], hb, '2026-09-08', 'p')
+    expect(b.left).toBe(666) // 当它不存在，本期又欠着了
+    expect(b.prepaid).toBe(0)
+  })
+
+  it('本期还过款之后才下的单要标出来（平台的账单周期 App 不知道）', () => {
+    const before = buy({ id: 'before', account_id: 'jd', date: '2026-09-10', amount: 10000 })
+    const p = pay({ id: 'p', to_account_id: 'jd', date: '2026-09-13', amount: 10000 })
+    const after = buy({ id: 'after', account_id: 'jd', date: '2026-09-14', amount: 5000 })
+    const b = creditBill([before, p, after], jd17, '2026-09-15')
+    expect(b.rows.map((r) => [r.tx.id, r.afterRepay])).toEqual([
+      ['after', true],
+      ['before', false],
+    ])
+    expect(b.afterRepayTotal).toBe(5000)
+    expect(b.left).toBe(5000)
+    // 上一期的还款不算数：9/13 那笔落在 (8/17, 9/17] 里才算
+    expect(creditBill([before, after], jd17, '2026-09-15').rows.every((r) => !r.afterRepay)).toBe(true)
+    // 先用后付没有账单周期这回事，不标
+    const p1 = buy({ id: 'p1', account_id: 'pdd', date: '2026-09-01', amount: 1900 })
+    const p2 = buy({ id: 'p2', account_id: 'pdd', date: '2026-09-14', amount: 900 })
+    const pp = pay({ id: 'pp', to_account_id: 'pdd', date: '2026-09-08', amount: 1900 })
+    expect(creditBill([p1, p2, pp], pdd, '2026-09-15').rows.every((r) => !r.afterRepay)).toBe(true)
+  })
+
+  it('分期不给勾选结清，一次还清的才给', () => {
+    const one = buy({ id: 'one', account_id: 'jd', date: '2026-09-06', amount: 599 })
+    const many = buy({ id: 'many', account_id: 'jd', date: '2026-09-06', amount: 60000, installments: 6 })
+    const b = creditBill([one, many], jd17, '2026-09-08')
+    expect(b.rows.map((r) => [r.tx.id, r.due.amount, r.selectable])).toEqual([
+      ['many', 10000, false],
+      ['one', 599, true],
+    ])
+    // 各行之和正好是本期该还，勾选加总才不会对不上
+    expect(b.rows.reduce((s, r) => s + r.due.amount, 0)).toBe(b.total)
+  })
+})
+
+describe('还款分配预告', () => {
+  const hb: Account = { id: 'hb', name: '花呗', kind: 'credit', sort: 0, is_archived: false, repay_day: 1, facade_offset: null }
+  const order = tx({ id: 'o', type: 'expense', amount: 2000, account_id: 'hb', date: '2026-09-08', installments: 3 })
+  const bill = creditBill([order], hb, '2026-09-08') // 10/1 ¥6.66、11/1 ¥6.66、12/1 ¥6.68
+
+  it('正好一期：只抵本期，一分不往后跑', () => {
+    const { hits, extra } = previewRepay(bill, 666)
+    expect(hits.map((h) => [h.due.date, h.amount])).toEqual([['2026-10-01', 666]])
+    expect(extra).toBe(0)
+  })
+
+  it('少还：抵不满本期，就停在本期', () => {
+    expect(previewRepay(bill, 300).hits.map((h) => [h.due.date, h.amount])).toEqual([['2026-10-01', 300]])
+  })
+
+  it('多还：抵完本期往后顶，顺序是到期日从早到晚', () => {
+    const { hits, extra } = previewRepay(bill, 1000)
+    expect(hits.map((h) => [h.due.date, h.amount])).toEqual([
+      ['2026-10-01', 666],
+      ['2026-11-01', 334],
+    ])
+    expect(extra).toBe(0)
+  })
+
+  it('还清：三期全抵掉，没有多余', () => {
+    const { hits, extra } = previewRepay(bill, 2000)
+    expect(hits.reduce((s, h) => s + h.amount, 0)).toBe(2000)
+    expect(hits.length).toBe(3)
+    expect(extra).toBe(0)
+  })
+
+  it('还多了：多出来的部分单独列出来，不会硬塞进某一期', () => {
+    const { hits, extra } = previewRepay(bill, 2500)
+    expect(hits.reduce((s, h) => s + h.amount, 0)).toBe(2000)
+    expect(extra).toBe(500)
+  })
+
+  it('已经还过一部分：只算还没抵掉的那些，不会重复分配', () => {
+    const paid = tx({ id: 'p', type: 'transfer', amount: 1000, account_id: 'boc', to_account_id: 'hb', date: '2026-09-08' })
+    const b = creditBill([order, paid], hb, '2026-09-08')
+    const { hits, extra } = previewRepay(b, 1000)
+    expect(hits.map((h) => [h.due.date, h.amount])).toEqual([
+      ['2026-11-01', 332], // 第 2 期已经被顶掉 334，还差 332
+      ['2026-12-01', 668],
+    ])
+    expect(extra).toBe(0)
+  })
+
+  it('0 或负数不炸', () => {
+    expect(previewRepay(bill, 0)).toEqual({ hits: [], extra: 0 })
+    expect(previewRepay(bill, -100)).toEqual({ hits: [], extra: 0 })
   })
 })

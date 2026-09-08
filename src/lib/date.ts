@@ -28,6 +28,13 @@ export function addDays(ymd: string, n: number): string {
   return `${dt.getUTCFullYear()}-${pad(dt.getUTCMonth() + 1)}-${pad(dt.getUTCDate())}`
 }
 
+/** 从 a 到 b 差几天（b 在后为正）。用 UTC 算，避开本机时区和夏令时 */
+export function daysBetween(a: string, b: string): number {
+  const [y1, m1, d1] = parts(a)
+  const [y2, m2, d2] = parts(b)
+  return Math.round((Date.UTC(y2, m2 - 1, d2) - Date.UTC(y1, m1 - 1, d1)) / 86400000)
+}
+
 /** 'YYYY-MM-DD' → 'YYYY-MM' */
 export function monthOf(ymd: string): string {
   return ymd.slice(0, 7)

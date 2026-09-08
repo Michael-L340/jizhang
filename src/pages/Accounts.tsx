@@ -3,8 +3,9 @@ import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
-import { balances, balanceShares, debtOf, dueInMonth, monthBill, monthByAccount, splitAccounts } from '../lib/compute'
-import { fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
+import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
+import type { BillRow, CreditBill } from '../lib/compute'
+import { daysBetween, fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
 import { applyFacade, normalizeOffset, offsetFor, visibleTxs } from '../lib/facade'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
@@ -152,19 +153,22 @@ export function Accounts() {
   const shares = useMemo(() => balanceShares(dispBal, assets.map((a) => a.id)), [dispBal, assets])
 
   // ---- 白条 ----
-  const due = useMemo(() => dueInMonth(txs, credits, ym), [txs, credits, ym])
+  const today0 = today()
+  const due = useMemo(() => dueNow(txs, credits, today0), [txs, credits, today0])
   const dueTotal = [...due.values()].reduce((s, v) => s + v, 0)
   const debt = debtOf(bal, credits)
   const withDebt = credits.filter((c) => (bal[c.id] ?? 0) < 0).length
   const [creditOpen, setCreditOpen] = usePersistedState('jz_acc_creditOpen', false)
   const [creditTarget2, setCreditTarget2] = useState<Account | null>(null)
-  // 面板按「一行 = 这个月该还的一笔」画：分期只出本期那一份，各行之和 = 本月该还
-  /** 勾选的行（存支出 id）。默认全勾，金额就是本月该还，和以前的行为一样 */
+  // 面板按「一行 = 一期」画：本期该还的在上面，往后没到期的灰着列在下面。
+  /** 勾选的行（存「支出 id + 第几期」）。默认全勾本期那几行，金额就是本期该还 */
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
   /** 正在修改的那笔还款；null = 在记新的一笔 */
   const [editingRepay, setEditingRepay] = useState<Transaction | null>(null)
   // 改某笔还款时要把它自己排除掉，否则被它结清的那几单不在账单里，取消都取消不了
-  const bill = useMemo(() => (creditTarget2 ? monthBill(txs, creditTarget2, ym, editingRepay?.id) : null), [txs, creditTarget2, ym, editingRepay])
+  const bill = useMemo(() => (creditTarget2 ? creditBill(txs, creditTarget2, today0, editingRepay?.id) : null), [txs, creditTarget2, today0, editingRepay])
+  /** 本期 + 往后，合成一份可勾选的清单。往后那几行勾上就是提前还 */
+  const billRows = useMemo(() => [...(bill?.rows ?? []), ...(bill?.upcoming ?? [])], [bill])
   // 这个白条上最近的几笔还款，点一条可以回去改勾选（勾错了不用删掉重记）
   const recentRepays = useMemo(
     () =>
@@ -177,9 +181,20 @@ export function Accounts() {
     [txs, creditTarget2],
   )
   const yuanStr = (cents: number) => fmtYuan(cents).replace(/,/g, '')
+  /** 白条面板里到处要写的「9/17」。整条链路都是北京时间 YYYY-MM-DD，直接切字符串 */
+  const mmdd = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8))}`
+  /** 提前还的钱最远抵到哪一期，用来交代「另有 ¥X 已提前还，抵到 12/1 那一期」 */
+  const lastPrepaidDate = (b: CreditBill) => [...b.upcoming].reverse().find((r) => r.paid > 0)?.due.date ?? ''
+  /** 白条余额可以是正的：还多了，或者有退款。以前正余额一律显示「已还清」，那笔钱在面板里看不见 */
+  const creditTitle = (cents: number) => (cents < 0 ? `欠 ${fmtYuan(-cents, { symbol: true })}` : cents > 0 ? `余 ${fmtYuan(cents, { symbol: true })}` : '已还清')
+  /**
+   * 勾选的键。一张分期订单在清单里占好几行（第 1/3 期、第 2/3 期……），
+   * 光拿 tx.id 当键会把它们连成一片，勾一行等于勾了整单。
+   */
+  const keyOf = (r: { tx: Transaction; due: { seq: number } }) => `${r.tx.id}#${r.due.seq}`
   /** 勾选之和。改勾选时金额跟着变，但用户仍然可以自己改成别的数 */
   function pickSum(ids: ReadonlySet<string>): number {
-    return (bill?.rows ?? []).reduce((sum, r) => sum + (ids.has(r.tx.id) ? r.due.amount : 0), 0)
+    return billRows.reduce((sum, r) => sum + (ids.has(keyOf(r)) ? r.due.amount : 0), 0)
   }
   const pickedSum = pickSum(picked)
   function togglePick(id: string) {
@@ -201,23 +216,34 @@ export function Accounts() {
   })
   const repayCents = parseYuan(repayInput)
   const fromAcc = assets.find((a) => a.id === repayFrom) ?? assets[0]
+  /**
+   * 「抵 10/1 那期 ¥6.66，剩 ¥3.34 抵到 11/1」——跟着输入框实时变。
+   * 改还款时不预告：那笔钱已经被排除在账单外了，再算一遍只会让人更糊涂。
+   */
+  const alloc = useMemo(() => {
+    if (!bill || editingRepay || !repayCents || repayCents <= 0) return ''
+    const { hits, extra } = previewRepay(bill, repayCents)
+    if (!hits.length) return extra > 0 ? `这个账户没有要还的期，这 ${fmtYuan(extra, { symbol: true })} 会存成余额` : ''
+    const parts = hits.map((h) => `${mmdd(h.due.date)} 那期 ${fmtYuan(h.amount, { symbol: true })}`)
+    return `抵 ${parts.join('、')}${extra > 0 ? `，多出的 ${fmtYuan(extra, { symbol: true })} 存成余额` : ''}`
+  }, [bill, editingRepay, repayCents])
 
   function openCredit(a: Account) {
     setCreditTarget2(a)
     setEditingRepay(null)
-    // 默认全勾：金额就是本月该还，和以前一键还款的行为一样，想少还再取消几个
-    const rows = monthBill(txs, a, ym).rows
-    setPicked(new Set(rows.map((r) => r.tx.id)))
-    const owed = Math.max(0, -(bal[a.id] ?? 0))
-    // 金额按本月还应还的填好（已扣掉本月已还的，且不超过欠款）；这个月没有到期的就填全部欠款；没欠就留空
-    const d = Math.min(due.get(a.id) ?? 0, owed)
-    setRepayInput(d > 0 ? yuanStr(d) : owed > 0 ? yuanStr(owed) : '')
+    // 默认只勾本期那几行（含逾期），往后的留着不勾——想提前还自己去勾。
+    // 金额栏就等于勾选之和，也就是「本期该还」。全都还清了就留空，不再兜底填全部欠款：
+    // 那个兜底正是用户 2026-09-08 撞上的坑，面板空着却预填 20.00，看着像在催一次还清。
+    const b = creditBill(txs, a, today0)
+    setPicked(new Set(b.rows.map((r) => `${r.tx.id}#${r.due.seq}`)))
+    setRepayInput(b.total > 0 ? yuanStr(b.total) : '')
   }
 
   /** 点最近的某笔还款：把它的金额和勾选装回面板，改完保存 */
   function editRepay(t: Transaction) {
     setEditingRepay(t)
-    setPicked(new Set(t.settles ?? []))
+    // settles 存的是整单 id，而清单的键带期数。能被结清的只有「一次还清」的单，所以固定是 #1
+    setPicked(new Set((t.settles ?? []).map((id) => `${id}#1`)))
     setRepayInput(yuanStr(t.amount))
   }
 
@@ -226,7 +252,7 @@ export function Accounts() {
    * settles 指的是一整单结清，分期有好几期，说不清勾一下算结清了整单还是某一期。
    */
   function settlesOfPicked(): string[] | null {
-    const ids = (bill?.rows ?? []).filter((r) => r.selectable && picked.has(r.tx.id)).map((r) => r.tx.id)
+    const ids = billRows.filter((r) => r.selectable && picked.has(keyOf(r))).map((r) => r.tx.id)
     return ids.length ? ids : null
   }
 
@@ -288,6 +314,45 @@ export function Accounts() {
       const removed = await removeTx(tx.id)
       if (removed) showToast(`已撤销还款 ¥${fmtYuan(repayCents)}`)
     })
+  }
+
+  /** 白条面板里一行账单。本期和「往后」两段共用，只是往后那段整体灰一档 */
+  function billLine(r: BillRow) {
+    const { icon, title } = planTitle(r.tx.category_id, r.tx.note)
+    const on = picked.has(keyOf(r))
+    const ahead = r.state === 'upcoming'
+    return (
+      <button
+        key={keyOf(r)}
+        type="button"
+        className={`w-full text-left flex items-center gap-2.5 py-2 border-t border-line first:border-t-0 ${on ? 'bg-brand-soft' : ''}`}
+        onClick={() => togglePick(keyOf(r))}
+      >
+        <span className={`w-[19px] h-[19px] rounded-md shrink-0 flex items-center justify-center text-[12px] font-bold ${on ? 'bg-brand text-on-brand' : 'border-2 border-line'}`}>
+          {on ? '✓' : ''}
+        </span>
+        <span className={`text-xl w-7 text-center shrink-0 ${ahead ? 'opacity-60' : ''}`}>{icon}</span>
+        <span className="flex-1 min-w-0">
+          <span className={`block text-sm truncate ${ahead ? 'text-muted' : ''}`}>{title}</span>
+          <span className="block text-[11px] text-muted num">
+            {mmdd(r.tx.date)} 下单 ¥{fmtYuan(r.tx.amount)}
+            {r.due.of > 1 ? ` · 第 ${r.due.seq}/${r.due.of} 期` : ''}
+            {creditTarget2?.repay_day ? ` · ${mmdd(r.due.date)} 到期` : ' · 待扣款'}
+          </span>
+          {/* 逾期要说清欠了多久：平台那边多半已经在计息了 */}
+          {r.state === 'overdue' ? <span className="block text-[11px] text-expense">已逾期 {daysBetween(r.due.date, today0)} 天</span> : null}
+          {r.paid >= r.due.amount ? (
+            <span className="block text-[11px] text-income">{ahead ? '已提前还' : '这一期已还清'}</span>
+          ) : r.paid > 0 ? (
+            <span className="block text-[11px] text-income num">已还 ¥{fmtYuan(r.paid)}，还差 ¥{fmtYuan(r.due.amount - r.paid)}</span>
+          ) : null}
+          {/* 平台有账单周期，App 不知道那个截止日。本期还过款之后才下的单
+              多半已经进了下一期，这里只标出来让人自己判断，不改算法 */}
+          {r.afterRepay ? <span className="block text-[11px] text-adjust">本期已还过款，这笔可能算下期</span> : null}
+        </span>
+        <span className={`num text-sm shrink-0 ${ahead || r.paid >= r.due.amount ? 'text-muted font-medium' : 'font-medium'}`}>¥{fmtYuan(r.due.amount)}</span>
+      </button>
+    )
   }
 
   const planTitle = (categoryId: string | null, note: string | null): { icon: string; title: string } => {
@@ -359,7 +424,7 @@ export function Accounts() {
           )
         })}
 
-        {/* 白条平时收成一行：欠款合计 + 本月应还。点开才展开各平台，再点收起。 */}
+        {/* 白条平时收成一行：欠款合计 + 接下来要还的。点开才展开各平台，再点收起。 */}
         {credits.length ? (
           <div className="card p-4 pt-3">
             <button type="button" className="w-full text-left flex items-center gap-3" onClick={() => setCreditOpen(!creditOpen)}>
@@ -373,7 +438,7 @@ export function Accounts() {
               <span className="text-right">
                 <span className={`block num text-lg font-semibold ${debt > 0 ? 'text-expense' : 'text-muted'}`}>{debt > 0 ? `欠 ${fmtYuan(debt)}` : '已还清'}</span>
                 <span className="block num text-[11px] text-muted">
-                  {dueTotal > 0 ? `本月应还 ${fmtYuan(dueTotal)}` : '本月没有到期'} {creditOpen ? '⌄' : '›'}
+                  {dueTotal > 0 ? `接下来要还 ${fmtYuan(dueTotal)}` : '没有要还的'} {creditOpen ? '⌄' : '›'}
                 </span>
               </span>
             </button>
@@ -382,17 +447,22 @@ export function Accounts() {
                 {credits.map((c) => {
                   const owed = Math.max(0, -(bal[c.id] ?? 0))
                   const d = due.get(c.id) ?? 0
-                  const n = monthBill(txs, c, ym).rows.length
+                  const n = creditBill(txs, c, today0).rows.length
                   return (
                     <button key={c.id} type="button" className="w-full text-left flex items-center gap-2.5 py-2.5" onClick={() => openCredit(c)}>
                       <AccountIcon name={c.name} size={28} />
                       <span className="flex-1 min-w-0">
                         <span className="block text-[15px]">{c.name}</span>
-                        <span className="block text-[11px] text-muted">{n ? `本月 ${n} 笔要还` : owed ? '点开记还款' : '没有欠款'}</span>
+                        <span className="block text-[11px] text-muted">{n ? `本期 ${n} 笔要还` : owed ? '点开记还款' : '没有欠款'}</span>
                       </span>
                       <span className="text-right">
                         <span className={`block num font-semibold ${owed > 0 ? 'text-expense' : 'text-muted text-sm'}`}>{owed > 0 ? `欠 ${fmtYuan(owed)}` : '已还清'}</span>
-                        {d > 0 ? <span className="block num text-[11px] text-muted">本月应还 {fmtYuan(d)}</span> : null}
+                        {/* 各家还款日不同，直接把日期写出来，比「本月应还」准 */}
+                        {d > 0 ? (
+                          <span className="block num text-[11px] text-muted">
+                            {c.repay_day ? `${mmdd(currentDueDate(today0, c.repay_day) ?? today0)} 应还` : '待扣'} {fmtYuan(d)}
+                          </span>
+                        ) : null}
                       </span>
                     </button>
                   )
@@ -430,76 +500,59 @@ export function Accounts() {
       </div>
 
       {/* 白条弹层：分期明细 + 一键还款 + 核对待还 */}
-      <Sheet open={Boolean(creditTarget2)} onClose={() => setCreditTarget2(null)} title={creditTarget2 ? `${creditTarget2.name} · ${(bal[creditTarget2.id] ?? 0) < 0 ? `欠 ${fmtYuan(-(bal[creditTarget2.id] ?? 0), { symbol: true })}` : '已还清'}` : ''}>
+      <Sheet open={Boolean(creditTarget2)} onClose={() => setCreditTarget2(null)} title={creditTarget2 ? `${creditTarget2.name} · ${creditTitle(bal[creditTarget2.id] ?? 0)}` : ''}>
         {creditTarget2 ? (
           <>
-            {bill && bill.rows.length ? (
+            {bill && billRows.length ? (
               <>
                 <div className="flex items-center justify-between mb-1">
                   <span className="text-xs text-muted">
-                    {Number(ym.slice(5))} 月账单 · 勾上的算进金额
+                    {bill.dueDate ? `本期 · ${mmdd(bill.dueDate)} 到期` : '待扣款'} · 勾上的算进金额
                   </span>
                   <button
                     type="button"
                     className="text-[11px] text-brand-ink px-1"
                     onClick={() => {
-                      const all = picked.size < bill.rows.length ? new Set(bill.rows.map((r) => r.tx.id)) : new Set<string>()
+                      const all = picked.size < billRows.length ? new Set(billRows.map(keyOf)) : new Set<string>()
                       setPicked(all)
                       setRepayInput(yuanStr(pickSum(all)))
                     }}
                   >
-                    {picked.size < bill.rows.length ? '全选' : '全不选'}
+                    {picked.size < billRows.length ? '全选' : '全不选'}
                   </button>
                 </div>
-                <div className="mb-3">
-                  {bill.rows.map((r) => {
-                    const { icon, title } = planTitle(r.tx.category_id, r.tx.note)
-                    const on = picked.has(r.tx.id)
-                    return (
-                      <button
-                        key={r.tx.id}
-                        type="button"
-                        className={`w-full text-left flex items-center gap-2.5 py-2 border-t border-line first:border-t-0 ${on ? 'bg-brand-soft' : ''}`}
-                        onClick={() => togglePick(r.tx.id)}
-                      >
-                        <span className={`w-[19px] h-[19px] rounded-md shrink-0 flex items-center justify-center text-[12px] font-bold ${on ? 'bg-brand text-on-brand' : 'border-2 border-line'}`}>
-                          {on ? '✓' : ''}
-                        </span>
-                        <span className="text-xl w-7 text-center shrink-0">{icon}</span>
-                        <span className="flex-1 min-w-0">
-                          <span className="block text-sm truncate">{title}</span>
-                          <span className="block text-[11px] text-muted num">
-                            {Number(r.tx.date.slice(5, 7))}/{Number(r.tx.date.slice(8))} 下单 ¥{fmtYuan(r.tx.amount)}
-                            {r.due.of > 1 ? ` · 第 ${r.due.seq}/${r.due.of} 期` : ''}
-                            {creditTarget2.repay_day ? ` · ${Number(r.due.date.slice(5, 7))}/${Number(r.due.date.slice(8))} 到期` : ' · 待扣款'}
-                          </span>
-                          {/* 平台有账单周期，App 不知道那个截止日。本月还过款之后才下的单
-                              多半已经进了下一期，这里只标出来让人自己判断，不改算法 */}
-                          {r.afterRepay ? <span className="block text-[11px] text-adjust">本月已还过款，这笔可能算下期</span> : null}
-                        </span>
-                        <span className="num text-sm font-medium shrink-0">¥{fmtYuan(r.due.amount)}</span>
-                      </button>
-                    )
-                  })}
-                </div>
-                {/* 三行小结：这个月的账清没清，一眼看出来。「已还」是本月转进这个白条的钱加总 */}
+                <div className="mb-3">{bill.rows.map(billLine)}</div>
+                {/* 三行小结：这一期的账清没清，一眼看出来。「已还」是分配到本期这几行的钱 */}
                 <div className="text-xs flex flex-col gap-1 mb-4 pt-2.5 border-t border-line">
                   <span className="flex justify-between">
-                    <span className="text-muted">本月该还</span>
+                    <span className="text-muted">本期该还</span>
                     <span className="num font-medium">{fmtYuan(bill.total, { symbol: true })}</span>
                   </span>
                   <span className="flex justify-between">
-                    <span className="text-muted">本月已还</span>
+                    <span className="text-muted">已还</span>
                     <span className="num font-medium text-income">{fmtYuan(bill.paid, { symbol: true })}</span>
                   </span>
                   <span className="flex justify-between">
                     <span className="text-muted">还差</span>
                     <span className={`num font-medium ${bill.left > 0 ? 'text-expense' : 'text-muted'}`}>{fmtYuan(bill.left, { symbol: true })}</span>
                   </span>
+                  {bill.overdueTotal > 0 ? (
+                    <span className="text-[11px] text-expense num">其中 {fmtYuan(bill.overdueTotal, { symbol: true })} 已经逾期，平台那边可能在计息</span>
+                  ) : null}
+                  {/* 多还的钱去哪了要交代清楚，否则「已还」比你实际打进去的少，看着像丢了 */}
+                  {bill.prepaid > 0 ? (
+                    <span className="text-[11px] text-income num">另有 {fmtYuan(bill.prepaid, { symbol: true })} 已提前还，抵到 {mmdd(lastPrepaidDate(bill))} 那一期</span>
+                  ) : null}
                   {bill.afterRepayTotal > 0 ? (
-                    <span className="text-[11px] text-adjust num">其中 {fmtYuan(bill.afterRepayTotal, { symbol: true })} 是本月还款之后才下的单，平台那边可能已经算进下一期账单了</span>
+                    <span className="text-[11px] text-adjust num">其中 {fmtYuan(bill.afterRepayTotal, { symbol: true })} 是本期还款之后才下的单，平台那边可能已经算进下一期账单了</span>
                   ) : null}
                 </div>
+                {bill.upcoming.length ? (
+                  <>
+                    <div className="text-xs text-muted mb-1">往后还有 {bill.upcoming.length} 期 · 勾上就是提前还</div>
+                    <div className="mb-3">{bill.upcoming.map(billLine)}</div>
+                  </>
+                ) : null}
               </>
             ) : null}
 
@@ -521,12 +574,13 @@ export function Accounts() {
             </div>
             {/* 勾了几单却填了别的数，多半是勾错了。提醒但不拦——平台合并扣款、收零头都可能 */}
             {pickedSum > 0 && repayCents !== null && repayCents > 0 && pickedSum !== repayCents ? (
-              <div className="text-[11px] text-adjust mb-3">
+              <div className="text-[11px] text-adjust mb-1">
                 勾选的是 {fmtYuan(pickedSum, { symbol: true })}，填的是 {fmtYuan(repayCents, { symbol: true })}，对不上。确认没勾错就照样记。
               </div>
-            ) : (
-              <div className="text-[11px] text-muted mb-3">金额跟着勾选自动变，扣得不一样可以自己改。记成转账，不进收支统计。</div>
-            )}
+            ) : null}
+            {/* 实时预告这笔钱会抵到哪几期。输什么会发生什么，不用先记一笔再看 */}
+            {alloc ? <div className="text-[11px] text-brand-ink mb-1 num">{alloc}</div> : null}
+            <div className="text-[11px] text-muted mb-3">金额跟着勾选自动变，扣得不一样可以自己改。记成转账，不进收支统计。</div>
             <button
               type="button"
               disabled={busy || (!editingRepay && !fromAcc) || !repayCents || repayCents <= 0}

@@ -531,144 +531,189 @@ export function settledIds(txs: Transaction[], ignoreRepayId?: string): Set<stri
 }
 
 /**
- * 一笔白条支出在 ym 这个月该还多少（0 = 这个月不用还）。
+ * 「本期」的到期日 = 今天之后最近的那个还款日，**还款日当天算本期**。
  *
- * 两种账户两套判据：
- * - 有还款日（京东/花呗/美团）：按 installmentPlan 排期，落在这个月的那一期
- * - 没有还款日（拼多多先用后付）：不排期，只要没被勾选结清，从下单那个月起一直算欠着
+ * 和 dueDateOf 差一个等号：下单当天算下一期（当天出账当天还不现实），
+ * 但还款日当天打开 App，你面对的正是今天要扣的这一笔。
+ *
+ * 这条把账单窗口从「日历月」换成「上一个还款日 → 下一个还款日」。旧口径下花呗
+ * （还款日 1 号）9 月下的单第 1 期落在 10/1，于是「9 月账单」永远是空的——
+ * 用户 2026-09-08 实测：面板整块空白，金额栏兜底填了全部欠款，看着像在催一次还清。
+ *
+ * repayDay 为 null（拼多多先用后付逐笔扣）没有「周期」这回事，返回 null。
  */
-function dueOfTxInMonth(t: Transaction, acc: Account, ym: string, settled: ReadonlySet<string>): number {
-  if (settled.has(t.id)) return 0
-  if (acc.repay_day === null) return monthOf(t.date) <= ym ? t.amount : 0
-  return installmentPlan(t, acc.repay_day).find((p) => p.ym === ym)?.amount ?? 0
+export function currentDueDate(todayStr: string, repayDay: number | null): string | null {
+  if (repayDay === null) return null
+  const d = dayInMonth(monthOf(todayStr), repayDay)
+  return todayStr <= d ? d : dayInMonth(shiftMonth(monthOf(todayStr), 1), repayDay)
 }
 
-/**
- * 某月各白条账户还应还多少。
- *
- * = 该月到期且未结清的各期之和 − 该月转进这个白条、但**没指明结清哪几单**的钱。
- *
- * 后半截那个「没指明」是关键：整体还账单时转账不带 settles，全额都要减，否则还完一笔
- * 再打开弹层仍会预填整月账单，再点一次就多还一笔；而勾选结清时那几单已经被前半截
- * 排除掉了，转账里对应的部分不能再减一遍，否则同一笔钱扣两次。
- *
- * 还清（或多还）的不再列出来。
- */
-export function dueInMonth(txs: Transaction[], credits: Account[], ym: string): Map<string, number> {
-  const byId = new Map(credits.map((a) => [a.id, a]))
-  const settled = settledIds(txs)
-  const amountOf = new Map(txs.map((t) => [t.id, t.amount]))
-  const planned = new Map<string, number>()
-  const paid = new Map<string, number>()
-  for (const t of txs) {
-    if (t.type === 'transfer' && t.to_account_id && byId.has(t.to_account_id) && monthOf(t.date) === ym) {
-      const allocated = (t.settles ?? []).reduce((s, id) => s + (amountOf.get(id) ?? 0), 0)
-      const rest = Math.max(0, t.amount - allocated)
-      paid.set(t.to_account_id, (paid.get(t.to_account_id) ?? 0) + rest)
-      continue
-    }
-    if (t.type !== 'expense' || !t.account_id) continue
-    const acc = byId.get(t.account_id)
-    if (!acc) continue
-    const due = dueOfTxInMonth(t, acc, ym, settled)
-    if (due > 0) planned.set(acc.id, (planned.get(acc.id) ?? 0) + due)
-  }
-  const out = new Map<string, number>()
-  for (const [id, v] of planned) {
-    const left = v - (paid.get(id) ?? 0)
-    if (left > 0) out.set(id, left)
-  }
-  return out
-}
+/** 一期相对「本期」的位置 */
+export type DueState = 'overdue' | 'current' | 'upcoming'
 
 export interface BillRow {
   /** 这一行对应的那笔支出 */
   tx: Transaction
-  /** 落在这个月的那一期（没有还款日的账户，seq/of 都是 1，到期日就是下单日） */
+  /** 落在这一行的那一期（没有还款日的账户，seq/of 都是 1，到期日就是下单日） */
   due: Installment
-  /** 能不能勾选：只有「一次还清」的订单能勾，分期按账单走 */
+  /** 能不能勾选结清：只有「一次还清」的订单能勾，分期按账单走 */
   selectable: boolean
+  /** 逾期 / 本期 / 往后 */
+  state: DueState
+  /** 这一期被还款抵掉了多少（从最早一期往后顶算出来的），0 ≤ paid ≤ due.amount */
+  paid: number
   /**
-   * 本月已经还过一次款之后才下的单。
+   * 本期还过一次款之后才下的单。
    *
    * 平台有账单周期，App 不知道那个截止日。还款日 17 号、13 号还完款、14 号又下一单，
-   * 按「下单后最近的还款日」算它归本月，但实际上多半已经进了下一期账单——
-   * 于是 App 显示「这个月还差 ¥X」而平台那边其实已经结清了。
+   * 按「下单后最近的还款日」算它归本期，但实际上多半已经进了下一期账单——
+   * 于是 App 显示「还差 ¥X」而平台那边其实已经结清了。
    * 逻辑不改（改了要引入账单日，那是另一个数据），只把这种行标出来让人自己判断。
    */
   afterRepay: boolean
 }
 
-export interface MonthBill {
+export interface CreditBill {
+  /** 本期该还的行 = 到期日正好是本期的 ＋ 之前逾期没还完的。逾期的排在前面 */
   rows: BillRow[]
-  /** 本月该还合计 = rows 的金额之和 */
+  /** 往后还没到期的期，按到期日从近到远。灰色只读，勾上就是提前还 */
+  upcoming: BillRow[]
+  /** 本期到期日；null = 这个账户没有固定还款日 */
+  dueDate: string | null
+  /** rows 各行金额之和 */
   total: number
-  /** 其中「本月还过款之后才下单」的金额，可能实际上要下期才还 */
-  afterRepayTotal: number
-  /** 本月已经转进这个白条的钱（全额，含已指明结清的部分） */
+  /** 其中已经逾期的部分 */
+  overdueTotal: number
+  /** 分配到 rows 上的还款 */
   paid: number
   /** 还差多少，最少 0 */
   left: number
+  /** 已经顶到 upcoming 上的钱，也就是提前还的部分 */
+  prepaid: number
+  /** rows 里「本期还过款之后才下的单」合计，可能实际上要下期才还 */
+  afterRepayTotal: number
 }
 
 /**
- * 某个白条账户在 ym 这个月的账单。面板按它来画：**一行 = 这个月该还的一笔**，
- * 分期订单只出本期那一份，所以各行加起来正好等于「本月该还」。
- * 一行 = 一整个订单的话，分期订单显示整单金额，勾选加总就和本月应还对不上了。
+ * 某个白条账户此刻的账单。面板按它来画：**一行 = 一期**，
+ * 分期订单每期各占一行，所以各行加起来正好等于「本期该还」。
+ *
+ * 还款**从最早一期往后顶**，不再按「转账发生在哪个月」对账。旧口径漏了三种情况，
+ * 都是 2026-09-08 实测出来的：提前还清之后每个月还继续要钱（而分期不能勾选结清，
+ * 消都消不掉）、拼多多跨月还款不算数、京东逾期那一期下个月直接从账单里消失。
+ *
+ * 「勾选结清」优先于往前顶：settles 指名的那几单整单排除，剩下的钱才进队列，
+ * 否则同一笔钱会扣两次。
+ *
+ * @param ignoreRepayId 正在修改的那笔还款。它的金额和它结清的订单都当作不存在，
+ * 否则改勾选时那几单根本不显示、金额也预填不对。
  */
-/**
- * @param ignoreRepayId 正在修改的那笔还款。它结清的订单要重新出现在账单里，
- * 否则改勾选时那几单根本不显示，想取消都取消不了。
- */
-export function monthBill(txs: Transaction[], acc: Account, ym: string, ignoreRepayId?: string): MonthBill {
+export function creditBill(txs: Transaction[], acc: Account, todayStr: string, ignoreRepayId?: string): CreditBill {
   const settled = settledIds(txs, ignoreRepayId)
-  const rows: Omit<BillRow, 'afterRepay'>[] = []
+  const dueDate = currentDueDate(todayStr, acc.repay_day)
+  const amountOf = new Map(txs.map((t) => [t.id, t.amount]))
+  // 本期窗口的起点，只用来判 afterRepay：上一个还款日之后、本期到期日之前的还款才算数
+  const prevDue = dueDate === null || acc.repay_day === null ? null : dayInMonth(shiftMonth(monthOf(dueDate), -1), acc.repay_day)
+
+  const flat: { tx: Transaction; due: Installment; selectable: boolean }[] = []
   const repayDates: string[] = []
-  let paid = 0
+  /** 没指明结清哪几单的还款，排队从最早一期往后顶 */
+  let pool = 0
   for (const t of txs) {
-    if (t.type === 'transfer' && t.to_account_id === acc.id && monthOf(t.date) === ym) {
-      paid += t.amount
-      repayDates.push(t.date)
+    if (t.type === 'transfer' && t.to_account_id === acc.id) {
+      if (t.id === ignoreRepayId) continue
+      const allocated = (t.settles ?? []).reduce((s, id) => s + (amountOf.get(id) ?? 0), 0)
+      pool += Math.max(0, t.amount - allocated)
+      if (prevDue !== null && t.date > prevDue && t.date <= dueDate!) repayDates.push(t.date)
       continue
     }
     if (t.type !== 'expense' || t.account_id !== acc.id || settled.has(t.id)) continue
-    const n = Math.max(1, t.installments ?? 1)
-    if (acc.repay_day === null) {
-      if (monthOf(t.date) <= ym) rows.push({ tx: t, due: { seq: 1, of: 1, ym, date: t.date, amount: t.amount }, selectable: true })
-      continue
-    }
-    const hit = installmentPlan(t, acc.repay_day).find((p) => p.ym === ym)
-    if (hit) rows.push({ tx: t, due: hit, selectable: n === 1 })
+    const selectable = Math.max(1, t.installments ?? 1) === 1
+    for (const due of installmentPlan(t, acc.repay_day)) flat.push({ tx: t, due, selectable })
   }
-  // 只对有还款日的账户判：先用后付逐笔扣，没有「账单周期」这回事
-  const marked: BillRow[] = rows.map((r) => ({
-    ...r,
-    afterRepay: acc.repay_day !== null && r.due.seq === 1 && repayDates.some((d) => d < r.tx.date),
-  }))
-  marked.sort((a, b) => (a.tx.date === b.tx.date ? (a.tx.created_at < b.tx.created_at ? 1 : -1) : a.tx.date < b.tx.date ? 1 : -1))
-  const total = marked.reduce((s, r) => s + r.due.amount, 0)
-  const afterRepayTotal = marked.reduce((s, r) => s + (r.afterRepay ? r.due.amount : 0), 0)
-  return { rows: marked, total, afterRepayTotal, paid, left: Math.max(0, total - paid) }
+
+  // 到期日从早到晚排队，同一天按下单先后。往前顶就是按这个顺序发钱
+  flat.sort((a, b) => (a.due.date === b.due.date ? (a.tx.created_at < b.tx.created_at ? -1 : 1) : a.due.date < b.due.date ? -1 : 1))
+
+  const rows: BillRow[] = []
+  const upcoming: BillRow[] = []
+  for (const f of flat) {
+    const paid = Math.min(pool, f.due.amount)
+    pool -= paid
+    const state: DueState =
+      dueDate === null
+        ? f.due.date <= todayStr
+          ? 'current'
+          : 'upcoming'
+        : f.due.date < dueDate
+          ? 'overdue'
+          : f.due.date === dueDate
+            ? 'current'
+            : 'upcoming'
+    // 只对有还款日的账户判：先用后付逐笔扣，没有「账单周期」这回事
+    const afterRepay = state !== 'upcoming' && f.due.seq === 1 && repayDates.some((d) => d < f.tx.date)
+    const row: BillRow = { ...f, state, paid, afterRepay }
+    if (state === 'upcoming') upcoming.push(row)
+    // 逾期但已经还完的不再列出来，否则拖过一年账单里会堆着十二行早就还清的历史。
+    // 本期那一行还完了照样留着，「本期该还 6.66 / 已还 6.66」要看得见才知道自己没漏还
+    else if (state === 'current' || paid < f.due.amount) rows.push(row)
+  }
+
+  // 逾期的排在本期前面；组内先按到期日（欠得最久的在最上面），同一天再按下单日期倒序，
+  // 和流水页一致。比较器必须**自洽**：一张分期订单的每一期 tx.date / created_at 全都相同，
+  // 拿「相等就返回 -1」那种写法排会被 sort 打乱（2026-09-08 实测第 3 期跑到了第 1 期前面）。
+  const rank = (r: BillRow) => (r.state === 'overdue' ? 0 : 1)
+  const cmp = (a: BillRow, b: BillRow) =>
+    rank(a) - rank(b) ||
+    (a.due.date < b.due.date ? -1 : a.due.date > b.due.date ? 1 : 0) ||
+    (a.tx.date > b.tx.date ? -1 : a.tx.date < b.tx.date ? 1 : 0) ||
+    (a.tx.created_at > b.tx.created_at ? -1 : a.tx.created_at < b.tx.created_at ? 1 : 0) ||
+    a.due.seq - b.due.seq
+  rows.sort(cmp)
+  upcoming.sort(cmp)
+
+  const total = rows.reduce((s, r) => s + r.due.amount, 0)
+  const paid = rows.reduce((s, r) => s + r.paid, 0)
+  return {
+    rows,
+    upcoming,
+    dueDate,
+    total,
+    overdueTotal: rows.reduce((s, r) => s + (r.state === 'overdue' ? r.due.amount : 0), 0),
+    paid,
+    left: Math.max(0, total - paid),
+    prepaid: upcoming.reduce((s, r) => s + r.paid, 0),
+    afterRepayTotal: rows.reduce((s, r) => s + (r.afterRepay ? r.due.amount : 0), 0),
+  }
 }
 
-export interface ActivePlan {
-  tx: Transaction
-  plan: Installment[]
-  /** 本月到期的那一期，没有则 null */
-  current: Installment | null
-  /** 本月之前已到期的期数 */
-  done: number
+/** 此刻各白条账户还差多少。还清了的不列出来 */
+export function dueNow(txs: Transaction[], credits: Account[], todayStr: string): Map<string, number> {
+  const out = new Map<string, number>()
+  for (const a of credits) {
+    const left = creditBill(txs, a, todayStr).left
+    if (left > 0) out.set(a.id, left)
+  }
+  return out
 }
 
-/** 某个白条账户上还没还完的分期（最后一期到期月 ≥ 本月），按下单日期倒序。已勾选结清的不再列出 */
-export function activePlans(txs: Transaction[], acc: Account, ym: string): ActivePlan[] {
-  const settled = settledIds(txs)
-  const out: ActivePlan[] = []
-  for (const t of txs) {
-    if (t.type !== 'expense' || t.account_id !== acc.id || settled.has(t.id)) continue
-    const plan = installmentPlan(t, acc.repay_day)
-    if (plan[plan.length - 1].ym < ym) continue
-    out.push({ tx: t, plan, current: plan.find((p) => p.ym === ym) ?? null, done: plan.filter((p) => p.ym < ym).length })
+/**
+ * 预告「再还这么多钱会抵到哪几期」。面板上跟着输入框实时变，
+ * 让用户在按下「记这笔还款」之前就知道钱的去向，不用先记一笔再看。
+ *
+ * 分配规则和 creditBill 里的一模一样：从最早一期往后顶，跳过已经还完的。
+ * 返回的最后一项若是 `null` 期，表示这笔钱比欠款还多，多出来的部分列在 extra。
+ */
+export function previewRepay(bill: CreditBill, cents: number): { hits: { due: Installment; amount: number }[]; extra: number } {
+  const hits: { due: Installment; amount: number }[] = []
+  let left = Math.max(0, cents)
+  for (const r of [...bill.rows, ...bill.upcoming]) {
+    if (left <= 0) break
+    const need = r.due.amount - r.paid
+    if (need <= 0) continue
+    const amount = Math.min(left, need)
+    left -= amount
+    hits.push({ due: r.due, amount })
   }
-  return out.sort((a, b) => (a.tx.date === b.tx.date ? (a.tx.created_at < b.tx.created_at ? 1 : -1) : a.tx.date < b.tx.date ? 1 : -1))
+  return { hits, extra: left }
 }

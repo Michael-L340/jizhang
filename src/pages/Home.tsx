@@ -2,7 +2,7 @@ import { lazy, Suspense, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
-import { balances, byCategory, debtOf, dueInMonth, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
+import { balances, byCategory, debtOf, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { applyFacade, visibleTxs } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
@@ -40,12 +40,13 @@ export function Home() {
   // 只有下面那个「最近流水」用它：上面的 bal 必须拿真实流水算，否则修饰过的余额也跟着变。
   // 本月收支、储蓄率、饼图不受影响，校准本来就不进收支统计。
   const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
-  // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 本月应还」
+  // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 接下来要还」
   const debt = debtOf(bal, credits)
   const assetTotal = useMemo(() => assets.reduce((s, a) => s + (shown[a.id] ?? 0), 0), [assets, shown])
   // 白条余额为正 = 多还了，平台欠你钱。少见但要说清楚，否则这笔钱在界面上无处可寻
   const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
-  const dueTotal = useMemo(() => [...dueInMonth(txs, credits, ym).values()].reduce((s, v) => s + v, 0), [txs, credits, ym])
+  // 「接下来要还的钱」：各白条各按自己的还款日算本期，加起来。各家还款日不同，这是合计不是同一天
+  const dueTotal = useMemo(() => [...dueNow(txs, credits, today()).values()].reduce((s, v) => s + v, 0), [txs, credits])
   const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
   // 和统计页共用 categoryColor：分类颜色跟着名字走，不跟名次走。
   // 以前这里是一串写死的颜色按名次发，同一个分类在两页颜色不一样，对着看会错乱；
@@ -203,7 +204,7 @@ export function Home() {
             <span className="text-muted">{debt > 0 || !overpaid ? '白条待还' : '白条多还'}</span>
             <span className="num">
               {debt > 0 ? <span className="text-expense font-medium">{fmtYuan(-debt)}</span> : <span className="text-income font-medium">{fmtYuan(overpaid)}</span>}
-              {dueTotal > 0 ? <span className="text-muted"> · 本月应还 {fmtYuan(dueTotal)}</span> : null}
+              {dueTotal > 0 ? <span className="text-muted"> · 接下来要还 {fmtYuan(dueTotal)}</span> : null}
               <span className="text-brand-ink"> ›</span>
             </span>
           </Link>

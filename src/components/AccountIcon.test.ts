@@ -85,8 +85,13 @@ describe('账户图标', () => {
     expect(brandOf('美团月付').image).toMatch(/brand\/meituan-v\d+\.png$/)
     expect(brandOf('花呗').image).toMatch(/brand\/huabei-v\d+\.png$/)
     expect(brandOf('花呗').imageLight).toBe(true) // 白底标要加边
+    // 「白条」分组和认不出平台的先用后付用 💳（用户 2026-09-08 选的），不是位图也不是自绘
     expect(brandOf('白条').image).toBeUndefined()
-    expect(brandOf('白条').path).toBe(BRANDS.GENERIC_CREDIT.path)
+    expect(brandOf('白条').emoji).toBe('💳')
+    expect(brandOf('先用后付').emoji).toBe('💳')
+    expect(brandOf('美团月付').emoji).toBeUndefined() // 认得出的平台仍旧用官方图标
+    // 自绘图标一个都不能带 emoji，否则 path 白画了
+    for (const [k, b] of Object.entries(BRANDS)) expect(b.emoji, k).toBeUndefined()
     // 四家颜色（图表里的线和圆点用）各不相同
     expect(new Set(['京东白条', '花呗', '拼多多', '美团月付'].map(accountColor)).size).toBe(4)
   })
