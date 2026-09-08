@@ -17,6 +17,8 @@ import { useActiveAccounts, useStore } from '../lib/store'
 const Chart = lazy(() => import('../components/Chart'))
 const yuan = (v: number) => `¥${fmtYuan(Math.round(v * 100))}`
 /** 日均那条线的名字。提示框和图例都按它认人，别写成字面量散在各处 */
+/** 堆叠柱整根长出来用多久。太短看不出是往上长的，太长记完账回来还在等 */
+const GROW_MS = 620
 /** 现在点一下只出提示框，得告诉用户还能再点一下，否则会以为点坏了 */
 const TAP = '<div style="margin-top:5px;font-size:11px;opacity:.6">再点一下看流水 ›</div>'
 /** y 轴那列数字要占掉的宽度（最宽四位数 + 轴间距），给 axisLabels 估「一格有多宽」用 */
@@ -206,6 +208,14 @@ export function Stats() {
     const top = gridTopFor(legendRows(short, chartW))
 
     if (lineMode === 'stack') {
+      // 每根柱子的总高，和每一段下面压着多少——动画按这两个数分配延迟和时长
+      const barTotal = keys.map((_, i) => trendByCat.reduce((t, c) => t + c.data[i], 0))
+      const barBase: number[][] = []
+      let acc = keys.map(() => 0)
+      for (const c of trendByCat) {
+        barBase.push(acc)
+        acc = acc.map((v, i) => v + c.data[i])
+      }
       return {
         ...base,
         color: names.map((n, i) => categoryColor(n, i)),
@@ -228,18 +238,21 @@ export function Stats() {
             return [full(ps[0].dataIndex), ...rows, '<div style="border-top:1px solid rgba(255,255,255,.22);margin:5px 0"></div>', total].join('<br/>') + TAP
           },
         },
-        series: trendByCat.map((c) => ({
+        series: trendByCat.map((c, j) => ({
           name: c.name,
           type: 'bar',
           stack: 'x',
           barMaxWidth: 26,
-          // 从左往右一根根展开，而不是所有柱子一起从底下长上来。每根晚 26ms，
-          // 12 根扫完约 0.3 秒——够看出方向，又不会让人等。
-          // 延迟只看 dataIndex 不看 seriesIndex：同一根柱子的五段必须同时出现，
-          // 否则一根柱子会自己分层往上冒。
-          animationDuration: 420,
-          animationEasing: 'cubicOut' as const,
-          animationDelay: (i: number) => i * 26,
+          // 入场动画：**整根柱子当一个整体自下而上长出来**。
+          //
+          // ECharts 默认让每一段从自己的底边各长各的，五段同时冒，看着是散的。
+          // 这里把每一段的延迟和时长按它在这根柱子里占的高度比例来分：
+          // 底下那段先长，长完的那一刻上面一段接着开始，接力下来就是一条连续上升的边。
+          // 缓动必须用 linear——任何加减速都会让交接处露出一个速度突变。
+          // 每根柱子各自按自己的总额归一，所以高矮不同的柱子同时起、同时到顶。
+          animationEasing: 'linear' as const,
+          animationDelay: (i: number) => (barTotal[i] > 0 ? (barBase[j][i] / barTotal[i]) * GROW_MS : 0),
+          animationDuration: (i: number) => (barTotal[i] > 0 ? Math.max(1, (c.data[i] / barTotal[i]) * GROW_MS) : 1),
           // 段与段之间留一道白缝，五段叠在一起才分得开（和饼图同一个做法）
           itemStyle: { borderColor: CHART.gap, borderWidth: 1 },
           data: c.data.map((v) => v / 100),
