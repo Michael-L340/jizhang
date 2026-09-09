@@ -8,7 +8,7 @@
 // 随机数用固定种子的 LCG，红了以后把种子打出来就能原样复现。
 import { describe, expect, it } from 'vitest'
 import type { Account, Transaction } from '../types'
-import { balances, creditBill, dueNow, installmentPlan } from './compute'
+import { balances, creditBill, dueNow, installmentPlan, paidThisCycle } from './compute'
 import { addDays } from './date'
 
 /** 固定种子的线性同余，node 各版本行为一致，红了能复现 */
@@ -35,7 +35,9 @@ function makeLedger(seed: number): Ledger {
   const pick = <T,>(xs: readonly T[]): T => xs[Math.floor(r() * xs.length)]
   const int = (lo: number, hi: number) => lo + Math.floor(r() * (hi - lo + 1))
 
-  const acc: Account = { id: 'c', name: '白条', kind: 'credit', sort: 0, is_archived: false, repay_day: pick(REPAY_DAYS), facade_offset: null }
+  // 一半账本开「本期还过款之后下的单归下一期」（京东那条）。到期日会整体挪，
+  // 但下面那些等式一条都不该变——它只决定钱落在哪一期，不决定欠多少
+  const acc: Account = { id: 'c', name: '白条', kind: 'credit', sort: 0, is_archived: false, repay_day: pick(REPAY_DAYS), facade_offset: null, defer_after_repay: r() < 0.5 }
   const txs: Transaction[] = []
   let n = 0
   const stamp = () => `2026-01-01T00:00:${String(++n % 60).padStart(2, '0')}.${String(n).padStart(3, '0')}Z`
@@ -87,7 +89,7 @@ function makeLedger(seed: number): Ledger {
   const days = new Set<string>()
   for (let i = 0; i < 6; i++) days.add(addDays(START, int(0, 700)))
   for (const b of buys) {
-    for (const p of installmentPlan(b, acc.repay_day)) {
+    for (const p of installmentPlan(b, acc.repay_day, paidThisCycle(b, acc, txs))) {
       days.add(addDays(p.date, -1))
       days.add(p.date)
       days.add(addDays(p.date, 1))
@@ -149,7 +151,7 @@ describe('白条账单：随机账本压力测试', () => {
       const l = makeLedger(seed)
       for (const t of l.txs) {
         if (t.type !== 'expense') continue
-        const plan = installmentPlan(t, l.acc.repay_day)
+        const plan = installmentPlan(t, l.acc.repay_day, paidThisCycle(t, l.acc, l.txs))
         if (plan.reduce((s, p) => s + p.amount, 0) !== t.amount) expect.fail(`seed=${seed} ${t.id}：各期之和 ≠ 整单金额`)
         expect(plan.length).toBe(Math.max(1, t.installments ?? 1))
         expect(plan.every((p) => p.amount >= 0)).toBe(true)
@@ -195,6 +197,43 @@ describe('白条账单：随机账本压力测试', () => {
     }
   })
 
+  it('顺延只挪日期不挪钱：期数一样多、每期金额一样，日期整体后移一期', () => {
+    // 纯函数层面验，不掺还款分配——分配一变，"已还完的逾期期数退场" 会让行数天然不同
+    for (let seed = 1; seed <= 300; seed++) {
+      const l = makeLedger(seed)
+      if (l.acc.repay_day === null) continue
+      for (const t of l.txs) {
+        if (t.type !== 'expense') continue
+        const on = installmentPlan(t, l.acc.repay_day, true)
+        const off = installmentPlan(t, l.acc.repay_day, false)
+        if (on.length !== off.length) expect.fail(`seed=${seed} ${t.id}：顺延改变了期数`)
+        for (let i = 0; i < on.length; i++) {
+          if (on[i].amount !== off[i].amount) expect.fail(`seed=${seed} ${t.id} 第 ${i + 1} 期：顺延改变了金额`)
+          if (on[i].date <= off[i].date) expect.fail(`seed=${seed} ${t.id} 第 ${i + 1} 期：顺延之后到期日没往后走`)
+        }
+        // 顺延一期：on 的前 n−1 期日期 = off 的后 n−1 期日期
+        expect(on.slice(0, -1).map((p) => p.date)).toEqual(off.slice(1).map((p) => p.date))
+      }
+    }
+  })
+
+  it('顺延不改变欠多少：开关开关一下，未还合计分毫不动', () => {
+    // 这条把「顺延」和「欠多少」彻底分开。改错成「顺延时少排一期」之类会当场红
+    for (let seed = 1; seed <= 300; seed++) {
+      const l = makeLedger(seed)
+      if (l.acc.repay_day === null) continue
+      const on = { ...l.acc, defer_after_repay: true }
+      const offAcc = { ...l.acc, defer_after_repay: false }
+      const owed = Math.max(0, -(balances(l.txs, [l.acc])[l.acc.id] ?? 0))
+      for (const d of l.days) {
+        const a = creditBill(l.txs, on, d)
+        const b = creditBill(l.txs, offAcc, d)
+        const sum = (x: typeof a) => [...x.rows, ...x.upcoming].reduce((s, r) => s + r.due.amount - r.paid, 0)
+        if (sum(a) !== owed || sum(b) !== owed) expect.fail(`seed=${seed} ${d}：开关改变了未还合计`)
+      }
+    }
+  })
+
   it('改某笔还款时把它自己排除掉，效果等于把它删了', () => {
     // 面板上点一笔还款进去改勾选，看到的必须是「当它不存在」的账单，
     // 否则被它结清的订单根本不显示，想取消都取消不了。
@@ -218,7 +257,7 @@ describe('白条账单：随机账本压力测试', () => {
     // 界面上勾了 5.99 却手填 3.00，底下有黄字提醒「对不上」但不拦（平台合并扣款、收零头都可能）。
     // 这时「未还合计 ≡ 欠款」不再成立：那单整单退出账单，而钱只给了一部分。
     // 写在这里是为了把它钉成**已知行为**，哪天有人顺手改掉了会红。
-    const acc: Account = { id: 'c', name: '白条', kind: 'credit', sort: 0, is_archived: false, repay_day: null, facade_offset: null }
+    const acc: Account = { id: 'c', name: '白条', kind: 'credit', sort: 0, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }
     const cup: Transaction = { id: 'cup', date: '2026-09-01', type: 'expense', amount: 599, account_id: 'c', to_account_id: null, category_id: 'x', note: null, installments: null, settles: null, created_at: '2026-09-01T00:00:01.000Z' }
     const short: Transaction = { id: 'p', date: '2026-09-02', type: 'transfer', amount: 300, account_id: 'boc', to_account_id: 'c', category_id: null, note: null, installments: null, settles: ['cup'], created_at: '2026-09-02T00:00:01.000Z' }
     const b = creditBill([cup, short], acc, '2026-09-10')

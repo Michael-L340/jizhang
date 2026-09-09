@@ -507,12 +507,17 @@ export function dueDateOf(date: string, repayDay: number | null, seq = 1): strin
  * 一笔白条支出的还款表。每期均分，除不尽的零头进最后一期。
  * installments 为空按 1 期算。到期日由 dueDateOf 按账户的还款日算。
  */
-export function installmentPlan(t: Pick<Transaction, 'date' | 'amount' | 'installments'>, repayDay: number | null): Installment[] {
+export function installmentPlan(
+  t: Pick<Transaction, 'date' | 'amount' | 'installments'>,
+  repayDay: number | null,
+  /** 整单顺延一个还款日（本期已经还过款，平台把这单算进下一期）。见 paidThisCycle */
+  defer = false,
+): Installment[] {
   const n = Math.max(1, t.installments ?? 1)
   const base = Math.floor(t.amount / n)
   const rem = t.amount - base * n
   return Array.from({ length: n }, (_, i) => {
-    const date = dueDateOf(t.date, repayDay, i + 1)
+    const date = dueDateOf(t.date, repayDay, i + 1 + (defer && repayDay !== null ? 1 : 0))
     return { seq: i + 1, of: n, ym: monthOf(date), date, amount: base + (i === n - 1 ? rem : 0) }
   })
 }
@@ -546,6 +551,35 @@ export function currentDueDate(todayStr: string, repayDay: number | null): strin
   if (repayDay === null) return null
   const d = dayInMonth(monthOf(todayStr), repayDay)
   return todayStr <= d ? d : dayInMonth(shiftMonth(monthOf(todayStr), 1), repayDay)
+}
+
+/**
+ * 这笔白条支出下单时，它本来该归的那一期**是不是已经还过款了**。
+ *
+ * 是的话平台已经出了账单、这单只能进下一期，到期日整单顺延一个还款日。
+ * 用户 2026-09-09 实测：9/9 还清 9/17 那期，当天再打白条，京东算的是 10/17。
+ *
+ * 判据只看**原始流水**——「(上一个还款日, 下单日] 之间有没有转进来过钱」，
+ * 不看还款分配结果，所以不会和 creditBill 的「往前顶」互相咬：先定到期日，再分配。
+ *
+ * 同一天算「已还过」，不看录入先后：能还这期的账单说明账单早出了，当天买的东西
+ * 平台本来就算下期；而录入顺序是可以补记的，不该拿它当业务判据。
+ *
+ * 只对开了 `defer_after_repay` 的账户生效（用户说只有京东这样），
+ * 没有还款日的账户没有「周期」这回事，一律返回 false。
+ *
+ * 两条边界，都是这条规则拿「有没有还过款」当账单日的代价：
+ * 1. App 读不到平台账单，只认你自己记的那笔转账。在平台还了钱却没记进来，规则不生效。
+ * 2. **逾期还款会误伤**：8/17 那期拖到 8/20 才还，8/25 再下单会被推到 10/17，
+ *    而平台那边多半还是 9/17——判据分不出这笔钱在还哪一期。按时或提前还款碰不到。
+ */
+export function paidThisCycle(t: Pick<Transaction, 'date'>, acc: Account, txs: Transaction[], ignoreRepayId?: string): boolean {
+  if (!acc.defer_after_repay || acc.repay_day === null) return false
+  const due = dueDateOf(t.date, acc.repay_day)
+  const prevDue = dayInMonth(shiftMonth(monthOf(due), -1), acc.repay_day)
+  return txs.some(
+    (x) => x.type === 'transfer' && x.to_account_id === acc.id && x.id !== ignoreRepayId && x.date > prevDue && x.date <= t.date,
+  )
 }
 
 /** 一期相对「本期」的位置 */
@@ -629,7 +663,10 @@ export function creditBill(txs: Transaction[], acc: Account, todayStr: string, i
     }
     if (t.type !== 'expense' || t.account_id !== acc.id || settled.has(t.id)) continue
     const selectable = Math.max(1, t.installments ?? 1) === 1
-    for (const due of installmentPlan(t, acc.repay_day)) flat.push({ tx: t, due, selectable })
+    // 到期日先定死（只看原始流水），再去做还款往前顶，两步不互相咬
+    // ignoreRepayId 也要传进去：点一笔还款进去改勾选时，看到的必须是「当它不存在」的账单，
+    // 到期日同样得当它不存在——否则「改」和「删了再看」两条路会给出不同的排期
+    for (const due of installmentPlan(t, acc.repay_day, paidThisCycle(t, acc, txs, ignoreRepayId))) flat.push({ tx: t, due, selectable })
   }
 
   // 到期日从早到晚排队，同一天按下单先后。往前顶就是按这个顺序发钱

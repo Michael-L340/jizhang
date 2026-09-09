@@ -20,7 +20,7 @@ interface TxRow {
 }
 
 const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,created_at'
-const ACC_COLS = 'id,name,kind,sort,is_archived,repay_day,facade_offset'
+const ACC_COLS = 'id,name,kind,sort,is_archived,repay_day,facade_offset,defer_after_repay'
 const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived,note'
 
 function rowToTx(r: TxRow): Transaction {

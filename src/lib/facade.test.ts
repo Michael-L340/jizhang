@@ -18,6 +18,7 @@ const acc = (id: string, kind: Account['kind'], facade_offset: number | null = n
   is_archived: false,
   repay_day: null,
   facade_offset,
+  defer_after_repay: null,
 })
 
 const boc = acc('boc', 'bank', -216326) // 真实 4163.26 → 外面 2000.00

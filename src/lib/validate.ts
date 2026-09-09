@@ -147,7 +147,19 @@ function readAccount(v: unknown, i: number): Account {
     is_archived: archivedOf(r.is_archived, fail),
     repay_day: repayDayOf(r.repay_day, fail),
     facade_offset: facadeOffsetOf(r.facade_offset, fail),
+    defer_after_repay: deferOf(r.defer_after_repay, fail),
   }
+}
+
+/**
+ * 0008：京东白条「本期还过款之后下的单归下一期」的开关。旧备份没有这一列，按 null 处理。
+ * 和 facadeOffsetOf 一样，这个函数是显式构造 Account 的那一步——漏了它，
+ * 备份文件里明明有这一列，导入之后却是空的，而且全程不报错。
+ */
+function deferOf(v: unknown, fail: Fail): boolean | null {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'boolean') fail(`的「还款后顺延」不对（读到 ${JSON.stringify(v)}），只能是 true、false 或留空`)
+  return v as boolean
 }
 
 /**

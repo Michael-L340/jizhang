@@ -5,9 +5,9 @@ import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, t
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
 const accounts: Account[] = [
-  { id: 'boc', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: null, facade_offset: null },
-  { id: 'cmb', name: '招商银行', kind: 'bank', sort: 2, is_archived: false, repay_day: null, facade_offset: null },
-  { id: 'wx', name: '微信', kind: 'wallet', sort: 4, is_archived: false, repay_day: null, facade_offset: null },
+  { id: 'boc', name: '中国银行', kind: 'bank', sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null },
+  { id: 'cmb', name: '招商银行', kind: 'bank', sort: 2, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null },
+  { id: 'wx', name: '微信', kind: 'wallet', sort: 4, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null },
 ]
 const cats: Category[] = [
   { id: 'food', kind: 'expense', parent_id: null, name: '日常餐饮', icon: '🍚', sort: 1, is_archived: false, note: null },
@@ -278,7 +278,7 @@ describe('balanceSeries', () => {
   // applyTx 会给 accounts 之外的账户也建一个键，合计原来是 totalOf(running) 把整张表加了一遍，
   // 而统计页只把资产账户传进来，白条就这么混进了「只算资产」的合计。
   it('合计只加传进来的账户：白条不能混进资产合计', () => {
-    const jd: Account = { id: 'jd', name: '京东白条', kind: 'credit', sort: 9, is_archived: false, repay_day: 17, facade_offset: null }
+    const jd: Account = { id: 'jd', name: '京东白条', kind: 'credit', sort: 9, is_archived: false, repay_day: 17, facade_offset: null, defer_after_repay: null }
     const txs = [
       tx({ type: 'income', amount: 500000, account_id: 'cmb', category_id: 'salary', date: '2026-09-01' }),
       tx({ type: 'expense', amount: 8177, account_id: 'jd', category_id: 'lunch', date: '2026-09-05' }),
@@ -838,7 +838,7 @@ describe('balanceShares', () => {
 })
 
 describe('白条', () => {
-  const acc = (id: string, kind: Account['kind'], repay_day: number | null = null): Account => ({ id, name: id, kind, sort: 0, is_archived: false, repay_day, facade_offset: null })
+  const acc = (id: string, kind: Account['kind'], repay_day: number | null = null): Account => ({ id, name: id, kind, sort: 0, is_archived: false, repay_day, facade_offset: null, defer_after_repay: null })
   const credit = (p: Partial<Transaction> = {}): Transaction => tx({ type: 'expense', amount: 100, account_id: 'jd', category_id: 'c1', ...p })
 
   it('splitAccounts / debtOf：白条分出去，欠款只算负数', () => {
@@ -893,7 +893,7 @@ describe('白条', () => {
 })
 
 describe('白条账单周期', () => {
-  const acc = (id: string, repay_day: number | null): Account => ({ id, name: id, kind: 'credit', sort: 0, is_archived: false, repay_day, facade_offset: null })
+  const acc = (id: string, repay_day: number | null): Account => ({ id, name: id, kind: 'credit', sort: 0, is_archived: false, repay_day, facade_offset: null, defer_after_repay: null })
   const hb = acc('hb', 1)
   const jd17 = acc('jd', 17)
   const pdd = acc('pdd', null)
@@ -1061,7 +1061,7 @@ describe('白条账单周期', () => {
 })
 
 describe('还款分配预告', () => {
-  const hb: Account = { id: 'hb', name: '花呗', kind: 'credit', sort: 0, is_archived: false, repay_day: 1, facade_offset: null }
+  const hb: Account = { id: 'hb', name: '花呗', kind: 'credit', sort: 0, is_archived: false, repay_day: 1, facade_offset: null, defer_after_repay: null }
   const order = tx({ id: 'o', type: 'expense', amount: 2000, account_id: 'hb', date: '2026-09-08', installments: 3 })
   const bill = creditBill([order], hb, '2026-09-08') // 10/1 ¥6.66、11/1 ¥6.66、12/1 ¥6.68
 
@@ -1115,7 +1115,7 @@ describe('还款分配预告', () => {
 })
 
 describe('账单按到期日分组', () => {
-  const hb: Account = { id: 'hb', name: '花呗', kind: 'credit', sort: 0, is_archived: false, repay_day: 1, facade_offset: null }
+  const hb: Account = { id: 'hb', name: '花呗', kind: 'credit', sort: 0, is_archived: false, repay_day: 1, facade_offset: null, defer_after_repay: null }
   const drink = tx({ id: 'drink', type: 'expense', amount: 5200, account_id: 'hb', date: '2026-09-08', installments: 6 })
   const metro = tx({ id: 'metro', type: 'expense', amount: 2800, account_id: 'hb', date: '2026-09-08', installments: 3 })
 
@@ -1142,5 +1142,99 @@ describe('账单按到期日分组', () => {
     const gs = groupByDue(late.rows)
     expect(gs.map((g) => g.date)).toEqual(['2026-10-01', '2026-11-01', '2026-12-01'])
     expect(new Set(gs.map((g) => g.date)).size).toBe(gs.length)
+  })
+})
+
+describe('京东白条：本期还过款之后下的单，归下一期', () => {
+  // 用户 2026-09-09 实测：9/9 还清 9/17 那期的账单，当天再打白条，京东算的是 10/17。
+  // 平台账单已经出了，新单只能进下一期。这条只对开了开关的账户生效（只有京东这样）。
+  const jd: Account = { id: 'jd', name: '京东白条', kind: 'credit', sort: 0, is_archived: false, repay_day: 17, facade_offset: null, defer_after_repay: true }
+  const off: Account = { ...jd, id: 'hb', name: '花呗', defer_after_repay: null }
+  const buy = (p: Partial<Transaction>) => tx({ type: 'expense', amount: 1000, account_id: 'jd', category_id: 'c1', ...p })
+  const pay = (p: Partial<Transaction>) => tx({ type: 'transfer', amount: 1000, account_id: 'boc', to_account_id: 'jd', ...p })
+
+  it('本期没还过款：照旧算最近的那个还款日', () => {
+    const t = buy({ id: 'a', date: '2026-09-09', amount: 500 })
+    expect(creditBill([t], jd, '2026-09-09').rows[0].due.date).toBe('2026-09-17')
+  })
+
+  it('9/9 还清 9/17 那期，当天再下单 → 10/17', () => {
+    const old = buy({ id: 'old', date: '2026-09-06', amount: 7178 })
+    const repay = pay({ id: 'r', date: '2026-09-09', amount: 7178 })
+    const fresh = buy({ id: 'new', date: '2026-09-09', amount: 500 })
+    const b = creditBill([old, repay, fresh], jd, '2026-09-09')
+    // 老单还是 9/17（它下单时本期还没还过款），还完了也照样留在本期账单里——
+    // 「本期该还 71.78 / 已还 71.78」要看得见，才知道自己没漏还
+    expect(b.rows.map((r) => [r.tx.id, r.due.date])).toEqual([['old', '2026-09-17']])
+    expect([b.total, b.paid, b.left]).toEqual([7178, 7178, 0])
+    // 新单排到 10/17，进「往后」那一段，不该混进本期
+    expect(b.upcoming.map((r) => [r.tx.id, r.due.date])).toEqual([['new', '2026-10-17']])
+  })
+
+  it('只还了一部分也算数——账单出了才还得动，出了就轮到下一期', () => {
+    const old = buy({ id: 'old', date: '2026-09-06', amount: 7178 })
+    const part = pay({ id: 'r', date: '2026-09-08', amount: 1000 })
+    const fresh = buy({ id: 'new', date: '2026-09-09', amount: 500 })
+    const b = creditBill([old, part, fresh], jd, '2026-09-09')
+    expect(b.rows.map((r) => [r.tx.id, r.due.date])).toEqual([['old', '2026-09-17']])
+    expect(b.upcoming.map((r) => [r.tx.id, r.due.date])).toEqual([['new', '2026-10-17']])
+  })
+
+  it('按时还款的不受影响：还款日当天还的钱不算「本期还过款」', () => {
+    // 9/17 当天还的是 9/17 那期。9/20 下的单本来就归 10/17，不该再往后推
+    const onTime = pay({ id: 'r', date: '2026-09-17', amount: 1000 })
+    const later = buy({ id: 'new', date: '2026-09-20', amount: 500 })
+    expect(creditBill([onTime, later], jd, '2026-09-20').rows[0].due.date).toBe('2026-10-17')
+    // 提前还也一样：9/9 还的是 9/17 那期，和 9/20 那单所在的 10/17 这期无关
+    const early = pay({ id: 'r2', date: '2026-09-09', amount: 1000 })
+    expect(creditBill([early, later], jd, '2026-09-20').rows[0].due.date).toBe('2026-10-17')
+  })
+
+  it('已知边界：逾期还款之后同周期再下单，会多顺延一期', () => {
+    // 8/20 还的其实是 8/17 那期（逾期 3 天），但 App 只看「窗口里有没有转账进来」，
+    // 分不出这笔钱在还哪一期，于是 8/25 的单被推到 10/17，而平台那边多半还是 9/17。
+    // 真要分清得引入「账单日」，那是另一个数据。按时或提前还款的人碰不到这条。
+    // 钉在这里是为了把它当成**已知行为**，哪天有人顺手改掉了会红。
+    const late = pay({ id: 'r', date: '2026-08-20', amount: 1000 })
+    const after = buy({ id: 'after', date: '2026-08-25', amount: 300 })
+    expect(creditBill([late, after], jd, '2026-08-25').upcoming.map((r) => r.due.date)).toEqual(['2026-10-17'])
+  })
+
+  it('同一天：当天有还款，当天的单一律归下一期，不看先记哪条', () => {
+    // 先记消费再记还款，两条都是 9/9——结果必须和反过来记一样
+    const first = buy({ id: 'buy', date: '2026-09-09', amount: 500, created_at: '2026-09-09T01:00:00.000Z' })
+    const then = pay({ id: 'pay', date: '2026-09-09', amount: 1000, created_at: '2026-09-09T02:00:00.000Z' })
+    expect(creditBill([first, then], jd, '2026-09-09').upcoming.map((r) => r.due.date)).toEqual(['2026-10-17'])
+    const a = buy({ id: 'buy2', date: '2026-09-09', amount: 500, created_at: '2026-09-09T03:00:00.000Z' })
+    const b = pay({ id: 'pay2', date: '2026-09-09', amount: 1000, created_at: '2026-09-09T00:30:00.000Z' })
+    expect(creditBill([b, a], jd, '2026-09-09').upcoming.map((r) => r.due.date)).toEqual(['2026-10-17'])
+  })
+
+  it('分期：第 1 期顺延，后面每期跟着 +1 个月', () => {
+    const repay = pay({ id: 'r', date: '2026-09-09', amount: 100 })
+    const t = buy({ id: 'i', date: '2026-09-09', amount: 3000, installments: 3 })
+    expect(installmentPlan(t, 17, true).map((p) => p.date)).toEqual(['2026-10-17', '2026-11-17', '2026-12-17'])
+    expect(installmentPlan(t, 17, false).map((p) => p.date)).toEqual(['2026-09-17', '2026-10-17', '2026-11-17'])
+    const b = creditBill([repay, t], jd, '2026-09-09')
+    expect([...b.rows, ...b.upcoming].map((r) => r.due.date)).toEqual(['2026-10-17', '2026-11-17', '2026-12-17'])
+  })
+
+  it('开关关着的账户完全不受影响（花呗、美团、拼多多）', () => {
+    const repay = tx({ type: 'transfer', amount: 1000, account_id: 'boc', to_account_id: 'hb', date: '2026-09-05' })
+    const fresh = tx({ type: 'expense', amount: 500, account_id: 'hb', category_id: 'c1', date: '2026-09-09' })
+    // 花呗还款日 1 号：9/9 下单本来就归 10/1，还过款也不顺延到 11/1
+    expect(creditBill([repay, fresh], { ...off, repay_day: 1 }, '2026-09-09').rows[0].due.date).toBe('2026-10-01')
+    // 没有还款日的账户（拼多多）没有周期，开关对它没意义
+    const pdd: Account = { ...off, id: 'pdd', repay_day: null, defer_after_repay: true }
+    const p1 = tx({ type: 'expense', amount: 500, account_id: 'pdd', category_id: 'c1', date: '2026-09-09' })
+    const p2 = tx({ type: 'transfer', amount: 100, account_id: 'boc', to_account_id: 'pdd', date: '2026-09-05' })
+    expect(creditBill([p2, p1], pdd, '2026-09-09').rows[0].due.date).toBe('2026-09-09')
+  })
+
+  it('删掉那笔还款，顺延跟着撤销——到期日只由流水决定', () => {
+    const repay = pay({ id: 'r', date: '2026-09-09', amount: 1000 })
+    const fresh = buy({ id: 'new', date: '2026-09-09', amount: 500 })
+    expect(creditBill([repay, fresh], jd, '2026-09-09').upcoming[0].due.date).toBe('2026-10-17')
+    expect(creditBill([fresh], jd, '2026-09-09').rows[0].due.date).toBe('2026-09-17')
   })
 })

@@ -45,9 +45,10 @@ class FakeStorage {
 import { balances, creditBill, debtOf, dueNow, settledIds, splitAccounts, totalOf } from './compute'
 import { buildCsv, buildJson, parseImport } from './csv'
 
-const A = (id: string, name: string, kind: Account['kind'], sort: number, repay_day: number | null = null): Account => ({ id, name, kind, sort, is_archived: false, repay_day, facade_offset: null })
+const A = (id: string, name: string, kind: Account['kind'], sort: number, repay_day: number | null = null): Account => ({ id, name, kind, sort, is_archived: false, repay_day, facade_offset: null, defer_after_repay: null })
 const boc = A('00000000-0000-4000-8000-000000000001', '中国银行', 'bank', 1)
 const jd = A('00000000-0000-4000-8000-000000000002', '京东白条', 'credit', 5, 17)
+jd.defer_after_repay = true // 只有京东这样（用户 2026-09-09）
 const pdd = A('00000000-0000-4000-8000-000000000003', '拼多多', 'credit', 7, null)
 const hb = A('00000000-0000-4000-8000-000000000004', '花呗', 'credit', 6, 1)
 const accounts = [boc, jd, pdd, hb]
@@ -488,6 +489,62 @@ describe('真人使用：拼多多跨月还款', () => {
       expect(creditBill(txs, pdd, d).left, d).toBe(0)
       expect([...dueNow(txs, [pdd], d)], d).toEqual([])
     }
+  })
+})
+
+describe('真人使用：京东还清本期之后当天再打白条', () => {
+  it('9/9 还清 9/17 那期 → 当天下单排到 10/17 → 10 月再打开才要还', async () => {
+    // 用户 2026-09-09 实测：京东那边算的是 10/17，而 App 原来算 9/17，
+    // 面板会追着要一笔平台根本没要的钱
+    const mouse = buy({ amount: 599, date: '2026-09-06', created_at: stamp('2026-09-06') })
+    const fan = buy({ amount: 6579, date: '2026-09-06', created_at: stamp('2026-09-06') })
+    await st().addTx(mouse)
+    await st().addTx(fan)
+    // 9/9 之前：本期该还 71.78，还没还过款
+    const before = creditBill(st().transactions, jd, '2026-09-09')
+    expect([before.dueDate, before.total, before.left]).toEqual(['2026-09-17', 7178, 7178])
+
+    // 9/9 还清
+    const repay = pay({ amount: 7178, date: '2026-09-09', created_at: stamp('2026-09-09') })
+    expect(await st().addTx(repay)).toBe(true)
+    // 9/9 当天再打白条
+    const fresh = buy({ amount: 3000, date: '2026-09-09', created_at: stamp('2026-09-09') })
+    expect(await st().addTx(fresh)).toBe(true)
+    const txs = st().transactions
+    invariants(txs)
+
+    const b = creditBill(txs, jd, '2026-09-09')
+    expect([b.total, b.paid, b.left]).toEqual([7178, 7178, 0]) // 本期清了，面板不再要钱
+    expect(b.upcoming.map((r) => [r.tx.id, r.due.date])).toEqual([[fresh.id, '2026-10-17']])
+    expect(balances(txs, accounts)[jd.id]).toBe(-3000) // 但钱确实还欠着
+
+    // 10 月打开：新单成了本期
+    const oct = creditBill(txs, jd, '2026-10-05')
+    expect([oct.dueDate, oct.total, oct.left]).toEqual(['2026-10-17', 3000, 3000])
+    expect([...dueNow(txs, [jd], '2026-10-05')]).toEqual([[jd.id, 3000]])
+  })
+
+  it('把那笔还款删掉，顺延跟着撤销——到期日只由流水决定', async () => {
+    const repay = pay({ amount: 1000, date: '2026-09-09', created_at: stamp('2026-09-09') })
+    await st().addTx(repay)
+    const fresh = buy({ amount: 3000, date: '2026-09-09', created_at: stamp('2026-09-09') })
+    await st().addTx(fresh)
+    expect(creditBill(st().transactions, jd, '2026-09-09').upcoming[0].due.date).toBe('2026-10-17')
+
+    expect(await st().removeTx(repay.id)).toBe(true)
+    const txs = st().transactions
+    invariants(txs)
+    expect(creditBill(txs, jd, '2026-09-09').rows[0].due.date).toBe('2026-09-17')
+  })
+
+  it('拼多多和花呗不受影响：开关只在京东上开着', async () => {
+    await st().addTx(pay({ to_account_id: pdd.id, amount: 500, date: '2026-09-05', created_at: stamp('2026-09-05') }))
+    const p1 = buy({ account_id: pdd.id, amount: 900, date: '2026-09-09', created_at: stamp('2026-09-09') })
+    await st().addTx(p1)
+    const txs = st().transactions
+    invariants(txs)
+    // 拼多多没有还款日，到期日就是下单日，还过款也不顺延
+    expect(creditBill(txs, pdd, '2026-09-09').rows.map((r) => r.due.date)).toEqual(['2026-09-09'])
   })
 })
 

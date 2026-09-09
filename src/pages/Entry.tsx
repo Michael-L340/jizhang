@@ -5,7 +5,7 @@ import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { DatePicker } from '../components/DatePicker'
 import { Keypad } from '../components/Keypad'
-import { childOrderByUse, installmentPlan, pickCategoryId, splitAccounts } from '../lib/compute'
+import { childOrderByUse, installmentPlan, paidThisCycle, pickCategoryId, splitAccounts } from '../lib/compute'
 import { fmtDateRel, nowIso, today } from '../lib/date'
 import { loadLocal, saveLocal, useOnline } from '../lib/hooks'
 import { newId } from '../lib/id'
@@ -289,9 +289,12 @@ export function Entry() {
   const instN = inst === 'custom' ? Number(customInst) : Number(inst)
   const instOk = Number.isInteger(instN) && instN >= 1 && instN <= INST_MAX
   // 分期提示：每期多少、哪几个月。用一笔临时记录算，和保存后账户页看到的完全一致
-  // 到期日按这个白条自己的还款日算（京东 17、花呗和美团 1），所以预览要先找到账户
+  // 到期日按这个白条自己的还款日算（京东 17、花呗和美团 1），所以预览要先找到账户。
+  // 开了「还款后顺延」的账户（京东）还要看这个周期有没有还过款——漏传的话预览说 9/17、
+  // 存完账户页说 10/17，两个数对不上
   const creditAcc = accountId ? (credits.find((c) => c.id === accountId) ?? null) : null
-  const plan = onCredit && cents > 0 && instOk ? installmentPlan({ date, amount: cents, installments: instN }, creditAcc?.repay_day ?? null) : null
+  const defer = creditAcc ? paidThisCycle({ date }, creditAcc, txs) : false
+  const plan = onCredit && cents > 0 && instOk ? installmentPlan({ date, amount: cents, installments: instN }, creditAcc?.repay_day ?? null, defer) : null
 
   function validate(): string | null {
     if (type !== 'adjust' && cents <= 0) return '请输入金额'

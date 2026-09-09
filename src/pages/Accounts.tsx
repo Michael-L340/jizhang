@@ -662,6 +662,40 @@ export function Accounts() {
             >
               核对待还 · 输入平台里显示的数字
             </button>
+            {/* 京东那条规矩的开关。只对有还款日的账户有意义——先用后付没有「周期」这回事。
+                规则有个已知边界（逾期还款之后同周期再下单会多顺延一期），所以得能自己关掉，
+                不用等我改代码。还款日本身没有界面，是直接在库里设的，这个开关比它更需要 */}
+            {creditTarget2.repay_day !== null ? (
+              <button
+                type="button"
+                disabled={busy}
+                className="w-full flex items-start gap-3 text-left mt-4 pt-3 border-t border-line disabled:opacity-40"
+                onClick={async () => {
+                  const a = creditTarget2
+                  const next = !a.defer_after_repay
+                  setBusy(true)
+                  const ok = await updateAccount(a.id, { defer_after_repay: next })
+                  setBusy(false)
+                  if (ok) {
+                    setCreditTarget2({ ...a, defer_after_repay: next })
+                    showToast(next ? `${a.name}：本期还过款之后下的单算下一期` : `${a.name}：改回按下单日算最近的还款日`)
+                  }
+                }}
+              >
+                <span className="flex-1 min-w-0">
+                  <span className="block text-sm">本期还过款之后下的单，算下一期</span>
+                  <span className="block text-[11px] text-muted mt-0.5">
+                    京东白条是这样：还清之后账单已经出了，新单只能进下一期。花呗、美团多半不是，别乱开。
+                    只认你自己记的还款，平台上还了没记这里就不算。
+                  </span>
+                </span>
+                <span
+                  className={`w-11 h-6 rounded-full shrink-0 mt-0.5 flex items-center px-0.5 transition-colors ${creditTarget2.defer_after_repay ? 'bg-brand justify-end' : 'bg-line justify-start'}`}
+                >
+                  <span className="w-5 h-5 rounded-full bg-card shadow-sm" />
+                </span>
+              </button>
+            ) : null}
           </>
         ) : null}
       </Sheet>

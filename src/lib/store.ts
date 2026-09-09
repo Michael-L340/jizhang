@@ -28,7 +28,7 @@ function readCache(): Cache | null {
     // 「本月应还」在首屏就是错的（等一次同步回来才会自愈）。在入口补齐，别让 undefined 流出去。
     return {
       ...c,
-      accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null, facade_offset: a.facade_offset ?? null })),
+      accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null, facade_offset: a.facade_offset ?? null, defer_after_repay: a.defer_after_repay ?? null })),
       transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null })),
     }
   } catch {
@@ -104,7 +104,7 @@ export interface State extends Snapshot {
 
   addCategory: (kind: CatKind, parentId: string | null, name: string) => Promise<Category | null>
   updateCategory: (id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note' | 'parent_id'>>) => Promise<boolean>
-  updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived' | 'facade_offset'>>) => Promise<boolean>
+  updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived' | 'facade_offset' | 'defer_after_repay'>>) => Promise<boolean>
   /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
   /**
