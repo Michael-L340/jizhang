@@ -362,13 +362,99 @@ describe('同步失败留痕', () => {
     expect(st().toast).toBeNull() // 已经有数据在看，不打断
   })
 
-  it('首次加载就失败要明确告诉用户', async () => {
+  it('首次加载就失败：重试期间不打断，三次都失败才明确告诉用户', async () => {
     store.useStore.setState({ loaded: false })
-    api.fetchAll.mockRejectedValueOnce(new Error('Failed to fetch'))
+    api.fetchAll.mockRejectedValue(new Error('Failed to fetch'))
     await st().refresh()
+    // 第一下失败先自动重试，别急着甩个 toast——手机刚唤醒第一下失败太常见了
     expect(st().syncFailed).toBe(true)
+    expect(st().syncRetrying).toBe(true)
+    expect(st().toast).toBeNull()
+
+    // 2s / 6s / 15s 三档跑完还是失败，这才是真的连不上
+    for (const ms of [2_000, 6_000, 15_000]) await vi.advanceTimersByTimeAsync(ms)
+    expect(api.fetchAll).toHaveBeenCalledTimes(4) // 1 次 + 3 次重试
+    expect(st().syncRetrying).toBe(false)
     expect(st().toast?.msg).toContain('同步失败')
   })
+
+  it('自动重试成功就把红条收掉，不用用户动手', async () => {
+    // 这条正是用户 2026-09-10 的抱怨：隔一阵点开就说刷新失败，手动点一下又好了
+    store.useStore.setState({ loaded: false })
+    api.fetchAll.mockRejectedValueOnce(new Error('Failed to fetch'))
+    api.fetchAll.mockResolvedValueOnce(snap([tx('t1')]))
+    await st().refresh()
+    expect(st().syncRetrying).toBe(true)
+    // store 只负责把原因记下来，翻成人话是 api.friendlyError 的活（那边单独测）
+    expect(st().syncError).toBe('Failed to fetch')
+
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(st().syncFailed).toBe(false)
+    expect(st().syncError).toBeNull()
+    expect(st().syncRetrying).toBe(false)
+    expect(st().toast).toBeNull()
+    expect(ids()).toEqual(['t1'])
+  })
+
+  it('失败原因要留下来给人看，否则下次还是只能猜', async () => {
+    api.fetchAll.mockRejectedValue(new Error('JWT expired'))
+    await st().refresh()
+    expect(st().syncError).toBe('JWT expired')
+  })
+
+  it('拉回来是空的就当没登录，绝不能把界面和缓存一起清空', async () => {
+    // supabase-js 在 session 失效时会用 anon key 发请求，RLS 一挡返回「零行、无错误」。
+    // 当真收下的话：界面变空账本，persist() 顺手把本机缓存也覆盖成空的，全程零报错。
+    // （这个文件里 snap() 的 accounts 一直是空的，所以这条得自己先塞一个账户进去）
+    const acc = { id: 'a1', name: '中国银行', kind: 'bank' as const, sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }
+    store.useStore.setState({ accounts: [acc] })
+    api.fetchAll.mockResolvedValueOnce({ accounts: [], categories: [], transactions: [] })
+    await st().refresh()
+    expect(st().accounts).toEqual([acc]) // 本地那份必须原封不动
+    expect(st().syncFailed).toBe(true)
+    expect(st().syncError).toContain('session')
+
+    // 换回正常的一次同步，数据照常落地
+    api.fetchAll.mockResolvedValueOnce({ accounts: [acc], categories: [], transactions: [tx('t1')] })
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(st().syncFailed).toBe(false)
+    expect(ids()).toEqual(['t1'])
+  })
+
+  it('第一次装 App 时账户本来就是空的，这时候空快照是真的', async () => {
+    store.useStore.setState({ accounts: [], categories: [], transactions: [], loaded: false })
+    api.fetchAll.mockResolvedValueOnce({ accounts: [], categories: [], transactions: [] })
+    await st().refresh()
+    expect(st().syncFailed).toBe(false)
+    expect(st().loaded).toBe(true)
+  })
+
+  it('明确断网时不空转重试——网回来时 online 事件会接上', async () => {
+    // node 环境的 navigator 上压根没有 onLine，spyOn 会直接报「属性不存在」，得自己装一个
+    Object.defineProperty(navigator, 'onLine', { get: () => false, configurable: true })
+    store.useStore.setState({ loaded: false })
+    api.fetchAll.mockRejectedValue(new Error('Failed to fetch'))
+    await st().refresh()
+    expect(st().syncRetrying).toBe(false)
+    expect(st().toast?.msg).toContain('同步失败')
+    await vi.advanceTimersByTimeAsync(30_000)
+    expect(api.fetchAll).toHaveBeenCalledTimes(1) // 一次都没重试
+    Reflect.deleteProperty(navigator, 'onLine')
+  })
+
+  it('用户手动同步会把退避阶梯清零，重新给三次机会', async () => {
+    api.fetchAll.mockRejectedValue(new Error('Failed to fetch'))
+    await st().refresh()
+    for (const ms of [2_000, 6_000, 15_000]) await vi.advanceTimersByTimeAsync(ms)
+    expect(st().syncRetrying).toBe(false)
+    expect(api.fetchAll).toHaveBeenCalledTimes(4)
+
+    await st().refresh() // 用户点「重试」
+    expect(st().syncRetrying).toBe(true)
+    await vi.advanceTimersByTimeAsync(2_000)
+    expect(api.fetchAll).toHaveBeenCalledTimes(6) // 手动那次 + 又一次自动重试
+  })
+
 
   it('下一次同步成功要把标记清掉', async () => {
     api.fetchAll.mockRejectedValueOnce(new Error('Failed to fetch'))

@@ -17,6 +17,8 @@ export function Home() {
   const cats = useStore((s) => s.categories)
   const syncing = useStore((s) => s.syncing)
   const syncFailed = useStore((s) => s.syncFailed)
+  const syncError = useStore((s) => s.syncError)
+  const syncRetrying = useStore((s) => s.syncRetrying)
   const refresh = useStore((s) => s.refresh)
   const outboxCount = useStore((s) => s.outboxCount)
   const mode = useStore((s) => s.mode)
@@ -117,18 +119,23 @@ export function Home() {
           </button>
         </div>
       ) : syncFailed ? (
-        <div className="card mb-3 flex items-center gap-2 px-3 py-2.5 bg-expense-soft border border-expense/25">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className="text-expense shrink-0">
+        /* 还在自动重试的时候别报红：切回前台第一下失败太常见（手机刚唤醒网络没就绪），
+           多半两秒后自己就好了。红色留给「三档都试完还是不行」。原因也写出来，
+           以前只有一句「同步失败」，用户和我都没法判断到底是网络还是登录过期。 */
+        <div className={`card mb-3 flex items-center gap-2 px-3 py-2.5 ${syncRetrying ? 'bg-brand-soft border border-brand/40' : 'bg-expense-soft border border-expense/25'}`}>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" className={`shrink-0 ${syncRetrying ? 'text-brand-ink' : 'text-expense'}`}>
             <path d="M12 9v4.5M12 17h.01M10.6 3.9L2.5 17.6A1.6 1.6 0 003.9 20h16.2a1.6 1.6 0 001.4-2.4L13.4 3.9a1.6 1.6 0 00-2.8 0z" />
           </svg>
-          <span className="flex-1 min-w-0 truncate text-xs text-expense">同步失败，数据可能不是最新</span>
+          <span className={`flex-1 min-w-0 truncate text-xs ${syncRetrying ? 'text-brand-ink' : 'text-expense'}`}>
+            {syncRetrying ? `连接不上，正在自动重试…${syncError ? `（${syncError}）` : ''}` : `同步失败，数据可能不是最新${syncError ? `：${syncError}` : ''}`}
+          </span>
           <button
             type="button"
-            className="shrink-0 rounded-full bg-expense text-white text-xs font-medium px-3 py-1 disabled:opacity-60"
+            className={`shrink-0 rounded-full text-xs font-medium px-3 py-1 disabled:opacity-60 ${syncRetrying ? 'bg-brand text-on-brand' : 'bg-expense text-white'}`}
             disabled={syncing}
             onClick={() => void refresh()}
           >
-            {syncing ? '重试中' : '重试'}
+            {syncing ? '重试中' : '立刻重试'}
           </button>
         </div>
       ) : null}

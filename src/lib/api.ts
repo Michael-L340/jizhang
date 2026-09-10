@@ -89,7 +89,10 @@ export function friendlyError(e: unknown): string {
   if (code === '23514' || /violates check constraint/i.test(msg)) return '数据不合法（类型与字段不匹配）'
   if (/New password should be different/i.test(msg)) return '新密码不能和旧密码相同'
   if (/Password should be at least/i.test(msg)) return '密码太短，至少 6 位'
-  if (/JWT|session|refresh_token|401/i.test(msg)) return '登录已过期，请重新登录'
+  // supabase 真实报的是 `Invalid Refresh Token: Refresh Token Not Found`（带空格）和
+  // `Auth session missing!`，只认下划线那种写法的话，这两句会原样甩英文给用户。
+  // 放久了再打开撞的正是它们：JWT 一小时到期，而 supabase-js 提前 90 秒就当它过期
+  if (/JWT|session|refresh[ _]token|401/i.test(msg)) return '登录已过期，请重新登录'
   return msg || '未知错误'
 }
 

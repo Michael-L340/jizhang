@@ -38,6 +38,8 @@ export function Settings() {
   const restoreSnapshot = useStore((st) => st.restoreSnapshot)
   const showToast = useStore((st) => st.showToast)
   const syncFailed = useStore((st) => st.syncFailed)
+  const syncError = useStore((st) => st.syncError)
+  const syncRetrying = useStore((st) => st.syncRetrying)
   const loaded = useStore((st) => st.loaded)
   const cacheBytes = useStore((st) => st.cacheBytes)
   const cacheDegraded = useStore((st) => st.cacheDegraded)
@@ -196,7 +198,9 @@ export function Settings() {
   const backupText = !backupChecked ? '读取中…' : backupFailed ? '读不到' : health === 'ok' ? '正常' : health === 'stale' ? '好像停了' : '未启用'
   // 状态卡下面那一行：有问题说问题，没问题就报一句上次备份
   const statusNote = syncFailed
-    ? '最近一次同步失败，点「同步」再试。'
+    ? syncRetrying
+      ? '连接不上，正在自动重试（2 秒 / 6 秒 / 15 秒各一次），不用管它。'
+      : `最近一次同步失败${syncError ? `：${syncError}` : ''}，点「同步」再试。`
     : backupChecked && backupFailed
       ? '读不到备份状态：网络不通或登录过期，点上面那一格重试。'
       : cacheDegraded

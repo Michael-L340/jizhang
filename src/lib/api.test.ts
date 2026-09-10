@@ -262,6 +262,13 @@ describe('friendlyError', () => {
   it('网络不通仍然优先匹配，不被超时那条抢走', () => {
     expect(friendlyError(new Error('Failed to fetch'))).toBe('网络不通，请稍后再试')
   })
+
+  it('登录过期要说人话——放久了再打开撞的就是它', () => {
+    // JWT 有效期 1 小时，而 supabase-js 提前 90 秒就当它过期，隔久一点打开必然要换一次 token
+    expect(friendlyError(new Error('JWT expired'))).toBe('登录已过期，请重新登录')
+    expect(friendlyError(new Error('Invalid Refresh Token: Refresh Token Not Found'))).toBe('登录已过期，请重新登录')
+    expect(friendlyError({ message: 'Auth session missing!' })).toBe('登录已过期，请重新登录')
+  })
 })
 
 describe('fetchAll 的中止信号', () => {

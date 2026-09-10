@@ -62,8 +62,12 @@ export interface State extends Snapshot {
   /** 本次同步开始的时间戳；卡死超过 STALE_SYNC_MS 就允许重新发起 */
   syncingSince: number | null
   lastSync: string | null
-  /** 上次同步是否失败（首次加载成功后失败不再静默） */
+  /** 上次同步是否失败（首次加载成功后失败不再静默）。导出可信度看它，所以一失败就立刻置起来 */
   syncFailed: boolean
+  /** 上次同步失败的原因，已经翻成中文。成功后清空 */
+  syncError: string | null
+  /** 失败了但正在自动重试——界面这时候别报红，也别弹 toast */
+  syncRetrying: boolean
   toast: Toast | null
   /** 本机缓存占用字节数（UTF-16），0 表示还没写过 */
   cacheBytes: number
@@ -84,7 +88,8 @@ export interface State extends Snapshot {
   mode: Mode
 
   init: () => Promise<void>
-  refresh: () => Promise<void>
+  /** @param auto 内部自动重试调用时为 true，不重置退避阶梯 */
+  refresh: (auto?: boolean) => Promise<void>
   /** 把待上传队列补传到云端。联网时自动调，用户也能手动点 */
   flushOutbox: () => Promise<void>
   /** 去抖写入本机缓存，从当前 state 现读，不接受外部快照 */
@@ -205,6 +210,27 @@ function enqueue(id: string, v: Transaction | typeof DELETED): void {
 }
 
 /** 单次 fetchAll 的超时。没有它，iOS 后台冻结时飞在路上的请求可能永远不 settle */
+/**
+ * 同步失败后的自动重试间隔。
+ *
+ * 用户 2026-09-10 反馈：隔一段时间点开 App 就弹「同步失败」，手动点一下重试又好了。
+ * 根因是**切回前台/冷启动的第一下请求最容易失败**——手机刚唤醒网络还没就绪，而 JWT
+ * 提前 90 秒就算过期（supabase-js 的 EXPIRY_MARGIN_MS），隔久一点打开必然要先换一次
+ * token，那也是一个网络请求。而这里以前失败就到此为止：整个 App 只有「切回前台 /
+ * online 事件 / 手动点」三个触发点，第一下失败就一直红着。
+ *
+ * 三档一共等 23 秒。手动点一下就重来一轮（`refresh()` 不带 auto 会把阶梯清零）。
+ */
+const RETRY_DELAYS_MS = [2_000, 6_000, 15_000]
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+/** 已经自动重试过几次；成功或用户手动同步都归零 */
+let retryAt = 0
+
+function cancelRetry(): void {
+  if (retryTimer) clearTimeout(retryTimer)
+  retryTimer = null
+}
+
 const FETCH_TIMEOUT_MS = 30_000
 /** 上一次同步超过这个时间还没落地就视为已死，允许重新发起。必须大于 FETCH_TIMEOUT_MS */
 const STALE_SYNC_MS = 45_000
@@ -251,6 +277,8 @@ export const useStore = create<State>((set, get) => ({
   syncingSince: null,
   lastSync: null,
   syncFailed: false,
+  syncError: null,
+  syncRetrying: false,
   toast: null,
   cacheBytes: 0,
   cacheDegraded: false,
@@ -282,8 +310,13 @@ export const useStore = create<State>((set, get) => ({
     if (signedIn) await get().refresh()
   },
 
-  async refresh() {
+  async refresh(auto = false) {
     if (get().auth !== 'in') return
+    // 用户主动来的（切回前台、online、点重试）就把退避阶梯清零，重新给三次机会
+    if (!auto) {
+      cancelRetry()
+      retryAt = 0
+    }
     const since = get().syncingSince
     // 「正在同步」曾经是一把没有超时的锁：请求一旦永远不返回，此后整个会话的同步
     // 都会在这一行被静默丢掉，杀掉 App 才能恢复。超过 STALE_SYNC_MS 就当上一次已死。
@@ -294,7 +327,14 @@ export const useStore = create<State>((set, get) => ({
     set({ syncing: true, syncingSince: Date.now() })
     try {
       const snap = await api.fetchAll(ac.signal)
-      if (my !== fetchSeq) return // 已被更新的一轮取代，这份旧快照不许落地
+      if (my !== fetchSeq) return
+      // supabase-js 在 session 没了的时候**不会报错**，而是拿 anon key 把请求发出去
+      // （`_getAccessToken` 的兜底：`(await getSession()) ?? supabaseKey`）。RLS 一挡，
+      // 服务器返回「零行、无错误」。照单全收的话，界面会被清空、`persist()` 还会把
+      // 本机缓存一起覆盖成空的——云端数据没事，但离线副本真的没了，而且全程零报错。
+      // 账户表永远不该是空的（0001 迁移就预置了四个），所以「拉回来是空的、本地明明有」
+      // 只可能是没带上身份，当失败处理，走重试。
+      if (!snap.accounts.length && get().accounts.length) throw new Error('Auth session missing!') // 已被更新的一轮取代，这份旧快照不许落地
       // 顺序要紧：先按世代淘汰过期补丁，再把仍在途的叠回去
       retirePatches(my)
       const merged: Snapshot = {
@@ -304,15 +344,29 @@ export const useStore = create<State>((set, get) => ({
         // 队列在最上面，因为那是用户改完、云端至今不知道的最新状态。
         transactions: applyPending(applyPending(snap.transactions, pendingTx), outboxTx),
       }
-      set({ ...merged, loaded: true, lastSync: nowIso(), syncFailed: false })
+      cancelRetry()
+      retryAt = 0
+      set({ ...merged, loaded: true, lastSync: nowIso(), syncFailed: false, syncError: null, syncRetrying: false })
       get().persist()
       // 网通了，把欠的补上。不 await：补传失败不该让这次同步显示成失败
       void get().flushOutbox()
     } catch (e) {
       if (my !== fetchSeq) return
-      // 首次加载成功之后失败也要留痕，否则断网/登录过期/项目休眠全都无声
-      set({ syncFailed: true })
-      if (!get().loaded) get().showToast(`同步失败：${api.friendlyError(e)}`)
+      // 首次加载成功之后失败也要留痕，否则断网/登录过期/项目休眠全都无声。
+      // syncFailed 一失败就置起来（导出可信度看它，宁可保守），但**界面先别喊**：
+      // 还有重试机会时只标 syncRetrying，让红条说「正在自动重试」而不是甩个失败给用户。
+      const why = api.friendlyError(e)
+      // 明确断网就别空转了——重试三次也是白搭，网回来时 online 事件会把它接上
+      const offline = typeof navigator !== 'undefined' && navigator.onLine === false
+      const canRetry = !offline && retryAt < RETRY_DELAYS_MS.length
+      set({ syncFailed: true, syncError: why, syncRetrying: canRetry })
+      if (canRetry) {
+        const delay = RETRY_DELAYS_MS[retryAt++]
+        cancelRetry()
+        retryTimer = setTimeout(() => void get().refresh(true), delay)
+        return
+      }
+      if (!get().loaded) get().showToast(`同步失败：${why}`)
     } finally {
       clearTimeout(timer)
       if (my === fetchSeq) set({ syncing: false, syncingSince: null })
@@ -415,7 +469,12 @@ export const useStore = create<State>((set, get) => ({
     // 队列也要清：换个账号登进来，把上一个账号的记录补传过去是灾难。
     // 代价是退出登录会丢掉还没传上去的那几笔，所以退出前要拦一下（见 Settings.tsx）。
     outboxTx.clear()
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
+    // 纯粹是不留垃圾：定时器真响了 refresh() 也会因为 auth 不是 'in' 当场早退，
+    // 所以这两行**测不出来**（写过一条用例，加不加都绿，按规矩删了）。留着是为了
+    // 退出登录之后别有个定时器还挂在那儿。
+    cancelRetry()
+    retryAt = 0
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
   },
 
   async addTx(t) {

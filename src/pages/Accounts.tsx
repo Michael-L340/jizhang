@@ -22,6 +22,8 @@ export function Accounts() {
   const showToast = useStore((s) => s.showToast)
   const lastSync = useStore((s) => s.lastSync)
   const syncFailed = useStore((s) => s.syncFailed)
+  const syncError = useStore((s) => s.syncError)
+  const syncRetrying = useStore((s) => s.syncRetrying)
   const mode = useStore((s) => s.mode)
   const updateAccount = useStore((s) => s.updateAccount)
   const syncing = useStore((s) => s.syncing)
@@ -421,7 +423,7 @@ export function Accounts() {
         <div className={`text-xs mt-1 flex items-center gap-2 ${syncFailed ? 'text-adjust' : 'text-muted'}`}>
           <span>
             {lastSync ? `上次同步 ${fmtIsoZh(lastSync)}` : '尚未同步'}
-            {syncFailed ? ' · 最近一次同步失败' : ''}
+            {syncFailed ? (syncRetrying ? ' · 连接不上，正在自动重试' : ` · 同步失败${syncError ? `：${syncError}` : ''}`) : ''}
             {outboxCount > 0 ? ` · ${outboxCount} 笔待上传` : ''}
           </span>
           {syncFailed ? (
