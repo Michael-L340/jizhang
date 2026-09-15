@@ -22,6 +22,11 @@ export const ART: ArtIcon[] = [
   { key: 'breakfast', name: '早餐', file: 'breakfast-v1.png' },
   { key: 'lunch', name: '午餐', file: 'lunch-v1.png' },
   { key: 'dinner', name: '晚餐', file: 'dinner-v1.png' },
+  // 下面三张原本打算放登录页和空状态当插画，用户 2026-09-15 说那几页保持纯文字、
+  // 图留着收进「我的图」——所以它们和上面四张一样，只在选图标面板里出现
+  { key: 'wallet', name: '钱包', file: 'wallet-v1.png' },
+  { key: 'bill', name: '账单', file: 'bill-v1.png' },
+  { key: 'receipt', name: '小票', file: 'receipt-v1.png' },
 ]
 
 const PREFIX = 'img:'

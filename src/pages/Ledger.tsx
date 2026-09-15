@@ -1,6 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
-import { Empty } from '../components/Empty'
 import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
@@ -275,7 +274,7 @@ export function Ledger() {
       </div>
 
       {groups.length === 0 ? (
-        <Empty art="receipt" text="这个月没有记录" size={120} className="py-12" />
+        <div className="text-center text-muted text-sm py-16">这个月没有记录</div>
       ) : (
         groups.map((g) => (
           <div key={g.date} id={`day-${g.date}`} className="mt-3" style={{ scrollMarginTop: 'var(--ledger-sticky-h, 92px)' }}>
