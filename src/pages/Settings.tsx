@@ -69,6 +69,7 @@ export function Settings() {
   const [pw1, setPw1] = useState('')
   const [pw2, setPw2] = useState('')
   const [pwErr, setPwErr] = useState('')
+  const [pwDone, setPwDone] = useState(false)
 
   const stat = useMemo(() => {
     const roots = categories.filter((c) => !c.parent_id && !c.is_archived)
@@ -89,7 +90,9 @@ export function Settings() {
       setPwOpen(false)
       setPw1('')
       setPw2('')
-      showToast('密码已修改，请记牢')
+      // 不用一闪而过的 toast：自动备份拿的是这个密码去登录，不同步过去当晚就开始失败。
+      // 用户 2026-09-15 要求「改密码的时候蹦出来提示」，所以改成一张必须点掉的弹层。
+      setPwDone(true)
     } catch (e) {
       setPwErr(friendlyError(e))
     } finally {
@@ -356,6 +359,23 @@ export function Settings() {
         </div>
       </Sheet>
 
+      <Sheet open={pwDone} onClose={() => setPwDone(false)} title="密码已修改，还差一步">
+        <div className="rounded-xl bg-expense-soft text-expense text-[13px] leading-relaxed px-3.5 py-2.5 mb-3">
+          自动备份用的还是旧密码，<b>今晚起会失败</b>，直到你把新密码同步过去。
+        </div>
+        <ol className="text-sm leading-relaxed list-decimal pl-5 mb-3 space-y-1">
+          <li>在电脑上打开「记账」项目文件夹的终端</li>
+          <li>
+            运行 <code className="bg-bg rounded px-1.5 py-0.5 text-[13px]">npm run backup:password</code>
+          </li>
+          <li>把新密码粘进去回车，完成</li>
+        </ol>
+        <div className="text-xs text-muted mb-3">忘了也有兜底：第二天早上会收到 GitHub 的备份失败邮件，到时再跑也来得及，只是那一晚没备份。</div>
+        <button type="button" className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold" onClick={() => setPwDone(false)}>
+          我知道了
+        </button>
+      </Sheet>
+
       <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">
         <input
           className="w-full rounded-xl bg-bg px-4 py-3 mb-2"
@@ -375,10 +395,10 @@ export function Settings() {
           onKeyDown={(e) => e.key === 'Enter' && submitPassword()}
         />
         {pwErr ? <div className="text-sm text-expense mb-2">{pwErr}</div> : null}
-        <div className="text-xs text-muted mb-3">
-          改完之后其他设备上已登录的状态不受影响，下次重新登录才需要新密码。
+        <div className="rounded-xl bg-brand-soft text-brand-ink text-[13px] leading-relaxed px-3.5 py-2.5 mb-3">
+          <b>改完要同步给自动备份</b>——备份每晚拿这个密码登录拉数据，不同步今晚就开始失败。改完会再提示一次怎么做。
           <br />
-          改完在电脑上跑一下 npm run backup:password 把新密码同步给自动备份，否则第二天起备份会失败。
+          其他设备上的登录会在一小时内失效，要用新密码重新登。
         </div>
         <button type="button" disabled={busy === 'pw'} className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold disabled:opacity-40" onClick={submitPassword}>
           {busy === 'pw' ? '提交中…' : '确认修改'}
