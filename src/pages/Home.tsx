@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
+import { Empty } from '../components/Empty'
 import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
@@ -226,7 +227,7 @@ export function Home() {
           </Link>
         </div>
         {agg.length === 0 ? (
-          <div className="text-sm text-muted py-6 text-center">本月还没有支出</div>
+          <Empty art="bill" text="本月还没有支出" className="py-3" />
         ) : (
           <div className="flex items-center gap-3">
             <div className="w-28 shrink-0">
@@ -256,7 +257,7 @@ export function Home() {
           </Link>
         </div>
         {recent.length === 0 ? (
-          <div className="text-sm text-muted py-6 text-center">还没有记录，点下方 ＋ 记一笔</div>
+          <Empty art="receipt" text="还没有记录，点下方 ＋ 记一笔" className="py-3" />
         ) : (
           <div className="divide-y divide-line">
             {recent.map((t) => (

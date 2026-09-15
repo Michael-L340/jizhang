@@ -1,4 +1,5 @@
 import { type FormEvent, useState } from 'react'
+import { illustrationUrl } from '../components/Empty'
 import { configured, friendlyError } from '../lib/api'
 import { useStore } from '../lib/store'
 
@@ -25,6 +26,7 @@ export function Login() {
   return (
     <div className="flex-1 min-h-0 flex flex-col safe-top">
       <div className="app-main flex flex-col justify-center px-8">
+        <img src={illustrationUrl('wallet')} width={120} height={120} alt="" aria-hidden className="select-none mb-3 -ml-2" style={{ width: 120, height: 120 }} />
         <div className="text-3xl font-bold mb-1">记账</div>
         <div className="text-muted text-sm mb-8">只给自己用的账本</div>
         {!configured ? (
