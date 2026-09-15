@@ -39,6 +39,9 @@
 - 位图图标文件名一律带 `-vN`，换图改后缀不原地覆盖：Safari 按文件名缓存，覆盖了主屏和 App 里看到的还是旧图（v3 那次实测「从主屏删掉重新添加」都救不回）。PWA 图标（`pwa-*`、`apple-touch-icon-*`、`maskable-*`）同一条规矩，改完 `vite.config.ts` 和 `index.html` 一起换。
 - 白条分组圆标 = 浅焦糖圆底板 + 透明底信用卡位图缩到 0.78（`Brand.imageInset`）；四家平台的官方图标是铺满裁圆。两条渲染路径别混：把透明底卡片改成铺满，四角会出圆。
 - 空状态插画（钱包 / 账单 / 小票）细节多，只当 90–140px 的插画用（`components/Empty.tsx`），**不进分类图标库**。
+- **分类图标 `categories.icon` 有两种值**：一个 emoji，或 `img:<key>`（用户生成的 3D 图）。key → 文件名只在 `lib/art.ts` 登记表里，**换图只改登记表那一行，不动历史数据**。全 App 渲染分类图标只走 `components/CatIcon.tsx`，别在页面里直接 `{c.icon}`——漏一处的表现是页面上写着「img:lunch」。
+- 选图标面板是微信表情包式（`components/IconPicker.tsx`）：横滑翻页 + 底部分组标签，逻辑全在 `lib/iconPages.ts`。**别改回竖着一长条**：700 个图标竖滑要翻十几屏。图标库每组的 `tab` 必须是本组里的一个（`icons.test.ts` 守着）。
+- 收新图：原图丢进 `素材/原图/`，跑 `scripts/cut-art.py` 切到 `public/art/`（分类图标 128px、插画 256px），在 `lib/art.ts` 加一行登记。生成图时四周留 10% 空白，别贴画布边。
 
 ## 数据库迁移
 - 只新增 `supabase/migrations/000N_*.sql`，**不改旧文件**。
