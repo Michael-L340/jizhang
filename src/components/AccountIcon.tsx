@@ -36,8 +36,11 @@ interface Brand {
   image?: string
   /** 位图是白底的（花呗的标本身是白底蓝球），加一圈极淡的边，不然在白卡片上没轮廓 */
   imageLight?: boolean
-  /** 多色图形（几何全部从 24×24 的中心往外量）。有它时 path / image 都不用 */
-  art?: { d: string; fill: string }[]
+  /**
+   * 位图不铺满底板：缩到 scale 放在 plateColor 底板的正中。白条分组那张透明底信用卡用的。
+   * 位图本身必须是「图形居中的正方形」——scripts/cut-art.py 切的，src/lib/png.test.ts 验的。
+   */
+  imageInset?: boolean
 }
 
 // 白条平台用 App Store 上的官方图标（位图，128px，裁成圆）。开源图标库里这几家只有线条画，
@@ -72,53 +75,29 @@ const GENERIC_WALLET: Brand = {
   path: 'M4 6h13a2 2 0 0 1 2 2v1h-2.5a3 3 0 0 0 0 6H21v3a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2Zm12.5 5H22v2h-5.5a1 1 0 0 1 0-2Z',
 }
 
-/**
- * 卡面几何。**全部从中心 (12,12) 往外量**，所以「居中」是算出来的，不是拿眼睛调的。
- * 先用过系统 emoji 💳，两次被指出没居中：不同平台（Apple / Noto / Segoe）把这个字形
- * 画在 em 盒里的位置各不相同，靠字体基线对齐永远是猜，而且换台设备就变。改成自己画。
- */
-const CARD = { cx: 12, cy: 12, w: 17, h: 11, r: 1.9, band: 3.1 } as const
-const n2 = (v: number) => String(Math.round(v * 100) / 100)
-/** 圆角矩形。x0/y0/x1/y1 是绝对坐标，顺时针 */
-function rr(x0: number, y0: number, x1: number, y1: number, r: number): string {
-  const [a, b, c, d, e] = [x0, y0, x1, y1, r].map(n2)
-  return `M${n2(x0 + r)} ${b}H${n2(x1 - r)}A${e} ${e} 0 0 1 ${c} ${n2(y0 + r)}V${n2(y1 - r)}A${e} ${e} 0 0 1 ${n2(x1 - r)} ${d}H${n2(x0 + r)}A${e} ${e} 0 0 1 ${a} ${n2(y1 - r)}V${n2(y0 + r)}A${e} ${e} 0 0 1 ${n2(x0 + r)} ${b}Z`
-}
-const CARD_L = CARD.cx - CARD.w / 2
-const CARD_R = CARD.cx + CARD.w / 2
-const CARD_T = CARD.cy - CARD.h / 2
-const CARD_B = CARD.cy + CARD.h / 2
-
-// 「白条」分组 / 认不出平台的先用后付。浅焦糖底（--color-brand-soft）+ 一张信用卡。
-// 配色照用户 2026-09-08 挑的那个 💳：蓝卡身、顶部深蓝磁条、左边白签名条、右下金芯片。
+// 「白条」分组 / 认不出平台的先用后付。浅焦糖底（--color-brand-soft）+ 用户 2026-09-15 生成的 3D 信用卡。
+// 之前两版：系统 emoji 💳（各平台把字形画在 em 盒里的位置不同，两次被指出没居中）、
+// 自绘 SVG 卡面（几何居中，但用户要的是和新 App 图标一个味的 3D 图）。
+// 位图没有几何可断言，所以居中改成「切图脚本算、单测量像素验」：
+// scripts/cut-art.py 按实心像素外接框居中，src/lib/png.test.ts 读回来量偏差（±1px）。
+// 右上角原图那两道「闪光」切掉了（--erase），40px 下它们只是两粒毛点。
 // 底板留浅焦糖：和四家平台的彩色官方图标并排时它退后一步，像个分组而不是第五个平台。
 const GENERIC_CREDIT: Brand = {
   color: '#8a6026',
   plate: 'light',
   plateColor: '#fdf2e4',
-  scale: 0.72,
-  viewBox: '0 0 24 24',
+  scale: 0.78,
+  viewBox: '0 0 1 1',
   path: '',
-  art: [
-    { d: rr(CARD_L, CARD_T, CARD_R, CARD_B, CARD.r), fill: '#35a9e0' },
-    // 磁条：上面两个角跟着卡身圆，下边是直的
-    {
-      d: `M${n2(CARD_L + CARD.r)} ${n2(CARD_T)}H${n2(CARD_R - CARD.r)}A${n2(CARD.r)} ${n2(CARD.r)} 0 0 1 ${n2(CARD_R)} ${n2(CARD_T + CARD.r)}V${n2(CARD_T + CARD.band)}H${n2(CARD_L)}V${n2(CARD_T + CARD.r)}A${n2(CARD.r)} ${n2(CARD.r)} 0 0 1 ${n2(CARD_L + CARD.r)} ${n2(CARD_T)}Z`,
-      fill: '#22405a',
-    },
-    { d: rr(CARD_L + 2.1, CARD.cy - 0.6, CARD_L + 9.1, CARD.cy + 1.3, 0.95), fill: '#eef3f6' },
-    { d: rr(CARD_R - 3.3, CARD_B - 2.5, CARD_R - 0.6, CARD_B - 0.7, 0.45), fill: '#f6c63c' },
-  ],
+  image: brandImg('credit-v1.png'),
+  imageInset: true,
 }
 
 /**
  * 全部**自绘**品牌，供测试逐个检查形状与大小是否统一。
- * 位图（四家白条平台）和 emoji（白条分组）没有 path 可守，不进这里。
+ * 位图（四家白条平台、白条分组）没有 path 可守，不进这里；白条分组的居中由 png.test.ts 量像素来守。
  */
 export const BRANDS: Record<string, Brand> = { WECHAT, ALIPAY, BOC, CMB, GENERIC_BANK, GENERIC_WALLET }
-
-/** 白条卡面的几何，供测试验证「上下左右都居中」 */
-export const CREDIT_CARD = { ...CARD, left: CARD_L, right: CARD_R, top: CARD_T, bottom: CARD_B }
 
 export function brandOf(name: string): Brand {
   const n = name.trim()
@@ -144,20 +123,17 @@ export function brandOf(name: string): Brand {
 
 export function AccountIcon({ name, size = 40 }: Props) {
   const b = brandOf(name)
-  if (b.art) {
-    // 多色图形自己画：整张卡是从 viewBox 中心 (12,12) 往外量出来的，天然上下左右都居中，
-    // 而且不依赖任何字体——换设备、换系统都长一个样
+  if (b.image && b.imageInset) {
+    // 透明底位图放在圆底板正中。位图是正方形且图形已居中（png.test.ts 守着），
+    // 所以这里只要把它摆在正中就是居中，不用再调
+    const inner = size * b.scale
     return (
       <span
         className="inline-flex items-center justify-center shrink-0"
         style={{ width: size, height: size, background: b.plateColor ?? '#fff', borderRadius: '50%', boxShadow: 'inset 0 0 0 1px rgba(0,0,0,.09)' }}
         aria-hidden
       >
-        <svg width={size} height={size} viewBox={b.viewBox} xmlns="http://www.w3.org/2000/svg">
-          {b.art.map((a) => (
-            <path key={a.fill} d={a.d} fill={a.fill} />
-          ))}
-        </svg>
+        <img src={b.image} width={inner} height={inner} alt="" style={{ width: inner, height: inner, objectFit: 'contain', display: 'block' }} />
       </span>
     )
   }
