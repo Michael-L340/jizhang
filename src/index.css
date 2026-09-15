@@ -67,6 +67,11 @@ input:focus, textarea:focus { outline: none; border-color: var(--color-brand); }
 .key { font-size: 24px; height: 56px; border-radius: 12px; background: #fff; border: 1px solid var(--color-line); }
 .key:active { background: #eef1f5; }
 
+/* 横滑翻页的容器（换图标面板）。滚动条要藏起来：手机上是覆盖式的看不见，
+   电脑上却会在最后一行图标底下压出一条灰杠，页高跟着变、scroll-snap 的吸附点也跟着动 */
+.no-scrollbar { scrollbar-width: none; -ms-overflow-style: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
 .expand { display: grid; grid-template-rows: 0fr; transition: grid-template-rows .18s ease; }
 .expand.open { grid-template-rows: 1fr; }
 .expand > div { overflow: hidden; }

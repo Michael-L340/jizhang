@@ -1,8 +1,12 @@
 // 分类管理。从设置页进入，默认全部折叠，点一级分类展开它的二级。
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { CatIcon } from '../components/CatIcon'
+import { IconPicker } from '../components/IconPicker'
 import { Sheet } from '../components/Sheet'
+import { ART, toImgIcon } from '../lib/art'
 import { guessIcon, ICON_GROUPS } from '../lib/icons'
+import { loadRecentIcons, pushRecent, saveRecentIcons, type IconGroup } from '../lib/iconPages'
 import { categoryColor } from '../lib/palette'
 import { useStore } from '../lib/store'
 import type { CatKind, Category } from '../types'
@@ -21,6 +25,33 @@ export function Categories() {
   const [editCat, setEditCat] = useState<Category | null>(null)
   const [moving, setMoving] = useState(false)
   const [iconFor, setIconFor] = useState<Category | null>(null)
+  const [recent, setRecent] = useState<string[]>([])
+
+  // 每次打开面板才现读，而不是挂载时读一次：分类管理页是常驻在路由里的，
+  // 挂载时读的那一份会一直用到下次进页面，当场选过的图标在下一次打开时看不见
+  useEffect(() => {
+    if (iconFor) setRecent(loadRecentIcons())
+  }, [iconFor])
+
+  // 「最近用过」和「我的图」是两个虚拟组，排在图标库前面：手机上拇指够得着的是左边。
+  // 只有「最近用过」标了 virtual——img: 图标本来就住在「我的图」里，定位时不该跳过它
+  const pickerGroups = useMemo<IconGroup[]>(
+    () => [
+      { name: '最近用过', tab: '♡', icons: recent, virtual: true },
+      { name: '我的图', tab: '🖼️', icons: ART.map((a) => toImgIcon(a.key)) },
+      ...ICON_GROUPS,
+    ],
+    [recent],
+  )
+
+  async function pickIcon(icon: string) {
+    if (!iconFor) return
+    const next = pushRecent(recent, icon)
+    setRecent(next)
+    saveRecentIcons(next)
+    await updateCategory(iconFor.id, { icon })
+    setIconFor(null)
+  }
 
   const roots = useMemo(
     () => categories.filter((c) => !c.parent_id && c.kind === kind && (showArchived || !c.is_archived)).sort((a, b) => a.sort - b.sort),
@@ -109,7 +140,7 @@ export function Categories() {
                   onClick={() => setIconFor(p)}
                   title="换图标"
                 >
-                  {p.icon || '🏷️'}
+                  <CatIcon icon={p.icon} size={26} fallback="🏷️" />
                 </button>
                 <button
                   type="button"
@@ -151,11 +182,12 @@ export function Categories() {
                           <button
                             key={c.id}
                             type="button"
-                            className={`chip ${c.is_archived ? 'opacity-40 line-through' : ''}`}
+                            className={`chip inline-flex items-center gap-1 ${c.is_archived ? 'opacity-40 line-through' : ''}`}
                             style={{ padding: '5px 12px' }}
                             onClick={() => setEditCat(c)}
                           >
-                            {c.icon ?? guessIcon(c.name) ?? ''} {c.name}
+                            <CatIcon icon={c.icon ?? guessIcon(c.name)} size={18} />
+                            {c.name}
                           </button>
                         ))}
                         <button type="button" className="chip border-dashed text-muted" style={{ padding: '5px 12px' }} onClick={() => addChild(p.id)}>
@@ -189,7 +221,7 @@ export function Categories() {
       </div>
 
       <div className="text-xs text-muted leading-relaxed px-1">
-        点图标可以换 emoji，点分类名展开二级。二级分类没设图标时会按名字自动选一个，也可以点进去换。分类只能归档不能删除，历史记录永远不会变成孤儿。改名和移动都会追溯影响已有记录的统计归属。
+        点图标可以换图标（七百个 emoji 分组翻页，外加「我的图」里几张自己做的图），点分类名展开二级。二级分类没设图标时会按名字自动选一个，也可以点进去换。分类只能归档不能删除，历史记录永远不会变成孤儿。改名和移动都会追溯影响已有记录的统计归属。
       </div>
 
       {/* 单个分类的操作 */}
@@ -225,7 +257,7 @@ export function Categories() {
                       }
                     }}
                   >
-                    <span>{r.icon}</span>
+                    <CatIcon icon={r.icon} size={20} />
                     <span className="flex-1">{r.name}</span>
                     <span className="text-muted">›</span>
                   </button>
@@ -295,26 +327,7 @@ export function Categories() {
             按名字自动选（现在是 {guessIcon(iconFor.name) ?? '跟随大类'}）
           </button>
         ) : null}
-        {ICON_GROUPS.map((g) => (
-          <div key={g.name} className="mb-3">
-            <div className="text-xs text-muted mb-1.5">{g.name}</div>
-            <div className="grid grid-cols-8 gap-1.5">
-              {g.icons.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  className={`h-11 rounded-xl text-xl ${iconFor?.icon === e ? 'bg-brand-soft ring-2 ring-brand-ink' : 'bg-bg'}`}
-                  onClick={async () => {
-                    if (iconFor) await updateCategory(iconFor.id, { icon: e })
-                    setIconFor(null)
-                  }}
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
-          </div>
-        ))}
+        <IconPicker key={iconFor?.id ?? ''} value={iconFor?.icon} groups={pickerGroups} onPick={pickIcon} />
       </Sheet>
     </div>
   )

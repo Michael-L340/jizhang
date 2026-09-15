@@ -1,6 +1,7 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { accountColor } from '../components/AccountIcon'
+import { CatIcon } from '../components/CatIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
@@ -557,8 +558,9 @@ export function Stats() {
             <div key={c.id} className="flex gap-3">
               <span className="w-2.5 h-2.5 rounded-full mt-1.5 shrink-0" style={{ background: categoryColor(c.name, i) }} />
               <div className="min-w-0">
-                <div className="font-medium">
-                  {c.icon} {c.name}
+                <div className="font-medium flex items-center gap-1.5">
+                  <CatIcon icon={c.icon} size={20} />
+                  {c.name}
                 </div>
                 <div className="text-sm text-muted">{c.note || '（未填写说明，可在设置页补充）'}</div>
               </div>

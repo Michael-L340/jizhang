@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
+import { CatIcon } from '../components/CatIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
@@ -368,7 +369,9 @@ export function Accounts() {
         <span className={`w-[19px] h-[19px] rounded-md shrink-0 flex items-center justify-center text-[12px] font-bold ${on ? 'bg-brand text-on-brand' : 'border-2 border-line'}`}>
           {on ? '✓' : ''}
         </span>
-        <span className={`text-xl w-7 text-center shrink-0 ${ahead ? 'opacity-60' : ''}`}>{icon}</span>
+        <span className={`text-xl w-7 shrink-0 flex items-center justify-center ${ahead ? 'opacity-60' : ''}`}>
+          <CatIcon icon={icon} size={24} />
+        </span>
         <span className="flex-1 min-w-0">
           <span className={`block text-sm truncate ${ahead ? 'text-muted' : ''}`}>{title}</span>
           <span className="block text-[11px] text-muted num">

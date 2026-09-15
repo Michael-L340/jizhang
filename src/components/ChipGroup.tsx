@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { CatIcon } from './CatIcon'
 
 export interface ChipOption {
   id: string
@@ -24,7 +25,7 @@ export function ChipGroup({ options, value, onChange, extra, className = '' }: P
     <div className={`flex flex-wrap gap-2 ${className}`}>
       {options.map((o) => (
         <button key={o.id} type="button" className={`chip inline-flex items-center ${o.id === value ? 'on' : ''} ${o.className ?? ''}`} onClick={() => onChange(o.id)}>
-          {o.node ? <span className="mr-1.5 inline-flex align-middle">{o.node}</span> : o.icon ? <span className="mr-1">{o.icon}</span> : null}
+          {o.node ? <span className="mr-1.5 inline-flex align-middle">{o.node}</span> : o.icon ? <CatIcon icon={o.icon} size={18} className="mr-1" /> : null}
           {o.label}
         </button>
       ))}

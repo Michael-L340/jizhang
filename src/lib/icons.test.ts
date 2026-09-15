@@ -51,8 +51,12 @@ describe('图标库', () => {
   })
 
   it('数量够用，且每组都不为空', () => {
-    expect(all.length).toBeGreaterThanOrEqual(150)
+    expect(all.length).toBeGreaterThanOrEqual(600)
     for (const g of ICON_GROUPS) expect(g.icons.length, g.name).toBeGreaterThan(0)
+  })
+
+  it('每一组的标签 emoji 都是本组里的一个——点标签进去就该在第一页看见它', () => {
+    for (const g of ICON_GROUPS) expect(g.icons, `${g.name} 的标签 ${g.tab} 不在本组里`).toContain(g.tab)
   })
 
   it('每一个「猜」得出来的图标都必须在库里，否则用户想改回去时找不到', () => {
@@ -65,7 +69,10 @@ describe('emoji 渲染', () => {
   // Unicode 基本平面里的符号默认是「文字外观」，必须跟一个 U+FE0F 变体选择符才会
   // 渲染成彩色 emoji；少了它，iOS 上会显示成黑白的文字符号，一排彩色图标里格外突兀。
   // 下面这几个是例外：它们的 Emoji_Presentation 属性本来就是 Yes，不带 FE0F 也是彩色的。
-  const EMOJI_BY_DEFAULT = ['⌚', '☕', '⚡', '⚽', '⛽', '⭐']
+  const EMOJI_BY_DEFAULT = [
+    '⌚', '⌛', '⏰', '⏳', '☔', '☕', '⚡', '⚪', '⚫', '⚽', '⚾',
+    '⛄', '⛅', '⛪', '⛳', '⛵', '⛺', '⛽', '✅', '✨', '❌', '❓', '❗', '➕', '➖', '➗', '⭐',
+  ]
 
   it('该带变体选择符的都带了', () => {
     const all = [...ICON_GROUPS.flatMap((g) => g.icons), ...GUESSED_ICONS]
@@ -74,6 +81,29 @@ describe('emoji 渲染', () => {
       const needsVs = cps[0] < 0x1f000 && !EMOJI_BY_DEFAULT.includes(e)
       if (needsVs) {
         expect(cps, `${e}（${cps.map((c) => 'U+' + c.toString(16).toUpperCase()).join(' ')}）缺少 U+FE0F`).toContain(0xfe0f)
+      }
+    }
+  })
+})
+
+describe('只收 Emoji 14 及以前的字形', () => {
+  // iOS 缺字形时画的是豆腐块（▯），不是退回文字——用户选完看着是个方块，会以为自己点错了。
+  // 全量比对 Unicode 的 emoji-data 太重（还得把数据文件抄进仓库），这里挡的是
+  // 「顺手从网上抄一串新 emoji 进来」这一种：Emoji 15 / 15.1 / 16 新增的码点一个不收。
+  // 现成的教训：🪮（U+1FAAE，Emoji 15）在草稿里待过，iOS 16.4 以下全是方块。
+  const TOO_NEW = new Set([
+    // Emoji 15.0
+    0x1fa75, 0x1fa76, 0x1fa77, 0x1fa87, 0x1fa88, 0x1faad, 0x1faae, 0x1faaf,
+    0x1fabb, 0x1fabc, 0x1fabd, 0x1fabf, 0x1face, 0x1facf, 0x1fada, 0x1fadb, 0x1fae8, 0x1faf7, 0x1faf8, 0x1f6dc,
+    // Emoji 16.0
+    0x1fa89, 0x1fa8f, 0x1fabe, 0x1fac6, 0x1fadc, 0x1fae9,
+  ])
+
+  it('没有 Emoji 15 以后才有的字形', () => {
+    for (const e of [...ICON_GROUPS.flatMap((g) => g.icons), ...ICON_GROUPS.map((g) => g.tab), ...GUESSED_ICONS]) {
+      for (const c of e) {
+        const cp = c.codePointAt(0) ?? 0
+        expect(TOO_NEW.has(cp), `${e}（U+${cp.toString(16).toUpperCase()}）是 Emoji 15 以后才有的`).toBe(false)
       }
     }
   })

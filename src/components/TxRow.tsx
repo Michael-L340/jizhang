@@ -1,5 +1,6 @@
 import type { Account, Category, Transaction } from '../types'
 import { AccountIcon } from './AccountIcon'
+import { CatIcon } from './CatIcon'
 import { categoryColor, childShade } from '../lib/palette'
 import { guessIcon } from '../lib/icons'
 import { fmtYuan } from '../lib/money'
@@ -61,7 +62,8 @@ export function TxRow({ tx, accounts, categories, onClick, showDate }: Props) {
         <AccountIcon name={accounts.get(tx.account_id ?? '')?.name ?? ''} />
       ) : (
         <span className="w-10 h-10 rounded-full flex items-center justify-center text-[23px] leading-none shrink-0" style={{ background: `${d.tint}1f` }}>
-          {d.icon}
+          {/* icon 既可能是 emoji 也可能是 img:xxx（用户自己做的图），两种排版差得远，统一走 CatIcon */}
+          <CatIcon icon={d.icon} size={30} />
         </span>
       )}
       <span className="flex-1 min-w-0">

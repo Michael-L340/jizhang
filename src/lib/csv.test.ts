@@ -37,6 +37,15 @@ describe('parseImport', () => {
     expect(parseImport(buildJson(snap))).toEqual(snap)
   })
 
+  // 分类的 icon 是 text 列，除了 emoji 还可能是 `img:<名字>`（用户自己生成的 3D 图，见 lib/art.ts）。
+  // 校验走的是通用的「是不是文字」，所以本来就该原样过——但「本来就该」不是保证：
+  // 哪天有人给 icon 加一条「必须是单个 emoji」的校验，用了自定义图的分类整库就恢复不回来了。
+  // 变异：把 readCategory 里的 icon 改成 `if (icon 不是单个 emoji) fail(...)` → 这条红
+  it('img: 图标导出再导入不变——icon 不只装 emoji', () => {
+    const withImg: Snapshot = { ...snap, categories: [{ ...cat, icon: 'img:lunch' }] }
+    expect(parseImport(buildJson(withImg))).toEqual(withImg)
+  })
+
   it('金额不是整数分就拒绝——这是「元当成分」那类错误的唯一防线', () => {
     // 备份里 12.50 元必须写成 1250。写成 12.5 的话，导进去金额会变成百分之一，
     // 而且数据库不会报任何错，只有对账时才发现，那时已经晚了。
