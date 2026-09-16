@@ -1,5 +1,6 @@
+import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CHILD_NONE, CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
+import { CHILD_NONE, CREDIT_ALL, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
 import type { Transaction } from '../types'
 
 const rootOf = (id: string) => ({ p1: 'p1', c1: 'p1', c2: 'p2' } as Record<string, string>)[id]
@@ -82,5 +83,43 @@ describe('matchesFilter', () => {
     expect(matchesFilter(tx(), f({ type: 'expense', parentId: 'p1' }), rootOf)).toBe(true)
     expect(matchesFilter(tx(), f({ type: 'income', parentId: 'p1' }), rootOf)).toBe(false)
     expect(isFiltered(f({ type: 'income' }))).toBe(true)
+  })
+})
+
+describe('只看「外面隐藏」的记录', () => {
+  it('开着时只剩打了记号的，可以和别的条件叠加', () => {
+    // 变异：matchesFilter 去掉 hiddenOnly 那一行 → 红
+    const on = f({ hiddenOnly: true })
+    expect(matchesFilter(tx({ hidden: true }), on, rootOf)).toBe(true)
+    expect(matchesFilter(tx({ hidden: null }), on, rootOf)).toBe(false)
+    expect(matchesFilter(tx({ hidden: true, type: 'income' }), f({ hiddenOnly: true, type: 'expense' }), rootOf)).toBe(false)
+    expect(isFiltered(on)).toBe(true) // 变异：isFiltered 不看 hiddenOnly → 红
+  })
+
+  it('旧版本存下的筛选条件没有这个字段，当没开', () => {
+    const old = { type: 'all', accountId: 'all', parentId: 'all', childId: 'all' } as LedgerFilter
+    expect(matchesFilter(tx({ hidden: null }), old, rootOf)).toBe(true)
+    expect(isFiltered(old)).toBe(false)
+  })
+
+  it('外页面一律当没开：条件记两小时，人在里页面开着、App 自动退回外页面时不能跟过去', () => {
+    // 变异：effectiveFilter 里 mode 判断去掉 → 红
+    const on = f({ hiddenOnly: true, type: 'income' })
+    const outer = effectiveFilter(on, 'outer')
+    expect(outer.hiddenOnly).toBe(false)
+    expect(outer.type).toBe('income') // 别的条件照旧
+    expect(isFiltered(effectiveFilter(f({ hiddenOnly: true }), 'outer'))).toBe(false) // 标签也不能亮
+    expect(effectiveFilter(on, 'inner')).toBe(on) // 里页面原样
+    expect(effectiveFilter(f({ type: 'income' }), 'outer')).toEqual(f({ type: 'income' }))
+  })
+
+  it('流水页必须用 effectiveFilter 之后的条件筛列表、亮标签', () => {
+    // 页面测不了，守源码。变异：matchesFilter(t, eff → matchesFilter(t, filter → 红
+    const src = readFileSync(new URL('../pages/Ledger.tsx', import.meta.url), 'utf8')
+    expect(src).toMatch(/effectiveFilter\(filter, mode\)/)
+    expect(src).toMatch(/matchesFilter\(t, eff,/)
+    expect(src).toMatch(/isFiltered\(eff\)/)
+    expect(src).not.toMatch(/matchesFilter\(t, filter,/)
+    expect(src).not.toMatch(/isFiltered\(filter\)/)
   })
 })

@@ -11,7 +11,7 @@ import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
 import { outerTxs, visibleTxs } from '../lib/facade'
-import { CHILD_NONE, CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
+import { CHILD_NONE, CREDIT_ALL, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 
@@ -75,7 +75,10 @@ export function Ledger() {
   // 所以一旦输入内容，月份就不参与过滤了，顶上的月份选择器也收起来。
   const searching = q.trim() !== ''
   const [filter, setFilter] = useRecentState<LedgerFilter>('jz_ledger_filter', NO_FILTER)
+  // 外页面下「只看隐藏的」一律当没开（理由见 effectiveFilter）。列表、标签、合计全用 eff，不用 filter
+  const eff = useMemo(() => effectiveFilter(filter, mode), [filter, mode])
   const { type, accountId, parentId, childId } = filter
+  const setHiddenOnly = (hiddenOnly: boolean) => setFilter({ ...filter, hiddenOnly })
   const setType = (type: string) => setFilter({ ...filter, type })
   const setAccountId = (accountId: string) => setFilter({ ...filter, accountId })
   // 换一级分类就把二级清掉：上一个一级的二级挂在新一级下面是筛不出东西的
@@ -135,8 +138,8 @@ export function Ledger() {
       const c = catMap.get(id)
       return c ? (c.parent_id ?? c.id) : undefined
     }
-    return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, filter, rootOf, creditIds))
-  }, [vtxs, ym, filter, catMap, searching, q, names, creditIds])
+    return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, eff, rootOf, creditIds))
+  }, [vtxs, ym, eff, catMap, searching, q, names, creditIds])
 
   const totalsByMonth = useMemo(() => monthTotals(otxs), [otxs])
   const groups = useMemo(() => groupByDay(list), [list])
@@ -173,7 +176,7 @@ export function Ledger() {
   // list 已经按 inMonth 过滤过，monthSummary 里那次判断只是冗余。
   const sum = useMemo(() => monthSummary(list, ym), [list, ym])
   const hits = useMemo(() => searchSummary(list), [list])
-  const filtered = isFiltered(filter)
+  const filtered = isFiltered(eff)
 
   return (
     <div className="pb-6">
@@ -347,6 +350,21 @@ export function Ledger() {
             onChange={setChildId}
             className="mb-4 pl-2.5 border-l-2 border-brand"
           />
+        ) : null}
+        {mode === 'inner' ? (
+          <>
+            {/* 只在里页面出现。外页面的筛选弹层里没有这一项，那边不能有任何暗示「有东西被藏了」的字 */}
+            <div className="text-xs text-muted mb-2">外面隐藏</div>
+            <ChipGroup
+              options={[
+                { id: 'all', label: '全部' },
+                { id: 'only', label: '只看藏起来的' },
+              ]}
+              value={filter.hiddenOnly ? 'only' : 'all'}
+              onChange={(id) => setHiddenOnly(id === 'only')}
+              className="mb-4"
+            />
+          </>
         ) : null}
         <div className="flex gap-2">
           <button

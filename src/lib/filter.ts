@@ -1,5 +1,6 @@
 import type { Transaction } from '../types'
 import { isFlow } from './compute'
+import type { Mode } from './facade'
 
 /** 账户筛选里的「白条」：四个平台一起筛 */
 export const CREDIT_ALL = 'credit'
@@ -19,12 +20,25 @@ export interface LedgerFilter {
   accountId: string
   parentId: string
   childId: string
+  /** 只看打了「外面隐藏」记号的记录。只在里页面有意义；旧版本存下的筛选条件没有这个字段，当 false */
+  hiddenOnly?: boolean
 }
 
-export const NO_FILTER: LedgerFilter = { type: 'all', accountId: 'all', parentId: 'all', childId: 'all' }
+export const NO_FILTER: LedgerFilter = { type: 'all', accountId: 'all', parentId: 'all', childId: 'all', hiddenOnly: false }
+
+/**
+ * 当前模式下真正生效的筛选。**外页面一律当「只看隐藏的」没开**：
+ * 筛选条件会记住两小时，用户在里页面开着它、60 秒后 App 自动退回外页面，
+ * 要是条件跟过去，外页面就是一个空列表加一个亮着的「已筛选」标签——等于告诉别人有东西被筛掉了。
+ * 里页面原样返回同一个对象。
+ */
+export function effectiveFilter(f: LedgerFilter, mode: Mode): LedgerFilter {
+  if (mode === 'inner' || !f.hiddenOnly) return f
+  return { ...f, hiddenOnly: false }
+}
 
 export function isFiltered(f: LedgerFilter): boolean {
-  return f.type !== 'all' || f.accountId !== 'all' || f.parentId !== 'all'
+  return f.type !== 'all' || f.accountId !== 'all' || f.parentId !== 'all' || Boolean(f.hiddenOnly)
 }
 
 /**
@@ -33,6 +47,7 @@ export function isFiltered(f: LedgerFilter): boolean {
  */
 export function matchesFilter(t: Transaction, f: LedgerFilter, rootOf: (catId: string) => string | undefined, creditIds: ReadonlySet<string> = new Set()): boolean {
   if (f.type !== 'all' && t.type !== f.type) return false
+  if (f.hiddenOnly && !t.hidden) return false
   if (f.accountId === 'none') {
     if (t.account_id) return false
   } else if (f.accountId === CREDIT_ALL) {
