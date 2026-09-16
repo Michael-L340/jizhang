@@ -297,6 +297,8 @@ export function Entry() {
   // 开了「还款后顺延」的账户（京东）还要看这个周期有没有还过款——漏传的话预览说 9/17、
   // 存完账户页说 10/17，两个数对不上
   const creditAcc = accountId ? (credits.find((c) => c.id === accountId) ?? null) : null
+  // 白条不参与里外：涉及白条账户的记录（白条消费、还款转账）不给「外面隐藏」开关，藏了面板会对不上
+  const involvesCredit = credits.some((c) => c.id === accountId || c.id === fromId || c.id === toId)
   const defer = creditAcc ? paidThisCycle({ date }, creditAcc, txs) : false
   const plan = onCredit && cents > 0 && instOk ? installmentPlan({ date, amount: cents, installments: instN }, creditAcc?.repay_day ?? null, defer) : null
 
@@ -343,7 +345,7 @@ export function Entry() {
       // 结清关系在账户页那个面板里改，这一页不显示它。这里必须原样带回去——
       // 写 null 的话，从流水点开一笔还款只改了个金额，勾过的结清就被悄悄抹掉了
       settles: editing?.settles ?? null,
-      hidden: hidden ? true : null,
+      hidden: hidden && !involvesCredit ? true : null,
       created_at: editing?.created_at ?? nowIso(),
     }
     const ok = editing ? await editTx(tx) : await addTx(tx)
@@ -554,8 +556,8 @@ export function Entry() {
           <button type="button" className={`chip flex-1 text-left truncate ${note ? '' : 'text-muted'}`} onClick={toggleNote}>
             {note || '备注（可不填）'}
           </button>
-          {mode === 'inner' ? (
-            <button type="button" className={`chip ${hidden ? 'on' : 'text-muted'}`} title="外页面的列表里不显示这一笔；余额和统计照常" onClick={() => setHidden((v) => !v)}>
+          {mode === 'inner' && !involvesCredit ? (
+            <button type="button" className={`chip ${hidden ? 'on' : 'text-muted'}`} title="外页面当这一笔不存在：列表、余额、曲线、统计都不算它" onClick={() => setHidden((v) => !v)}>
               {hidden ? '外面隐藏 ·' : '外面隐藏'}
             </button>
           ) : null}

@@ -7,7 +7,7 @@ import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
 import type { BillRow, CreditBill } from '../lib/compute'
 import { daysBetween, fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
-import { applyFacade, lastAdjustAt, normalizeOffset, offsetFor, visibleTxs } from '../lib/facade'
+import { applyFacade, lastAdjustAt, normalizeOffset, offsetFor, outerTxs, visibleTxs } from '../lib/facade'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
@@ -26,6 +26,8 @@ export function Accounts() {
   const syncError = useStore((s) => s.syncError)
   const syncRetrying = useStore((s) => s.syncRetrying)
   const mode = useStore((s) => s.mode)
+  // 外页面的账本：藏了的记录整条不算。资产账户的余额吃它；白条那一套照旧吃原始 txs（白条不参与里外）
+  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
   const updateAccount = useStore((s) => s.updateAccount)
   const syncing = useStore((s) => s.syncing)
   const refresh = useStore((s) => s.refresh)
@@ -33,7 +35,7 @@ export function Accounts() {
   const accounts = useActiveAccounts()
   const catMap = useCategoryMap()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
-  const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
+  const bal = useMemo(() => balances(otxs, accounts), [otxs, accounts])
   // 外页面藏掉被修饰账户的校准：卡片右下的「本月 ±」走它。
   // 余额 0.00 底下挂一行「本月 +6,391.00」是最露馅的一处。余额本身仍然拿真实 txs 算。
   // 副标题的「上次校准」不走它，见 lastAdjustAt 的注释。

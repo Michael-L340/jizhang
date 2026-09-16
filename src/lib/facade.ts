@@ -56,20 +56,26 @@ export function isDecorated(a: Account): boolean {
  */
 export function visibleTxs(txs: Transaction[], accounts: Account[], mode: Mode): Transaction[] {
   if (mode === 'inner') return txs
+  const base = outerTxs(txs, mode)
   const hidden = new Set(accounts.filter(isDecorated).map((a) => a.id))
-  if (!hidden.size) return txs
-  return txs.filter((t) => !(t.type === 'adjust' && t.account_id !== null && hidden.has(t.account_id)))
+  if (!hidden.size) return base
+  return base.filter((t) => !(t.type === 'adjust' && t.account_id !== null && hidden.has(t.account_id)))
 }
 
 /**
- * 列表里该显示哪些行。外模式再过滤掉打了「外面不显示」记号的记录。
+ * 外页面的账本：打了「外面隐藏」记号的记录，在外模式下**当不存在**。
  *
- * 和 visibleTxs 分开：visibleTxs 是给余额、曲线、月度合计用的口径（外模式藏掉被修饰账户的校准），
- * 而 hidden **只藏列表这一行**——余额、曲线、收入支出统计照常算它（用户 2026-09-16 定的：
- * 「只是记录被隐藏了，流水、曲线不变」）。所以只有最近流水、流水页、搜索走这里，
- * 任何算钱的地方都不许走。里模式原样返回同一个数组。
+ * 这是外页面唯一的账本，所有算钱的地方——余额、总资产、本月收支、储蓄率、饼图、趋势、
+ * 月份选择器、余额曲线——只准吃它（facade.test.ts 有源码守卫）。列表和曲线形状走 visibleTxs，
+ * 它在这上面再藏一层被修饰账户的校准。
+ *
+ * 第一版（2026-09-16 上午）的口径是「只藏列表那一行，钱照算」，结果首页「本月支出 5,000」、
+ * 流水页顶上「4,700」，一个数字两个值——两套账本必然对不上。用户当天改口径为一本账：
+ * 藏了就整条不算。里模式原样返回同一个数组；没藏任何一笔时也返回同一个数组，页面的 useMemo 不重算。
+ *
+ * 白条不参与里外，记账页对涉及白条账户的记录不给这个开关（Entry.tsx）。
  */
-export function listableTxs(txs: Transaction[], mode: Mode): Transaction[] {
+export function outerTxs(txs: Transaction[], mode: Mode): Transaction[] {
   if (mode === 'inner') return txs
   return txs.some((t) => t.hidden) ? txs.filter((t) => !t.hidden) : txs
 }
@@ -98,7 +104,8 @@ export function lastAdjustAt(txs: Transaction[]): Map<string, string> {
 /**
  * 每个被修饰账户的校准合计（分）。只给外模式的余额曲线用。
  *
- * 注意要拿**全量** txs 来算，不能拿 visibleTxs 的结果——那里面校准已经被摘掉了。
+ * 要拿 outerTxs 的结果来算（外页面的账本），不能拿 visibleTxs 的结果——那里面校准已经被摘掉了；
+ * 也不能拿原始 txs——藏掉的校准不该算进外页面。
  */
 export function adjustTotals(txs: Transaction[], accounts: Account[]): Record<string, number> {
   const out: Record<string, number> = {}

@@ -4,7 +4,7 @@ import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
-import { applyFacade, listableTxs, visibleTxs } from '../lib/facade'
+import { applyFacade, outerTxs, visibleTxs } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { categoryColor } from '../lib/palette'
@@ -22,6 +22,8 @@ export function Home() {
   const refresh = useStore((s) => s.refresh)
   const outboxCount = useStore((s) => s.outboxCount)
   const mode = useStore((s) => s.mode)
+  // 外页面的账本：藏了的记录整条不算。这一页所有算钱的地方只准吃它（白条那几处除外，白条不参与里外）
+  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
   const flushOutbox = useStore((s) => s.flushOutbox)
   const accounts = useActiveAccounts()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
@@ -32,8 +34,8 @@ export function Home() {
   useTabReset()
 
   const ym = monthOf(today())
-  const sum = useMemo(() => monthSummary(txs, ym), [txs, ym])
-  const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
+  const sum = useMemo(() => monthSummary(otxs, ym), [otxs, ym])
+  const bal = useMemo(() => balances(otxs, accounts), [otxs, accounts])
   // 里外页面：外页面把资产账户的余额加上各自的偏移量，里页面原样。
   // 只有余额被修饰——上面的本月收支、储蓄率、下面的饼图和流水全是真的。
   // 白条不参与（applyFacade 里挡了），所以下面算欠款仍然用真实的 bal。
@@ -49,20 +51,19 @@ export function Home() {
   const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
   // 「接下来要还的钱」：各白条各按自己的还款日算本期，加起来。各家还款日不同，这是合计不是同一天
   const dueTotal = useMemo(() => [...dueNow(txs, credits, today()).values()].reduce((s, v) => s + v, 0), [txs, credits])
-  const agg = useMemo(() => byCategory(txs, cats, ym, 'expense'), [txs, cats, ym])
+  const agg = useMemo(() => byCategory(otxs, cats, ym, 'expense'), [otxs, cats, ym])
   // 和统计页共用 categoryColor：分类颜色跟着名字走，不跟名次走。
   // 以前这里是一串写死的颜色按名次发，同一个分类在两页颜色不一样，对着看会错乱；
   // 而且那串还是 09-05 换暖色主题之前的冷色。
   const pieColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
-  // 最近流水是列表，外页面还要过滤「外面不显示」的记录；上面算钱的都不过滤
-  const recent = useMemo(() => sortTxs(listableTxs(vtxs, mode)).slice(0, 5), [vtxs, mode])
+  const recent = useMemo(() => sortTxs(vtxs).slice(0, 5), [vtxs])
 
   const td = today()
   const dayStat = useMemo(() => {
     let expense = 0
     let income = 0
     let count = 0 // 只数支出笔数，这张卡讲的是今天花了多少
-    for (const t of txs) {
+    for (const t of otxs) {
       if (t.date !== td) continue
       if (t.type === 'expense') {
         expense += t.amount
@@ -72,7 +73,7 @@ export function Home() {
       }
     }
     return { expense, income, count }
-  }, [txs, td])
+  }, [otxs, td])
 
   const pieOption = useMemo(
     () => ({

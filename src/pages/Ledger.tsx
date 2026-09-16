@@ -10,7 +10,7 @@ import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
-import { listableTxs, visibleTxs } from '../lib/facade'
+import { outerTxs, visibleTxs } from '../lib/facade'
 import { CHILD_NONE, CREDIT_ALL, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -28,6 +28,7 @@ export function Ledger() {
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
   const mode = useStore((s) => s.mode)
+  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
   // 外页面藏掉被修饰账户的校准记录。列表、搜索、每日小计、顶上的月度合计全走它，
   // 少了这一条任何一处都能把里页面的校准漏出去。
   const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
@@ -128,9 +129,7 @@ export function Ledger() {
   const label = (c: Category) => (c.is_archived ? `${c.name}（已归档）` : c.name)
 
   const list = useMemo(() => {
-    // 「外面不显示」的记录在这里**不过滤**：月度合计、每日小计、搜索小计都要含着它，
-    // 和首页、统计页的数字保持一个口径（只藏行，不藏钱）。行的过滤放在渲染那一步（listableTxs）。
-    // 第一版在这里过滤过，结果首页「本月支出 5,000」、流水页顶上「4,700」，一个数字两个值。
+    // vtxs 已经是外页面的账本（藏了的记录整条不在），列表、合计、每日小计、搜索小计天然一个口径
     const base = searching ? searchTx(vtxs, q, names) : vtxs
     const rootOf = (id: string) => {
       const c = catMap.get(id)
@@ -139,7 +138,7 @@ export function Ledger() {
     return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, filter, rootOf, creditIds))
   }, [vtxs, ym, filter, catMap, searching, q, names, creditIds])
 
-  const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
+  const totalsByMonth = useMemo(() => monthTotals(otxs), [otxs])
   const groups = useMemo(() => groupByDay(list), [list])
 
   // 吸顶栏的真实高度：写死的数字会随内容变化而失准，滚动就会过头
@@ -293,7 +292,7 @@ export function Ledger() {
               </span>
             </div>
             <div className={`card mx-4 divide-y divide-line overflow-hidden ${target === g.date ? 'day-flash' : ''}`}>
-              {listableTxs(g.items, mode).map((t) => (
+              {g.items.map((t) => (
                 <TxRow key={t.id} tx={t} accounts={accMap} categories={catMap} onClick={() => nav(`/add?id=${t.id}`)} />
               ))}
             </div>

@@ -7,7 +7,7 @@
 //   四、外模式下被修饰账户的「余额校准」整条隐身，且曲线末点仍然等于账户页显示的那个数。
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { adjustTotals, applyFacade, facadeShift, isDecorated, lastAdjustAt, listableTxs, normalizeOffset, offsetFor, offsetOf, shiftSeries, visibleTxs } from './facade'
+import { adjustTotals, applyFacade, facadeShift, isDecorated, lastAdjustAt, normalizeOffset, offsetFor, offsetOf, outerTxs, shiftSeries, visibleTxs } from './facade'
 import { balanceSeries, balances } from './compute'
 import type { Account, Transaction } from '../types'
 
@@ -215,41 +215,84 @@ describe('账户页副标题「上次校准」：外页面下修饰过和没修�
   })
 })
 
-describe('「外面不显示」只藏列表这一行，不藏钱', () => {
-  // 用户 2026-09-16：「不是流水也消失，只是记录被隐藏了。流水，曲线不变。一般就收入需要隐藏」
+describe('「外面隐藏」：外页面当这一笔不存在', () => {
+  // 用户 2026-09-16 最终口径：藏了的记录在外页面整条不算——列表、余额、曲线、统计都不算。
+  // 第一版做成「只藏行、钱照算」，首页和流水页各出一个「本月支出」，对不上，当天推翻。
   const income = { ...tx('i1', '2026-09-10', 'income', 100000, 'wx'), hidden: true }
   const spend = tx('e1', '2026-09-11', 'expense', 3000, 'wx')
   const txs = [income, spend]
 
-  it('外页面的列表里没有它，里页面照常', () => {
-    // 变异：listableTxs 去掉 mode 判断 → 里页面也被藏，这条红
-    expect(listableTxs(txs, 'outer').map((t) => t.id)).toEqual(['e1'])
-    expect(listableTxs(txs, 'inner')).toBe(txs)
-  })
-
-  it('没有藏任何一笔时返回同一个数组，页面的 useMemo 不用重算', () => {
+  it('外页面的账本里没有它；里页面原样；没藏任何一笔时返回同一个数组', () => {
+    // 变异：outerTxs 去掉 mode 判断 → 里页面也被藏，红
+    expect(outerTxs(txs, 'outer').map((t) => t.id)).toEqual(['e1'])
+    expect(outerTxs(txs, 'inner')).toBe(txs)
     const one = [spend]
-    expect(listableTxs(one, 'outer')).toBe(one)
+    expect(outerTxs(one, 'outer')).toBe(one)
   })
 
-  it('余额、曲线、月度合计都照常算它——藏与不藏，钱一分不差', () => {
-    // 变异：让 visibleTxs 顺手过滤 hidden → 余额少 1,000，这条红
-    const shown = [{ ...income, hidden: null }, spend]
-    expect(balances(visibleTxs(txs, ALL, 'outer'), ALL)).toEqual(balances(visibleTxs(shown, ALL, 'outer'), ALL))
-    expect(balances(txs, ALL).wx).toBe(97000)
+  it('外页面的余额不含它，里页面含', () => {
+    // 变异：visibleTxs 不先过 outerTxs → 列表里出现藏掉的行；balances 那条由源码守卫兜
+    expect(balances(outerTxs(txs, 'outer'), ALL).wx).toBe(-3000)
+    expect(balances(outerTxs(txs, 'inner'), ALL).wx).toBe(97000)
+    expect(visibleTxs(txs, ALL, 'outer').map((t) => t.id)).toEqual(['e1'])
   })
 
-  it('只有列表页走 listableTxs；算钱的文件一个字都不许提它', () => {
-    // 页面测不了，守源码。变异：Home.tsx 的 recent 改回 sortTxs(vtxs) → 红
-    const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8')
-    expect(read('../pages/Home.tsx')).toMatch(/listableTxs\(/)
-    const ledger = read('../pages/Ledger.tsx')
-    expect(ledger).toMatch(/listableTxs\(g\.items/) // 只在渲染行那一步过滤
-    // 合计那条链不许过它：searchTx / monthSummary 吃的必须是没过滤的 vtxs（变异：改回 searchTx(rows…) → 红）
-    expect(ledger).not.toMatch(/const rows = listableTxs/)
-    expect(ledger).not.toMatch(/searchTx\(rows/)
-    for (const p of ['../pages/Stats.tsx', './compute.ts', './chart.ts']) {
-      expect(read(p), `${p} 不该碰 hidden`).not.toMatch(/listableTxs|\.hidden/)
+  it('不变量：随机藏一批、随机挑一天问，账户页显示的数 ≡ 曲线末点 ≡ 外页面看得见的记录之和 + 偏移量 + 藏掉的校准合计', () => {
+    // 这一条同时守住三条路径（余额 / 曲线 / 列表）吃的是同一本账。
+    // 固定种子 LCG，红了能复现。变异：让 applyFacade 那条路吃原始 txs（去掉 outerTxs）→ 红
+    let seed = 20260916
+    const rnd = () => (seed = (seed * 1103515245 + 12345) % 2147483648) / 2147483648
+    const days = Array.from({ length: 40 }, (_, i) => `2026-09-${String(1 + (i % 28)).padStart(2, '0')}`).sort()
+    const ledger: Transaction[] = days.map((d, i) => {
+      const kind = rnd()
+      const acc = ['boc', 'cmb', 'wx'][i % 3]
+      const t =
+        kind < 0.5 ? tx(`t${i}`, d, 'expense', 100 + Math.floor(rnd() * 5000), acc)
+        : kind < 0.8 ? tx(`t${i}`, d, 'income', 1000 + Math.floor(rnd() * 20000), acc)
+        : kind < 0.9 ? { ...tx(`t${i}`, d, 'transfer', 500 + Math.floor(rnd() * 3000), acc), to_account_id: acc === 'boc' ? 'wx' : 'boc' }
+        : tx(`t${i}`, d, 'adjust', Math.floor(rnd() * 8000) - 4000, acc)
+      return rnd() < 0.3 ? { ...t, hidden: true } : t
+    })
+    expect(ledger.some((t) => t.hidden)).toBe(true)
+    for (const mode of ['outer', 'inner'] as const) {
+      for (const probe of ['2026-09-05', '2026-09-12', '2026-09-20', '2026-09-28']) {
+        const upTo = ledger.filter((t) => t.date <= probe)
+        const otxs = outerTxs(upTo, mode)
+        const shown = applyFacade(balances(otxs, ALL), ALL, mode) // 账户页
+        const keys = days.filter((d) => d <= probe)
+        const curve = shiftSeries(balanceSeries(visibleTxs(upTo, ALL, mode), ALL, keys, 'day'), ALL, mode, adjustTotals(otxs, ALL)) // 统计页
+        const listed = balances(visibleTxs(upTo, ALL, mode), ALL) // 列表里看得见的记录之和
+        for (const a of [boc, cmb, wx]) {
+          const last = curve.byAccount[a.id][curve.byAccount[a.id].length - 1]
+          if (shown[a.id] !== last) expect.fail(`${mode} ${probe} ${a.id}：账户页 ${shown[a.id]} ≠ 曲线末点 ${last}`)
+          const expect_ = listed[a.id] + (mode === 'outer' ? offsetOf(a) + (adjustTotals(otxs, ALL)[a.id] ?? 0) : 0)
+          if (shown[a.id] !== expect_) expect.fail(`${mode} ${probe} ${a.id}：账户页 ${shown[a.id]} ≠ 列表之和+偏移+藏掉的校准 ${expect_}`)
+        }
+        // 外页面的余额 = 里页面的余额 − 藏掉的记录对该账户的影响（藏的钱确实不在外面）
+        if (mode === 'outer') {
+          const inner = balances(upTo, ALL)
+          const hiddenOnly = balances(upTo.filter((t) => t.hidden), ALL)
+          for (const a of [boc, cmb, wx]) {
+            const got = shown[a.id] - offsetOf(a)
+            if (got !== inner[a.id] - (hiddenOnly[a.id] ?? 0)) expect.fail(`${probe} ${a.id}：外 ${got} ≠ 里 ${inner[a.id]} − 藏 ${hiddenOnly[a.id]}`)
+          }
+        }
+      }
     }
+  })
+
+  it('页面里算钱的地方一律不许吃原始 txs——只准吃 otxs / vtxs', () => {
+    // 页面测不了（没有 DOM），守源码。第一版漏的正是这里：12 处调用各吃各的。
+    // 变异：把 Home 的 monthSummary(otxs 改回 monthSummary(txs → 红
+    const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8')
+    const money = /(monthSummary|byCategory|balances|monthTotals|firstFlowDate|adjustTotals|seriesTotals|seriesByCategory|balanceSeries|searchTx)\(\s*txs\b/
+    for (const p of ['../pages/Home.tsx', '../pages/Stats.tsx', '../pages/Ledger.tsx', '../pages/Accounts.tsx']) {
+      const src = read(p)
+      expect(src, `${p} 里有算钱的函数直接吃了原始 txs`).not.toMatch(money)
+      expect(src, `${p} 必须建 otxs`).toMatch(/outerTxs\(txs, mode\)/)
+    }
+    expect(read('../pages/Home.tsx')).not.toMatch(/for \(const t of txs\)/) // 今日收支那个循环
+    expect(read('../pages/Ledger.tsx')).toMatch(/g\.items\.map/) // 行不再单独过滤
+    for (const p of ['./compute.ts', './chart.ts']) expect(read(p), `${p} 不该碰 hidden`).not.toMatch(/\.hidden/)
   })
 })

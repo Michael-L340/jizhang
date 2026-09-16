@@ -9,7 +9,7 @@ import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthT
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { axisLabels, gridTopFor, legendRows, shortLabels } from '../lib/chart'
-import { adjustTotals, shiftSeries, visibleTxs } from '../lib/facade'
+import { adjustTotals, outerTxs, shiftSeries, visibleTxs } from '../lib/facade'
 import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, CHART, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
@@ -30,6 +30,8 @@ export function Stats() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
   const mode = useStore((s) => s.mode)
+  // 外页面的账本：藏了的记录整条不算。这一页所有算钱的地方只准吃它
+  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
   // 余额曲线只画资产账户：白条是欠款，用户不要它出现在曲线里，合计线也只算资产
   const allAccounts = useActiveAccounts()
   const accounts = useMemo(() => splitAccounts(allAccounts).assets, [allAccounts])
@@ -55,7 +57,7 @@ export function Stats() {
   // 月份、收支、时间范围都是用户为了看某段趋势刚挑的，一起清掉反而烦人。
   useTabReset(() => setDrill(null))
 
-  const agg = useMemo(() => byCategory(txs, cats, ym, kind), [txs, cats, ym, kind])
+  const agg = useMemo(() => byCategory(otxs, cats, ym, kind), [otxs, cats, ym, kind])
   const rootColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
 
   const drillIdx = drill ? agg.findIndex((a) => a.id === drill) : -1
@@ -92,7 +94,7 @@ export function Stats() {
     [pieRows, pieColors],
   )
 
-  const earliest = useMemo(() => firstFlowDate(txs), [txs])
+  const earliest = useMemo(() => firstFlowDate(otxs), [otxs])
 
   /**
    * 下钻之后点某个二级分类 → 跳到流水页，月份、收支、一级、二级都替用户筛好。
@@ -133,7 +135,7 @@ export function Stats() {
   // 趋势必须先按真实区间裁一刀。bucketKeys 在「按月」时会把两端折成整月，
   // 而 seriesTotals 只按 monthOf(date) 匹配桶键、从不看端点：选 6月1日–6月10日，
   // 算出来的是整个 6 月。非自定义区间的端点本来就对齐月初月末，这一刀是空操作。
-  const inRange = useMemo(() => txs.filter((t) => t.date >= tStart && t.date <= tEnd), [txs, tStart, tEnd])
+  const inRange = useMemo(() => otxs.filter((t) => t.date >= tStart && t.date <= tEnd), [otxs, tStart, tEnd])
   const trendTotal = useMemo(() => seriesTotals(inRange, keys, unit, trendKind), [inRange, keys, unit, trendKind])
   const trendByCat = useMemo(() => seriesByCategory(inRange, cats, keys, unit, trendKind), [inRange, cats, keys, unit, trendKind])
   const trendSum = useMemo(() => trendTotal.reduce((a, b) => a + b, 0), [trendTotal])
@@ -280,9 +282,9 @@ export function Stats() {
 
   // 里外页面：外模式先把被修饰账户的校准从流水里摘掉，再按「偏移量 + 该账户校准合计」平移。
   // 两件事必须配对，理由和算式写在 facade.ts 的 shiftSeries 上。
-  // adjustTotals 要拿全量 txs 算——curveTxs 里校准已经没了。
+  // adjustTotals 要拿 otxs 算——curveTxs 里校准已经没了，而原始 txs 里有藏掉的。
   const curveTxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
-  const adjusts = useMemo(() => adjustTotals(txs, accounts), [txs, accounts])
+  const adjusts = useMemo(() => adjustTotals(otxs, accounts), [otxs, accounts])
   const bal = useMemo(
     () => shiftSeries(balanceSeries(curveTxs, accounts, keys, unit), accounts, mode, adjusts),
     [curveTxs, accounts, keys, unit, mode, adjusts],
@@ -350,7 +352,7 @@ export function Stats() {
     }
   }, [bal, accounts, keys, balAxis, fewPoints, unit, balMode])
 
-  const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
+  const totalsByMonth = useMemo(() => monthTotals(otxs), [otxs])
   const roots = useMemo(() => cats.filter((c) => !c.parent_id && c.kind === 'expense' && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
 
   return (
