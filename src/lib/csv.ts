@@ -12,7 +12,7 @@ function esc(v: string | null | undefined): string {
 export function buildCsv(snap: Snapshot): string {
   const acc = new Map(snap.accounts.map((a) => [a.id, a.name]))
   const cat = new Map(snap.categories.map((c) => [c.id, c]))
-  const header = ['日期', '类型', '金额', '一级分类', '二级分类', '账户', '转入账户', '备注', '分期', '结清', '外面不显示', 'ID']
+  const header = ['日期', '类型', '金额', '一级分类', '二级分类', '账户', '转入账户', '备注', '分期', '结清', 'ID']
   const lines = [header.join(',')]
   const sorted = [...snap.transactions].sort((a, b) => (a.date === b.date ? (a.created_at < b.created_at ? -1 : 1) : a.date < b.date ? -1 : 1))
   for (const t of sorted) {
@@ -31,8 +31,8 @@ export function buildCsv(snap: Snapshot): string {
         esc(t.note),
         t.installments ? `${t.installments}期` : '',
         // 结清的是哪几单对人没意义（一串 uuid），写单数就够；机器恢复走 JSON 不走 CSV
+        // 「外面不显示」的记号不进 CSV：CSV 是给人看的，表头印着这个功能名等于自曝；机器恢复走 JSON，那边带着
         t.settles?.length ? `${t.settles.length}单` : '',
-        t.hidden ? '是' : '',
         t.id,
       ].join(','),
     )

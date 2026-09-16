@@ -243,7 +243,11 @@ describe('「外面不显示」只藏列表这一行，不藏钱', () => {
     // 页面测不了，守源码。变异：Home.tsx 的 recent 改回 sortTxs(vtxs) → 红
     const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8')
     expect(read('../pages/Home.tsx')).toMatch(/listableTxs\(/)
-    expect(read('../pages/Ledger.tsx')).toMatch(/listableTxs\(/)
+    const ledger = read('../pages/Ledger.tsx')
+    expect(ledger).toMatch(/listableTxs\(g\.items/) // 只在渲染行那一步过滤
+    // 合计那条链不许过它：searchTx / monthSummary 吃的必须是没过滤的 vtxs（变异：改回 searchTx(rows…) → 红）
+    expect(ledger).not.toMatch(/const rows = listableTxs/)
+    expect(ledger).not.toMatch(/searchTx\(rows/)
     for (const p of ['../pages/Stats.tsx', './compute.ts', './chart.ts']) {
       expect(read(p), `${p} 不该碰 hidden`).not.toMatch(/listableTxs|\.hidden/)
     }

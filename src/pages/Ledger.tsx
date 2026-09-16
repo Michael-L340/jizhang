@@ -128,16 +128,16 @@ export function Ledger() {
   const label = (c: Category) => (c.is_archived ? `${c.name}（已归档）` : c.name)
 
   const list = useMemo(() => {
-    // 列表和搜索在外页面还要过滤「外面不显示」的记录。这一页的月度合计和每日小计跟着列表走
-    // （和筛选一样的口径：数字说的是「你看到的这些行」）；首页和统计页的数字不受影响
-    const rows = listableTxs(vtxs, mode)
-    const base = searching ? searchTx(rows, q, names) : rows
+    // 「外面不显示」的记录在这里**不过滤**：月度合计、每日小计、搜索小计都要含着它，
+    // 和首页、统计页的数字保持一个口径（只藏行，不藏钱）。行的过滤放在渲染那一步（listableTxs）。
+    // 第一版在这里过滤过，结果首页「本月支出 5,000」、流水页顶上「4,700」，一个数字两个值。
+    const base = searching ? searchTx(vtxs, q, names) : vtxs
     const rootOf = (id: string) => {
       const c = catMap.get(id)
       return c ? (c.parent_id ?? c.id) : undefined
     }
     return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, filter, rootOf, creditIds))
-  }, [vtxs, mode, ym, filter, catMap, searching, q, names, creditIds])
+  }, [vtxs, ym, filter, catMap, searching, q, names, creditIds])
 
   const totalsByMonth = useMemo(() => monthTotals(txs), [txs])
   const groups = useMemo(() => groupByDay(list), [list])
@@ -293,7 +293,7 @@ export function Ledger() {
               </span>
             </div>
             <div className={`card mx-4 divide-y divide-line overflow-hidden ${target === g.date ? 'day-flash' : ''}`}>
-              {g.items.map((t) => (
+              {listableTxs(g.items, mode).map((t) => (
                 <TxRow key={t.id} tx={t} accounts={accMap} categories={catMap} onClick={() => nav(`/add?id=${t.id}`)} />
               ))}
             </div>

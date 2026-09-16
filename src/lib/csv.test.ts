@@ -1,7 +1,7 @@
 // 导入文件的校验。整库恢复会先删光云端再按这个文件重建，所以文件必须先验过——
 // 这里每一条都对应一种「文件坏了但看起来正常」的情况。
 import { describe, expect, it } from 'vitest'
-import { backupFilename, buildJson, exportTrustworthy, parseImport, readExportMeta } from './csv'
+import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta } from './csv'
 import type { Account, Category, Snapshot, Transaction } from '../types'
 
 // id 用真的 UUID：数据库三张表的 id 都是 uuid 列，'a1' 这种字符串根本进不去（22P02），
@@ -48,6 +48,13 @@ describe('parseImport', () => {
   })
 
   // 变异：validate.ts 的 readTx 里去掉 `hidden: hiddenOf(...)` → 导入后这一列丢了，这条红
+  it('CSV 不带「外面不显示」那一列——表头印着功能名等于自曝，记号只走 JSON', () => {
+    const withHidden: Snapshot = { ...snap, transactions: [{ ...tx, hidden: true }] }
+    const csv = buildCsv(withHidden)
+    expect(csv).not.toMatch(/隐藏|不显示|hidden/)
+    expect(buildJson(withHidden)).toContain('"hidden": true')
+  })
+
   it('「外面不显示」导出再导入不变——它是真数据，备份必须带着', () => {
     const withHidden: Snapshot = { ...snap, transactions: [{ ...tx, hidden: true }] }
     expect(parseImport(buildJson(withHidden))).toEqual(withHidden)
