@@ -162,6 +162,13 @@ function deferOf(v: unknown, fail: Fail): boolean | null {
   return v as boolean
 }
 
+/** 0009：「外面不显示」。旧备份没有这一列，按 null 处理 */
+function hiddenOf(v: unknown, fail: Fail): boolean | null {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'boolean') fail(`的「外面不显示」不对（读到 ${JSON.stringify(v)}），只能是 true、false 或留空`)
+  return v as boolean
+}
+
 /**
  * 0007：里外页面的对外余额偏移量（整数「分」，可正可负）。旧备份没有这一列，按 null 处理。
  * 这个函数是显式构造 Account 的那一步——漏了它，备份文件里明明有这一列，
@@ -225,6 +232,7 @@ function readTransaction(v: unknown, i: number): Transaction {
     note: textOf(r.note, '备注', fail),
     installments: inst as number | null,
     settles: settlesOf(r.settles, fail),
+    hidden: hiddenOf(r.hidden, fail),
     created_at: r.created_at as string,
   }
 }

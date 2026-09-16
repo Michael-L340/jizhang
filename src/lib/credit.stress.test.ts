@@ -56,6 +56,7 @@ function makeLedger(seed: number): Ledger {
       note: null,
       installments: r() < 0.4 ? int(2, 12) : null,
       settles: null,
+      hidden: null,
       created_at: stamp(),
     }
     buys.push(t)
@@ -81,6 +82,7 @@ function makeLedger(seed: number): Ledger {
       note: null,
       installments: null,
       settles: target ? [target.id] : null,
+      hidden: null,
       created_at: stamp(),
     })
   }
@@ -170,7 +172,7 @@ describe('白条账单：随机账本压力测试', () => {
       const day = l.days[Math.floor(r() * l.days.length)]
       const withPay: Transaction[] = [
         ...l.txs,
-        { id: 'extra', date: day, type: 'transfer', amount: extra, account_id: 'boc', to_account_id: l.acc.id, category_id: null, note: null, installments: null, settles: null, created_at: '2026-01-01T23:59:59.999Z' },
+        { id: 'extra', date: day, type: 'transfer', amount: extra, account_id: 'boc', to_account_id: l.acc.id, category_id: null, note: null, installments: null, settles: null, hidden: null, created_at: '2026-01-01T23:59:59.999Z' },
       ]
       for (const d of l.days) {
         const b = creditBill(withPay, l.acc, d)
@@ -258,8 +260,8 @@ describe('白条账单：随机账本压力测试', () => {
     // 这时「未还合计 ≡ 欠款」不再成立：那单整单退出账单，而钱只给了一部分。
     // 写在这里是为了把它钉成**已知行为**，哪天有人顺手改掉了会红。
     const acc: Account = { id: 'c', name: '白条', kind: 'credit', sort: 0, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }
-    const cup: Transaction = { id: 'cup', date: '2026-09-01', type: 'expense', amount: 599, account_id: 'c', to_account_id: null, category_id: 'x', note: null, installments: null, settles: null, created_at: '2026-09-01T00:00:01.000Z' }
-    const short: Transaction = { id: 'p', date: '2026-09-02', type: 'transfer', amount: 300, account_id: 'boc', to_account_id: 'c', category_id: null, note: null, installments: null, settles: ['cup'], created_at: '2026-09-02T00:00:01.000Z' }
+    const cup: Transaction = { id: 'cup', date: '2026-09-01', type: 'expense', amount: 599, account_id: 'c', to_account_id: null, category_id: 'x', note: null, installments: null, settles: null, hidden: null, created_at: '2026-09-01T00:00:01.000Z' }
+    const short: Transaction = { id: 'p', date: '2026-09-02', type: 'transfer', amount: 300, account_id: 'boc', to_account_id: 'c', category_id: null, note: null, installments: null, settles: ['cup'], hidden: null, created_at: '2026-09-02T00:00:01.000Z' }
     const b = creditBill([cup, short], acc, '2026-09-10')
     expect(b.rows).toEqual([]) // 杯子被当成整单结清，退出账单
     expect(b.left).toBe(0)

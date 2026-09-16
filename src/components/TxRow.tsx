@@ -67,7 +67,11 @@ export function TxRow({ tx, accounts, categories, onClick, showDate }: Props) {
         </span>
       )}
       <span className="flex-1 min-w-0">
-        <span className="block truncate text-[15px]">{d.title}</span>
+        <span className="block truncate text-[15px]">
+          {d.title}
+          {/* 「外面不显示」的记号。外页面根本不渲染这种行（listableTxs 过滤掉了），所以它只会出现在里页面 */}
+          {tx.hidden ? <span className="ml-1.5 align-[1px] text-[10px] text-muted border border-line rounded px-1">隐</span> : null}
+        </span>
         <span className="block truncate text-xs text-muted">
           {showDate ? `${showDate} · ` : ''}
           {d.sub}

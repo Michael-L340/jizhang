@@ -24,6 +24,7 @@ const tx: Transaction = {
   note: '午饭',
   installments: null,
   settles: null,
+  hidden: null,
   created_at: '2026-09-04T02:00:00.000Z',
 }
 const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx] }
@@ -44,6 +45,12 @@ describe('parseImport', () => {
   it('img: 图标导出再导入不变——icon 不只装 emoji', () => {
     const withImg: Snapshot = { ...snap, categories: [{ ...cat, icon: 'img:lunch' }] }
     expect(parseImport(buildJson(withImg))).toEqual(withImg)
+  })
+
+  // 变异：validate.ts 的 readTx 里去掉 `hidden: hiddenOf(...)` → 导入后这一列丢了，这条红
+  it('「外面不显示」导出再导入不变——它是真数据，备份必须带着', () => {
+    const withHidden: Snapshot = { ...snap, transactions: [{ ...tx, hidden: true }] }
+    expect(parseImport(buildJson(withHidden))).toEqual(withHidden)
   })
 
   it('金额不是整数分就拒绝——这是「元当成分」那类错误的唯一防线', () => {
@@ -92,7 +99,7 @@ describe('parseImport', () => {
 
   it('数据库没有的列也要扔掉，否则 PostgREST 会说 column does not exist', () => {
     const out = parseImport(file({ transactions: [{ ...tx, 备注2: '手写脚本加的' }] }))
-    expect(Object.keys(out.transactions[0]).sort()).toEqual(['account_id', 'amount', 'category_id', 'created_at', 'date', 'id', 'installments', 'note', 'settles', 'to_account_id', 'type'])
+    expect(Object.keys(out.transactions[0]).sort()).toEqual(['account_id', 'amount', 'category_id', 'created_at', 'date', 'hidden', 'id', 'installments', 'note', 'settles', 'to_account_id', 'type'])
   })
 
   // 账户也守一遍。加一列而 readAccount 忘了收，备份文件里有、导进去却是空的，静默丢数据。

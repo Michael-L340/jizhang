@@ -29,6 +29,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount'> & { a
     note: null,
     installments: null,
     settles: null,
+    hidden: null,
     created_at: new Date(Date.UTC(2026, 8, 3, 0, 0, seq)).toISOString(), // 严格递增，不能用 seq % 10 那种会回绕的写法
     ...p,
   }

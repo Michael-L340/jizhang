@@ -18,6 +18,7 @@ import mig0005 from '../../supabase/migrations/0005_installments.sql?raw'
 import mig0006 from '../../supabase/migrations/0006_repay_day_and_settles.sql?raw'
 import mig0007 from '../../supabase/migrations/0007_facade_offset.sql?raw'
 import mig0008 from '../../supabase/migrations/0008_defer_after_repay.sql?raw'
+import mig0009 from '../../supabase/migrations/0009_hidden_transaction.sql?raw'
 import type { Snapshot } from '../types'
 import { centsFromDb, centsToDb } from './money'
 import { validateImport } from './validate'
@@ -42,6 +43,7 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0006)
   await db.exec(mig0007)
   await db.exec(mig0008)
+  await db.exec(mig0009)
   return db
 }
 
@@ -60,7 +62,7 @@ async function exportBackup(db: PGlite): Promise<Snap> {
   return {
     accounts: await q(db, 'select id,name,kind,sort,is_archived,repay_day,facade_offset,defer_after_repay from accounts'),
     categories: await q(db, 'select id,kind,parent_id,name,icon,sort,is_archived,note from categories'),
-    transactions: (await q(db, 'select id,date::text as date,type,amount,account_id,to_account_id,category_id,note,installments,settles,created_at from transactions')).map((t) => ({
+    transactions: (await q(db, 'select id,date::text as date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,created_at from transactions')).map((t) => ({
       ...t,
       amount: centsFromDb(t.amount as string),
     })),
@@ -88,9 +90,9 @@ async function importRefs(db: PGlite, snap: Snap): Promise<void> {
 
 async function insertTx(db: PGlite, t: Row): Promise<void> {
   await db.query(
-    `insert into transactions (id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-     on conflict (id) do update set date=excluded.date,type=excluded.type,amount=excluded.amount,account_id=excluded.account_id,to_account_id=excluded.to_account_id,category_id=excluded.category_id,note=excluded.note,installments=excluded.installments,settles=excluded.settles`,
-    [t.id, t.date, t.type, centsToDb(t.amount as number), t.account_id, t.to_account_id, t.category_id, t.note, t.installments ?? null, t.settles ?? null, t.created_at],
+    `insert into transactions (id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+     on conflict (id) do update set date=excluded.date,type=excluded.type,amount=excluded.amount,account_id=excluded.account_id,to_account_id=excluded.to_account_id,category_id=excluded.category_id,note=excluded.note,installments=excluded.installments,settles=excluded.settles,hidden=excluded.hidden`,
+    [t.id, t.date, t.type, centsToDb(t.amount as number), t.account_id, t.to_account_id, t.category_id, t.note, t.installments ?? null, t.settles ?? null, t.hidden ?? null, t.created_at],
   )
 }
 

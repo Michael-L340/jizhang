@@ -7,7 +7,7 @@
 //   四、外模式下被修饰账户的「余额校准」整条隐身，且曲线末点仍然等于账户页显示的那个数。
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { adjustTotals, applyFacade, facadeShift, isDecorated, lastAdjustAt, normalizeOffset, offsetFor, offsetOf, shiftSeries, visibleTxs } from './facade'
+import { adjustTotals, applyFacade, facadeShift, isDecorated, lastAdjustAt, listableTxs, normalizeOffset, offsetFor, offsetOf, shiftSeries, visibleTxs } from './facade'
 import { balanceSeries, balances } from './compute'
 import type { Account, Transaction } from '../types'
 
@@ -40,6 +40,7 @@ const tx = (id: string, date: string, type: Transaction['type'], amount: number,
   note: null,
   installments: null,
   settles: null,
+  hidden: null,
   created_at: `${date}T00:00:0${id.length}.000Z`,
 })
 
@@ -211,5 +212,40 @@ describe('账户页副标题「上次校准」：外页面下修饰过和没修�
     const src = readFileSync(new URL('../pages/Accounts.tsx', import.meta.url), 'utf8')
     expect(src).toMatch(/lastAdjustAt\(txs\)/)
     expect(src).not.toMatch(/lastAdjustAt\(vtxs\)/)
+  })
+})
+
+describe('「外面不显示」只藏列表这一行，不藏钱', () => {
+  // 用户 2026-09-16：「不是流水也消失，只是记录被隐藏了。流水，曲线不变。一般就收入需要隐藏」
+  const income = { ...tx('i1', '2026-09-10', 'income', 100000, 'wx'), hidden: true }
+  const spend = tx('e1', '2026-09-11', 'expense', 3000, 'wx')
+  const txs = [income, spend]
+
+  it('外页面的列表里没有它，里页面照常', () => {
+    // 变异：listableTxs 去掉 mode 判断 → 里页面也被藏，这条红
+    expect(listableTxs(txs, 'outer').map((t) => t.id)).toEqual(['e1'])
+    expect(listableTxs(txs, 'inner')).toBe(txs)
+  })
+
+  it('没有藏任何一笔时返回同一个数组，页面的 useMemo 不用重算', () => {
+    const one = [spend]
+    expect(listableTxs(one, 'outer')).toBe(one)
+  })
+
+  it('余额、曲线、月度合计都照常算它——藏与不藏，钱一分不差', () => {
+    // 变异：让 visibleTxs 顺手过滤 hidden → 余额少 1,000，这条红
+    const shown = [{ ...income, hidden: null }, spend]
+    expect(balances(visibleTxs(txs, ALL, 'outer'), ALL)).toEqual(balances(visibleTxs(shown, ALL, 'outer'), ALL))
+    expect(balances(txs, ALL).wx).toBe(97000)
+  })
+
+  it('只有列表页走 listableTxs；算钱的文件一个字都不许提它', () => {
+    // 页面测不了，守源码。变异：Home.tsx 的 recent 改回 sortTxs(vtxs) → 红
+    const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8')
+    expect(read('../pages/Home.tsx')).toMatch(/listableTxs\(/)
+    expect(read('../pages/Ledger.tsx')).toMatch(/listableTxs\(/)
+    for (const p of ['../pages/Stats.tsx', './compute.ts', './chart.ts']) {
+      expect(read(p), `${p} 不该碰 hidden`).not.toMatch(/listableTxs|\.hidden/)
+    }
   })
 })

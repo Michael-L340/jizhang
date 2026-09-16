@@ -15,6 +15,7 @@ function tx(id: string, over: Partial<Transaction> = {}): Transaction {
     note: null,
     installments: null,
     settles: null,
+    hidden: null,
     created_at: '2026-09-07T02:00:00.000Z',
     ...over,
   }

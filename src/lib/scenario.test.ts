@@ -60,10 +60,10 @@ const uid = () => `00000000-0000-4000-8000-${String(++n).padStart(12, '0')}`
 /** 每笔记录时间严格递增，用来定顺序；秒位补零，别拼出非法时间戳 */
 const stamp = (d: string) => `${d}T00:00:${String(n % 60).padStart(2, '0')}.000Z`
 function buy(over: Partial<Transaction>): Transaction {
-  return { id: uid(), date: '2026-09-06', type: 'expense', amount: 1000, account_id: jd.id, to_account_id: null, category_id: cat.id, note: null, installments: null, settles: null, created_at: stamp('2026-09-06'), ...over }
+  return { id: uid(), date: '2026-09-06', type: 'expense', amount: 1000, account_id: jd.id, to_account_id: null, category_id: cat.id, note: null, installments: null, settles: null, hidden: null, created_at: stamp('2026-09-06'), ...over }
 }
 function pay(over: Partial<Transaction>): Transaction {
-  return { id: uid(), date: '2026-09-17', type: 'transfer', amount: 1000, account_id: boc.id, to_account_id: jd.id, category_id: null, note: '还款', installments: null, settles: null, created_at: stamp('2026-09-17'), ...over }
+  return { id: uid(), date: '2026-09-17', type: 'transfer', amount: 1000, account_id: boc.id, to_account_id: jd.id, category_id: null, note: '还款', installments: null, settles: null, hidden: null, created_at: stamp('2026-09-17'), ...over }
 }
 
 let store: typeof import('./store')

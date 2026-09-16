@@ -62,6 +62,19 @@ export function visibleTxs(txs: Transaction[], accounts: Account[], mode: Mode):
 }
 
 /**
+ * 列表里该显示哪些行。外模式再过滤掉打了「外面不显示」记号的记录。
+ *
+ * 和 visibleTxs 分开：visibleTxs 是给余额、曲线、月度合计用的口径（外模式藏掉被修饰账户的校准），
+ * 而 hidden **只藏列表这一行**——余额、曲线、收入支出统计照常算它（用户 2026-09-16 定的：
+ * 「只是记录被隐藏了，流水、曲线不变」）。所以只有最近流水、流水页、搜索走这里，
+ * 任何算钱的地方都不许走。里模式原样返回同一个数组。
+ */
+export function listableTxs(txs: Transaction[], mode: Mode): Transaction[] {
+  if (mode === 'inner') return txs
+  return txs.some((t) => t.hidden) ? txs.filter((t) => !t.hidden) : txs
+}
+
+/**
  * 每个账户最近一次校准的时间（created_at）。账户页副标题「上次校准 9/3 20:15」用它。
  *
  * 要拿**全量** txs 来算，两种模式都一样——这是 2026-09-16 用户指出的露馅点：

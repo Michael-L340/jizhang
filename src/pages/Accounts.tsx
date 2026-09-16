@@ -131,6 +131,7 @@ export function Accounts() {
       note: '余额校准',
       installments: null,
       settles: null,
+      hidden: null,
       created_at: nowIso(),
     })
     // 真实余额变成刚输入的那个数之后，再按「对外显示」反推偏移量
@@ -300,6 +301,7 @@ export function Accounts() {
       note: '还款',
       installments: null,
       settles: settlesOfPicked(),
+      hidden: null,
       created_at: nowIso(),
     }
     const ok = await addTx(tx)

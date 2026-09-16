@@ -118,6 +118,7 @@ export function Entry() {
   const removeTx = useStore((s) => s.removeTx)
   const addCategory = useStore((s) => s.addCategory)
   const showToast = useStore((s) => s.showToast)
+  const mode = useStore((s) => s.mode)
   const online = useOnline()
 
   const editing = useMemo(() => (editId ? txs.find((t) => t.id === editId) ?? null : null), [txs, editId])
@@ -138,6 +139,8 @@ export function Entry() {
   const [toId, setToId] = useState<string | null>(mem.toId)
   const [date, setDate] = useState(today())
   const [note, setNote] = useState('')
+  // 「外面不显示」：只在里页面出现，外页面连开关都没有（那边不能有任何提示里外存在的东西）
+  const [hidden, setHidden] = useState(false)
   // 白条分期：只在「支出 + 账户是白条」时出现并生效
   const [inst, setInst] = useState('1')
   const [customInst, setCustomInst] = useState('')
@@ -178,6 +181,7 @@ export function Entry() {
     setNeg(editing.amount < 0)
     setDate(editing.date)
     setNote(editing.note ?? '')
+    setHidden(Boolean(editing.hidden))
     setMore(Boolean(editing.note) || editing.date !== today())
     if (editing.installments) {
       const n = String(editing.installments)
@@ -339,6 +343,7 @@ export function Entry() {
       // 结清关系在账户页那个面板里改，这一页不显示它。这里必须原样带回去——
       // 写 null 的话，从流水点开一笔还款只改了个金额，勾过的结清就被悄悄抹掉了
       settles: editing?.settles ?? null,
+      hidden: hidden ? true : null,
       created_at: editing?.created_at ?? nowIso(),
     }
     const ok = editing ? await editTx(tx) : await addTx(tx)
@@ -378,6 +383,7 @@ export function Entry() {
     })
     setAmount('')
     setNote('')
+    setHidden(false) // 藏了一笔收入之后，下一笔不该默认也藏
     setDate(today())
     setDateTouched(false) // 不复位的话，记过一笔昨天的账之后这页就永久停止跟随日期了
     setInst('1') // 期数也复位：上一笔分 12 期，下一笔 30 元外卖不该跟着摊成 12 个月
@@ -548,6 +554,11 @@ export function Entry() {
           <button type="button" className={`chip flex-1 text-left truncate ${note ? '' : 'text-muted'}`} onClick={toggleNote}>
             {note || '备注（可不填）'}
           </button>
+          {mode === 'inner' ? (
+            <button type="button" className={`chip ${hidden ? 'on' : 'text-muted'}`} title="外页面的列表里不显示这一笔；余额和统计照常" onClick={() => setHidden((v) => !v)}>
+              {hidden ? '外面隐藏 ·' : '外面隐藏'}
+            </button>
+          ) : null}
         </div>
         <div className={`expand ${more ? 'open' : ''}`}>
           <div>

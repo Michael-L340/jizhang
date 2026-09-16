@@ -4,7 +4,7 @@ import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
-import { applyFacade, visibleTxs } from '../lib/facade'
+import { applyFacade, listableTxs, visibleTxs } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { categoryColor } from '../lib/palette'
@@ -54,7 +54,8 @@ export function Home() {
   // 以前这里是一串写死的颜色按名次发，同一个分类在两页颜色不一样，对着看会错乱；
   // 而且那串还是 09-05 换暖色主题之前的冷色。
   const pieColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
-  const recent = useMemo(() => sortTxs(vtxs).slice(0, 5), [vtxs])
+  // 最近流水是列表，外页面还要过滤「外面不显示」的记录；上面算钱的都不过滤
+  const recent = useMemo(() => sortTxs(listableTxs(vtxs, mode)).slice(0, 5), [vtxs, mode])
 
   const td = today()
   const dayStat = useMemo(() => {

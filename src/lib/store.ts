@@ -29,7 +29,7 @@ function readCache(): Cache | null {
     return {
       ...c,
       accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null, facade_offset: a.facade_offset ?? null, defer_after_repay: a.defer_after_repay ?? null })),
-      transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null })),
+      transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null, hidden: t.hidden ?? null })),
     }
   } catch {
     return null

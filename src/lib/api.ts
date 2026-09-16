@@ -16,15 +16,16 @@ interface TxRow {
   note: string | null
   installments: number | null
   settles: string[] | null
+  hidden: boolean | null
   created_at: string
 }
 
-const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,created_at'
+const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,created_at'
 const ACC_COLS = 'id,name,kind,sort,is_archived,repay_day,facade_offset,defer_after_repay'
 const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived,note'
 
 function rowToTx(r: TxRow): Transaction {
-  return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null, installments: r.installments ?? null, settles: r.settles ?? null }
+  return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null, installments: r.installments ?? null, settles: r.settles ?? null, hidden: r.hidden ?? null }
 }
 
 function txToRow(t: Transaction): TxRow {
@@ -39,6 +40,7 @@ function txToRow(t: Transaction): TxRow {
     note: t.note,
     installments: t.installments,
     settles: t.settles,
+    hidden: t.hidden,
     created_at: t.created_at,
   }
 }

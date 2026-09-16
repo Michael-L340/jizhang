@@ -190,6 +190,15 @@ describe('分类', () => {
 // transactions —— 单行就能查的
 // ══════════════════════════════════════════════════════════════
 describe('流水的字段', () => {
+  // 变异：hiddenOf 去掉 typeof 判断 → 'yes' 会原样进库被 boolean 列拒绝，这条红
+  it('「外面不显示」只能是 true / false / 留空（0009 加的 boolean 列）', () => {
+    expect(run(tx({ hidden: 'yes' }))).toThrow(/第 1 条流水.*外面不显示.*yes/)
+    expect(run(tx({ hidden: true }))).not.toThrow()
+    const f = base()
+    delete f.transactions[0].hidden
+    expect(validateImport(JSON.parse(JSON.stringify(f))).transactions[0].hidden).toBeNull()
+  })
+
   it('缺 id 就拒绝', () => {
     const f = base()
     delete f.transactions[0].id

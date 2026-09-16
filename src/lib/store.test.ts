@@ -83,6 +83,7 @@ function tx(id: string, over: Partial<Transaction> = {}): Transaction {
     note: null,
     installments: null,
     settles: null,
+    hidden: null,
     created_at: '2026-09-04T02:00:00.000Z',
     ...over,
   }
@@ -341,6 +342,16 @@ describe('S2 本机缓存', () => {
     await st().init()
     expect(st().transactions).toEqual([])
     expect(st().categories).toEqual([])
+  })
+
+  it('老缓存里没有 hidden 这一列，读出来要补成 null，不能是 undefined', async () => {
+    // 变异：readCache 里去掉 `hidden: t.hidden ?? null` → 这条红。
+    // undefined 会顺着 editTx 走到 txToRow，PostgREST 对 undefined 字段的处理和 null 不一样，保守起见统一成 null
+    const old = { ...tx('t1') } as Record<string, unknown>
+    delete old.hidden
+    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [old], at: '2026-09-04T00:00:00.000Z' }))
+    await st().init()
+    expect(st().transactions[0].hidden).toBeNull()
   })
 
   it('缓存完整时冷启动直接用它渲染', async () => {
