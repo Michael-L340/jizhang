@@ -6,7 +6,8 @@
 //   三、外模式只平移，不改形状——统计页那条余额曲线的涨跌和拐点全是真的；
 //   四、外模式下被修饰账户的「余额校准」整条隐身，且曲线末点仍然等于账户页显示的那个数。
 import { describe, expect, it } from 'vitest'
-import { adjustTotals, applyFacade, facadeShift, isDecorated, normalizeOffset, offsetFor, offsetOf, shiftSeries, visibleTxs } from './facade'
+import { readFileSync } from 'node:fs'
+import { adjustTotals, applyFacade, facadeShift, isDecorated, lastAdjustAt, normalizeOffset, offsetFor, offsetOf, shiftSeries, visibleTxs } from './facade'
 import { balanceSeries, balances } from './compute'
 import type { Account, Transaction } from '../types'
 
@@ -183,5 +184,32 @@ describe('外页面的余额曲线：不能塌一整年', () => {
       expect(s.byAccount.ali[s.byAccount.ali.length - 1]).toBe(shown.ali)
       expect(s.total[s.total.length - 1]).toBe(shown.ali)
     }
+  })
+})
+
+describe('账户页副标题「上次校准」：外页面下修饰过和没修饰过的账户必须长一样', () => {
+  // 2026-09-16 用户截图：中国银行、支付宝（修饰过）显示「点此输入实际余额核对」，
+  // 招行、微信（没修饰）显示「上次校准 9/3」。两种字并排，等于把哪两个动过手脚写在脸上。
+  const adj = (id: string, account_id: string, created_at: string): Transaction => ({ ...tx(id, '2026-09-03', 'adjust', 100, account_id), created_at })
+  const txs = [adj('a1', 'boc', '2026-09-03T12:15:00Z'), adj('a2', 'wx', '2026-09-03T12:02:00Z'), adj('a3', 'boc', '2026-09-01T00:00:00Z')]
+
+  it('从原始流水取时间：修饰过的 boc 和没修饰的 wx 都有日期，取最近一次', () => {
+    const m = lastAdjustAt(txs)
+    expect(m.get('boc')).toBe('2026-09-03T12:15:00Z')
+    expect(m.get('wx')).toBe('2026-09-03T12:02:00Z')
+    expect(m.get('cmb')).toBeUndefined()
+  })
+
+  it('要是拿外页面的 visibleTxs 去算，boc 的日期就没了——这就是那个露馅点', () => {
+    const m = lastAdjustAt(visibleTxs(txs, ALL, 'outer'))
+    expect(m.get('boc')).toBeUndefined()
+    expect(m.get('wx')).toBe('2026-09-03T12:02:00Z')
+  })
+
+  it('账户页必须把原始 txs 传给 lastAdjustAt，不能传 vtxs', () => {
+    // 页面测不了（没有 DOM），守源码：改成 lastAdjustAt(vtxs) 这条会红
+    const src = readFileSync(new URL('../pages/Accounts.tsx', import.meta.url), 'utf8')
+    expect(src).toMatch(/lastAdjustAt\(txs\)/)
+    expect(src).not.toMatch(/lastAdjustAt\(vtxs\)/)
   })
 })

@@ -62,6 +62,27 @@ export function visibleTxs(txs: Transaction[], accounts: Account[], mode: Mode):
 }
 
 /**
+ * 每个账户最近一次校准的时间（created_at）。账户页副标题「上次校准 9/3 20:15」用它。
+ *
+ * 要拿**全量** txs 来算，两种模式都一样——这是 2026-09-16 用户指出的露馅点：
+ * 外页面藏掉了被修饰账户的校准记录之后，它们的副标题退回成「点此输入实际余额核对」，
+ * 而没被修饰的账户照常显示日期，四个账户两种字，一眼看出哪两个动过手脚。
+ * 只取时间不取金额，金额那条记录本身仍由 visibleTxs 藏着。
+ * 已知代价：外页面点「校准」改的是偏移量、不产生校准记录，所以这个时间不会跟着刷新。
+ *
+ * adjust 只在「有差额」时才写，所以得到的是「上次校准」而不是「上次核对」。
+ */
+export function lastAdjustAt(txs: Transaction[]): Map<string, string> {
+  const m = new Map<string, string>()
+  for (const t of txs) {
+    if (t.type !== 'adjust' || !t.account_id) continue
+    const cur = m.get(t.account_id)
+    if (!cur || t.created_at > cur) m.set(t.account_id, t.created_at)
+  }
+  return m
+}
+
+/**
  * 每个被修饰账户的校准合计（分）。只给外模式的余额曲线用。
  *
  * 注意要拿**全量** txs 来算，不能拿 visibleTxs 的结果——那里面校准已经被摘掉了。

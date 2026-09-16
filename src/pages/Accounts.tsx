@@ -7,7 +7,7 @@ import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
 import type { BillRow, CreditBill } from '../lib/compute'
 import { daysBetween, fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
-import { applyFacade, normalizeOffset, offsetFor, visibleTxs } from '../lib/facade'
+import { applyFacade, lastAdjustAt, normalizeOffset, offsetFor, visibleTxs } from '../lib/facade'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
@@ -34,8 +34,9 @@ export function Accounts() {
   const catMap = useCategoryMap()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const bal = useMemo(() => balances(txs, accounts), [txs, accounts])
-  // 外页面藏掉被修饰账户的校准：卡片右下的「本月 ±」和副标题的「上次校准」都要走它。
+  // 外页面藏掉被修饰账户的校准：卡片右下的「本月 ±」走它。
   // 余额 0.00 底下挂一行「本月 +6,391.00」是最露馅的一处。余额本身仍然拿真实 txs 算。
+  // 副标题的「上次校准」不走它，见 lastAdjustAt 的注释。
   const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
   // 不用 totalOf(bal) + debt：debt 只加回负余额，某个白条多还成正数时那笔会留在合计里，
   // 而下面的卡片列表里没有它，两个数就对不上（首页同样的理由，同样的算法）
@@ -44,16 +45,8 @@ export function Accounts() {
   const dispBal = useMemo(() => applyFacade(bal, accounts, mode), [bal, accounts, mode])
   const assetTotal = useMemo(() => assets.reduce((s, a) => s + (dispBal[a.id] ?? 0), 0), [assets, dispBal])
   // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页。
-  // 注意：adjust 记录只在「有差额」时才产生，所以这里得到的是「上次校准」而不是「上次核对」。
-  const lastAdjusts = useMemo(() => {
-    const m = new Map<string, string>()
-    for (const t of vtxs) {
-      if (t.type !== 'adjust' || !t.account_id) continue
-      const cur = m.get(t.account_id)
-      if (!cur || t.created_at > cur) m.set(t.account_id, t.created_at)
-    }
-    return m
-  }, [vtxs])
+  // 用原始 txs 不用 vtxs：外页面下四个账户的副标题必须长一样（facade.test.ts 守着）
+  const lastAdjusts = useMemo(() => lastAdjustAt(txs), [txs])
   const [target, setTarget] = useState<Account | null>(null)
   const [input, setInput] = useState('')
   // 里页面第二个框：这个账户在外页面显示多少
