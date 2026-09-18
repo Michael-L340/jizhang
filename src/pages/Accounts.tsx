@@ -7,7 +7,7 @@ import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
 import type { BillRow, CreditBill } from '../lib/compute'
 import { daysBetween, fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
-import { applyFacade, lastAdjustAt, normalizeOffset, offsetFor, outerTxs, visibleTxs } from '../lib/facade'
+import { applyFacade, hiddenSummary, lastAdjustAt, normalizeOffset, offsetFor, outerTxs, visibleTxs } from '../lib/facade'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
@@ -49,6 +49,8 @@ export function Accounts() {
   // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页。
   // 用原始 txs 不用 vtxs：外页面下四个账户的副标题必须长一样（facade.test.ts 守着）
   const lastAdjusts = useMemo(() => lastAdjustAt(txs), [txs])
+  // 里页面校准弹层里那行「外面看不到的 n 笔」。纯展示，不参与任何计算（用户 2026-09-18 要的就是「告诉我一下」）
+  const hiddenSum = useMemo(() => hiddenSummary(txs, accounts), [txs, accounts])
   const [target, setTarget] = useState<Account | null>(null)
   const [input, setInput] = useState('')
   // 里页面第二个框：这个账户在外页面显示多少
@@ -734,6 +736,13 @@ export function Accounts() {
                 onKeyDown={(e) => e.key === 'Enter' && confirm()}
               />
             </div>
+            {target && hiddenSum[target.id] ? (
+              // 只在里页面（这个框本身只有里页面有）、只在藏过记录的账户出现。上面「对外显示」那格照旧按实际余额 + 偏移量算，这行不改它
+              <div className="-mt-1 mb-3 flex items-center justify-between rounded-xl bg-brand-soft px-3 py-2 text-xs text-brand-ink">
+                <span>隐藏金额汇总 · {hiddenSum[target.id].count} 笔</span>
+                <span className="num font-medium">{fmtYuan(hiddenSum[target.id].cents, { sign: true })}</span>
+              </div>
+            ) : null}
           </>
         ) : null}
         <div className={`text-sm flex-col gap-1 mb-4 ${facadeOnly ? 'hidden' : 'flex'}`}>

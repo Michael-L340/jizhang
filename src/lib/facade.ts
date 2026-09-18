@@ -11,6 +11,7 @@
 // 就算数据里某个白条账户莫名带了偏移量，也不会显示出来。
 import { isCredit } from './compute'
 import type { Account, Transaction } from '../types'
+import { balances } from './compute'
 
 /** outer = 平时用的外页面（修饰过），inner = 只有本人知道的里页面（真实） */
 export type Mode = 'outer' | 'inner'
@@ -78,6 +79,24 @@ export function visibleTxs(txs: Transaction[], accounts: Account[], mode: Mode):
 export function outerTxs(txs: Transaction[], mode: Mode): Transaction[] {
   if (mode === 'inner') return txs
   return txs.some((t) => t.hidden) ? txs.filter((t) => !t.hidden) : txs
+}
+
+/**
+ * 每个账户被「外面隐藏」的记录加起来对余额的影响（分）和笔数。
+ * 只给里页面校准弹层那一行「外面看不到的 n 笔 −¥X」用，**纯展示，不进任何计算**
+ * （用户 2026-09-18：「单纯告诉我罢了，又不是影响表里余额」）。
+ * 用 balances 同一套规则算影响（收入 +、支出 −、转账两头、校准 +）；笔数按「这一笔碰到这个账户」数。
+ */
+export function hiddenSummary(txs: Transaction[], accounts: Account[]): Record<string, { cents: number; count: number }> {
+  const hidden = txs.filter((t) => t.hidden)
+  if (!hidden.length) return {}
+  const eff = balances(hidden, accounts)
+  const out: Record<string, { cents: number; count: number }> = {}
+  for (const a of accounts) {
+    const count = hidden.filter((t) => t.account_id === a.id || t.to_account_id === a.id).length
+    if (count) out[a.id] = { cents: eff[a.id] ?? 0, count }
+  }
+  return out
 }
 
 /**

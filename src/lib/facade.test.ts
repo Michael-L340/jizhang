@@ -7,7 +7,7 @@
 //   四、外模式下被修饰账户的「余额校准」整条隐身，且曲线末点仍然等于账户页显示的那个数。
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
-import { adjustTotals, applyFacade, facadeShift, isDecorated, lastAdjustAt, normalizeOffset, offsetFor, offsetOf, outerTxs, shiftSeries, visibleTxs } from './facade'
+import { adjustTotals, applyFacade, facadeShift, hiddenSummary, isDecorated, lastAdjustAt, normalizeOffset, offsetFor, offsetOf, outerTxs, shiftSeries, visibleTxs } from './facade'
 import { balanceSeries, balances } from './compute'
 import type { Account, Transaction } from '../types'
 
@@ -294,5 +294,44 @@ describe('「外面隐藏」：外页面当这一笔不存在', () => {
     expect(read('../pages/Home.tsx')).not.toMatch(/for \(const t of txs\)/) // 今日收支那个循环
     expect(read('../pages/Ledger.tsx')).toMatch(/g\.items\.map/) // 行不再单独过滤
     for (const p of ['./compute.ts', './chart.ts']) expect(read(p), `${p} 不该碰 hidden`).not.toMatch(/\.hidden/)
+  })
+})
+
+describe('里页面校准弹层那行「外面看不到的 n 笔 −¥X」', () => {
+  // 纯展示：把这个账户藏掉的记录加起来告诉用户，不进任何计算（用户 2026-09-18）
+  const h1 = { ...tx('h1', '2026-09-10', 'income', 300000, 'boc'), hidden: true }
+  const h2 = { ...tx('h2', '2026-09-12', 'expense', 50000, 'boc'), hidden: true }
+  const h3 = { ...tx('h3', '2026-09-13', 'transfer', 20000, 'boc'), to_account_id: 'wx', hidden: true }
+  const shown = tx('s1', '2026-09-11', 'income', 100000, 'boc')
+  const txs = [h1, h2, h3, shown]
+
+  it('按账户汇总影响和笔数，转账两头都算，没藏过的账户不出现', () => {
+    // 变异：count 只数 account_id → wx 没了，红；cents 改成 amount 直接相加 → boc 符号错，红
+    const s = hiddenSummary(txs, ALL)
+    expect(s.boc).toEqual({ cents: 300000 - 50000 - 20000, count: 3 })
+    expect(s.wx).toEqual({ cents: 20000, count: 1 })
+    expect(s.cmb).toBeUndefined()
+    expect(hiddenSummary([shown], ALL)).toEqual({})
+  })
+
+  it('这个数正好是「里页面余额 − 外页面账本余额」，两边口径一致', () => {
+    const inner = balances(txs, ALL)
+    const outer = balances(outerTxs(txs, 'outer'), ALL)
+    expect(inner.boc - outer.boc).toBe(hiddenSummary(txs, ALL).boc.cents)
+  })
+
+  it('这行只在里页面出现：必须嵌在 showFacadeField（mode === inner）那一块里', () => {
+    // 页面测不了，守源码。变异：把这行挪到 showFacadeField 那块外面 → 红
+    const src = readFileSync(new URL('../pages/Accounts.tsx', import.meta.url), 'utf8')
+    expect(src).toMatch(/const showFacadeField = mode === 'inner'/)
+    // 找的是 JSX 里那一行（后面跟着 {hiddenSum），注释里提到这几个字不算
+    const marker = '隐藏金额汇总 · {hiddenSum'
+    const block = src.indexOf('{showFacadeField ? (')
+    const line = src.indexOf(marker)
+    const end = src.indexOf('\n        ) : null}', block) // showFacadeField 那块的收尾（8 格缩进）
+    expect(block).toBeGreaterThan(0)
+    expect(line).toBeGreaterThan(block)
+    expect(line).toBeLessThan(end)
+    expect(src.split(marker).length).toBe(2) // 只有这一处
   })
 })
