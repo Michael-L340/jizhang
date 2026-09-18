@@ -1,6 +1,7 @@
 import type { Transaction } from '../types'
 import { isFlow } from './compute'
 import type { Mode } from './facade'
+import type { SearchNames } from './search'
 
 /** 账户筛选里的「白条」：四个平台一起筛 */
 export const CREDIT_ALL = 'credit'
@@ -35,6 +36,30 @@ export const NO_FILTER: LedgerFilter = { type: 'all', accountId: 'all', parentId
 export function effectiveFilter(f: LedgerFilter, mode: Mode): LedgerFilter {
   if (mode === 'inner' || !f.hiddenOnly) return f
   return { ...f, hiddenOnly: false }
+}
+
+const TYPE_LABEL: Record<string, string> = { expense: '支出', income: '收入', transfer: '转账', adjust: '校准' }
+
+/**
+ * 把筛选条件写成人能读的几段，给流水页顶上的「已筛选：…」用。
+ * 顺序固定：类型 · 账户 · 分类 · 藏起来的；没选的不写。
+ * 用户 2026-09-18 在里页面开着「只看藏起来的」忘了，看到「已筛选 · 0 笔」以为记录丢了。
+ * 传进来的要是 effectiveFilter 之后的条件——外页面那边「藏起来的」被当没开，这里自然也不会写出来。
+ */
+export function describeFilter(f: LedgerFilter, names: SearchNames): string[] {
+  const out: string[] = []
+  if (f.type !== 'all') out.push(TYPE_LABEL[f.type] ?? f.type)
+  if (f.accountId === 'none') out.push('未指定账户')
+  else if (f.accountId === CREDIT_ALL) out.push('白条')
+  else if (f.accountId !== 'all') out.push(names.account(f.accountId) || '账户')
+  if (f.parentId === 'none') out.push('未分类')
+  else if (f.parentId !== 'all') {
+    const parent = names.category(f.parentId) || '分类'
+    if (f.childId && f.childId !== 'all') out.push(f.childId === CHILD_NONE ? `${parent} 未细分` : names.category(f.childId) || parent)
+    else out.push(parent)
+  }
+  if (f.hiddenOnly) out.push('藏起来的')
+  return out
 }
 
 export function isFiltered(f: LedgerFilter): boolean {

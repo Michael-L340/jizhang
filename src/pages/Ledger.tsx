@@ -11,7 +11,7 @@ import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
 import { outerTxs, visibleTxs } from '../lib/facade'
-import { CHILD_NONE, CREDIT_ALL, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
+import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 
@@ -177,6 +177,8 @@ export function Ledger() {
   const sum = useMemo(() => monthSummary(list, ym), [list, ym])
   const hits = useMemo(() => searchSummary(list), [list])
   const filtered = isFiltered(eff)
+  // 「已筛选」后面把条件写出来，不然开着「只看藏起来的」看到 0 笔会以为记录丢了
+  const filterText = useMemo(() => describeFilter(eff, names).join(' · '), [eff, names])
 
   return (
     <div className="pb-6">
@@ -239,7 +241,7 @@ export function Ledger() {
               )
             ) : (
               <>
-            {filtered ? '已筛选 · ' : ''}
+            {filtered ? `已筛选：${filterText} · ` : ''}
             {sum.expense || sum.income ? (
               <>
                 {sum.expense ? (

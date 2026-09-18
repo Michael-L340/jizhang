@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CHILD_NONE, CREDIT_ALL, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
+import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
 import type { Transaction } from '../types'
 
 const rootOf = (id: string) => ({ p1: 'p1', c1: 'p1', c2: 'p2' } as Record<string, string>)[id]
@@ -121,5 +121,34 @@ describe('只看「外面隐藏」的记录', () => {
     expect(src).toMatch(/isFiltered\(eff\)/)
     expect(src).not.toMatch(/matchesFilter\(t, filter,/)
     expect(src).not.toMatch(/isFiltered\(filter\)/)
+  })
+})
+
+describe('「已筛选」后面把条件写出来', () => {
+  const names = {
+    account: (id: string | null) => ({ a1: '支付宝', a2: '微信' } as Record<string, string>)[id ?? ''] ?? '',
+    category: (id: string | null) => ({ p1: '日常开支', c1: '日常开支 通勤交通' } as Record<string, string>)[id ?? ''] ?? '',
+  }
+
+  it('按 类型 · 账户 · 分类 · 藏起来的 的顺序，没选的不写', () => {
+    // 变异：去掉 hiddenOnly 那一段 → 红；账户和类型顺序对调 → 红
+    expect(describeFilter(NO_FILTER, names)).toEqual([])
+    expect(describeFilter(f({ type: 'expense', accountId: 'a1', hiddenOnly: true }), names)).toEqual(['支出', '支付宝', '藏起来的'])
+    expect(describeFilter(f({ parentId: 'p1' }), names)).toEqual(['日常开支'])
+    expect(describeFilter(f({ parentId: 'p1', childId: 'c1' }), names)).toEqual(['日常开支 通勤交通'])
+    expect(describeFilter(f({ parentId: 'p1', childId: CHILD_NONE }), names)).toEqual(['日常开支 未细分'])
+    expect(describeFilter(f({ parentId: 'none', accountId: 'none' }), names)).toEqual(['未指定账户', '未分类'])
+    expect(describeFilter(f({ accountId: CREDIT_ALL, type: 'transfer' }), names)).toEqual(['转账', '白条'])
+  })
+
+  it('外页面传的是 effectiveFilter 之后的条件，所以永远写不出「藏起来的」', () => {
+    expect(describeFilter(effectiveFilter(f({ hiddenOnly: true, type: 'income' }), 'outer'), names)).toEqual(['收入'])
+  })
+
+  it('流水页必须拿 eff 去描述，不能拿原 filter', () => {
+    // 变异：describeFilter(eff → describeFilter(filter → 红（外页面会把「藏起来的」写出来）
+    const src = readFileSync(new URL('../pages/Ledger.tsx', import.meta.url), 'utf8')
+    expect(src).toMatch(/describeFilter\(eff, names\)/)
+    expect(src).not.toMatch(/describeFilter\(filter/)
   })
 })
