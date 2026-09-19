@@ -124,3 +124,19 @@ export function enteredLabel(createdAt: string, txDate: string): string {
   const [, m, d] = day.split('-')
   return `${Number(m)}/${Number(d)} ${time}`
 }
+
+/** 年那层一屏几个年份（3×4） */
+export const YEAR_GRID = 12
+
+/**
+ * 年那层的起点：对齐到 12 的倍数（2016、2028…），这样翻一屏不会出现「2019–2030」这种散的区间，
+ * 且同一年不管从哪个月上来看到的都是同一屏。
+ */
+export function yearGridStart(year: number): number {
+  return Math.floor(year / YEAR_GRID) * YEAR_GRID
+}
+
+/** 月不能超过上限（今天所在月）；超了退回上限。点年格子回到月那层时用 */
+export function clampYm(ym: string, limitYm: string): string {
+  return ym > limitYm ? limitYm : ym
+}

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Sheet } from './Sheet'
-import { fmtMonthZh, monthOf, today } from '../lib/date'
+import { fmtMonthZh, monthOf, today, yearGridStart, YEAR_GRID } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 
 interface Props {
@@ -22,6 +22,9 @@ function shortAmount(cents: number): string {
 export function MonthPicker({ value, onChange, totals }: Props) {
   const [open, setOpen] = useState(false)
   const [year, setYear] = useState(Number(value.slice(0, 4)))
+  // 弹层里两层：月（默认）→ 点年份标题上到年。用户 2026-09-19 要的「再往上一级翻年」
+  const [level, setLevel] = useState<'month' | 'year'>('month')
+  const [yBase, setYBase] = useState(yearGridStart(Number(value.slice(0, 4))))
   const nowYm = monthOf(today())
   const curYear = Number(nowYm.slice(0, 4))
   const minYear = curYear - 20
@@ -32,7 +35,9 @@ export function MonthPicker({ value, onChange, totals }: Props) {
     onChange(`${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`)
   }
 
-  const yearTotal = Array.from({ length: 12 }).reduce<number>((s, _, i) => s + (totals?.get(`${year}-${String(i + 1).padStart(2, '0')}`)?.expense ?? 0), 0)
+  const totalOfYear = (y: number) => Array.from({ length: 12 }).reduce<number>((s, _, i) => s + (totals?.get(`${y}-${String(i + 1).padStart(2, '0')}`)?.expense ?? 0), 0)
+  const yearTotal = totalOfYear(year)
+  const inYear = level === 'month'
 
   return (
     <>
@@ -45,6 +50,7 @@ export function MonthPicker({ value, onChange, totals }: Props) {
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-full active:bg-card"
           onClick={() => {
             setYear(Number(value.slice(0, 4)))
+            setLevel('month')
             setOpen(true)
           }}
         >
@@ -66,26 +72,69 @@ export function MonthPicker({ value, onChange, totals }: Props) {
         <div className="flex items-center justify-center gap-6 mb-1">
           <button
             type="button"
-            className={`w-9 h-9 flex items-center justify-center rounded-full ${year <= minYear ? 'text-line' : 'text-muted active:bg-bg'}`}
-            disabled={year <= minYear}
-            onClick={() => setYear(year - 1)}
-            aria-label="上一年"
+            className={`w-9 h-9 flex items-center justify-center rounded-full ${(inYear ? year <= minYear : yBase <= minYear) ? 'text-line' : 'text-muted active:bg-bg'}`}
+            disabled={inYear ? year <= minYear : yBase <= minYear}
+            onClick={() => (inYear ? setYear(year - 1) : setYBase(yBase - YEAR_GRID))}
+            aria-label={inYear ? '上一年' : '往前 12 年'}
           >
             <Chevron dir="left" />
           </button>
-          <span className="num text-lg font-bold w-[76px] text-center">{year}</span>
+          {inYear ? (
+            // 年份能点：上到年的格子。小箭头只是提示能点
+            <button
+              type="button"
+              className="num text-lg font-bold min-w-[76px] text-center px-2 rounded-lg active:bg-bg flex items-center justify-center gap-1"
+              onClick={() => {
+                setYBase(yearGridStart(year))
+                setLevel('year')
+              }}
+              aria-label="选年份"
+            >
+              {year}
+              <span className="text-[10px] text-brand-ink font-semibold">⌃</span>
+            </button>
+          ) : (
+            <span className="num text-lg font-bold min-w-[120px] text-center">{`${yBase} – ${yBase + YEAR_GRID - 1}`}</span>
+          )}
           <button
             type="button"
-            className={`w-9 h-9 flex items-center justify-center rounded-full ${year >= curYear ? 'text-line' : 'text-muted active:bg-bg'}`}
-            disabled={year >= curYear}
-            onClick={() => setYear(year + 1)}
-            aria-label="下一年"
+            className={`w-9 h-9 flex items-center justify-center rounded-full ${(inYear ? year >= curYear : yBase + YEAR_GRID - 1 >= curYear) ? 'text-line' : 'text-muted active:bg-bg'}`}
+            disabled={inYear ? year >= curYear : yBase + YEAR_GRID - 1 >= curYear}
+            onClick={() => (inYear ? setYear(year + 1) : setYBase(yBase + YEAR_GRID))}
+            aria-label={inYear ? '下一年' : '往后 12 年'}
           >
             <Chevron dir="right" />
           </button>
         </div>
-        <div className="text-center text-xs text-muted mb-3 h-4">{yearTotal > 0 ? `全年支出 ${fmtYuan(yearTotal, { symbol: true })}` : ''}</div>
+        <div className="text-center text-xs text-muted mb-3 h-4">{inYear ? (yearTotal > 0 ? `全年支出 ${fmtYuan(yearTotal, { symbol: true })}` : '') : '点某一年，回到那一年的月份'}</div>
 
+        {!inYear ? (
+          <div className="grid grid-cols-3 gap-2">
+            {Array.from({ length: YEAR_GRID }, (_, i) => {
+              const y = yBase + i
+              const future = y > curYear
+              const on = y === Number(value.slice(0, 4))
+              const amt = totalOfYear(y)
+              return (
+                <button
+                  key={y}
+                  type="button"
+                  disabled={future}
+                  className={`flex flex-col items-center justify-center gap-0.5 h-[58px] rounded-2xl transition-colors ${
+                    on ? 'bg-brand text-on-brand' : future ? 'text-line' : amt > 0 ? 'bg-brand-soft text-ink' : 'bg-bg text-ink'
+                  }`}
+                  onClick={() => {
+                    setYear(y)
+                    setLevel('month')
+                  }}
+                >
+                  <span className={`num text-[15px] ${on || amt > 0 ? 'font-semibold' : ''}`}>{y}</span>
+                  <span className={`num text-[11px] leading-none ${on ? 'text-on-brand/70' : 'text-muted'}`}>{amt > 0 ? shortAmount(amt) : future ? '' : '·'}</span>
+                </button>
+              )
+            })}
+          </div>
+        ) : (
         <div className="grid grid-cols-3 gap-2">
           {Array.from({ length: 12 }, (_, i) => {
             const ym = `${year}-${String(i + 1).padStart(2, '0')}`
@@ -111,6 +160,7 @@ export function MonthPicker({ value, onChange, totals }: Props) {
             )
           })}
         </div>
+        )}
 
         <div className="flex gap-2 mt-4">
           <button type="button" className="flex-1 py-2.5 rounded-xl bg-bg text-sm" onClick={() => setOpen(false)}>
