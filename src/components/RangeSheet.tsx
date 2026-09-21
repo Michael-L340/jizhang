@@ -3,7 +3,7 @@ import { DatePicker } from './DatePicker'
 import { Sheet } from './Sheet'
 import { fmtDateZh, today } from '../lib/date'
 
-export type RangeKind = 'quarter' | 'half' | 'year' | 'all' | 'custom'
+export type RangeKind = 'month' | 'ytd' | 'quarter' | 'half' | 'year' | 'all' | 'custom'
 
 export interface RangeValue {
   kind: RangeKind
@@ -12,7 +12,10 @@ export interface RangeValue {
   end?: string
 }
 
+/** 「本月 / 本年」和「近 N 个月」一样，都以顶部选中的月份为「现在」（用户 2026-09-21 加的两项） */
 export const RANGE_LABEL: Record<RangeKind, string> = {
+  month: '本月',
+  ytd: '本年',
   quarter: '近三个月',
   half: '近半年',
   year: '近一年',
@@ -33,7 +36,7 @@ export function RangeSheet({ open, value, earliest, onChange, onClose }: Props) 
   const [end, setEnd] = useState(value.end ?? today())
   const [pick, setPick] = useState<'start' | 'end' | null>(null)
 
-  const options: RangeKind[] = ['quarter', 'half', 'year', 'all']
+  const options: RangeKind[] = ['month', 'ytd', 'quarter', 'half', 'year', 'all']
 
   return (
     <>

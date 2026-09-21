@@ -126,6 +126,8 @@ export function Stats() {
     const t = today()
     const end = monthEnd > t ? t : monthEnd
     if (range.kind === 'all') return { start: earliest < end ? earliest : end, end }
+    if (range.kind === 'month') return { start: monthRange(ym).start, end }
+    if (range.kind === 'ytd') return { start: `${ym.slice(0, 4)}-01-01`, end }
     const back = range.kind === 'quarter' ? 3 : range.kind === 'half' ? 6 : 12
     const start = addDays(monthRange(shiftMonth(monthOf(end), -(back - 1))).start, 0)
     return { start, end }
@@ -552,7 +554,17 @@ export function Stats() {
         </div>
       </div>
 
-      <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />
+      <RangeSheet
+        open={rangeOpen}
+        value={range}
+        earliest={earliest}
+        onChange={(v) => {
+          setRange(v)
+          // 「本月」按月画只有一根柱子，没法看趋势，顺手切到按日；按日/按月开关还在，想改回随时改
+          if (v.kind === 'month' && unit === 'month') setUnit('day')
+        }}
+        onClose={() => setRangeOpen(false)}
+      />
 
       <Sheet open={help} onClose={() => setHelp(false)} title="五大类的含义">
         <div className="flex flex-col gap-3">
