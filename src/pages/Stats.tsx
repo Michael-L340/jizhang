@@ -554,17 +554,7 @@ export function Stats() {
         </div>
       </div>
 
-      <RangeSheet
-        open={rangeOpen}
-        value={range}
-        earliest={earliest}
-        onChange={(v) => {
-          setRange(v)
-          // 「本月」按月画只有一根柱子，没法看趋势，顺手切到按日；按日/按月开关还在，想改回随时改
-          if (v.kind === 'month' && unit === 'month') setUnit('day')
-        }}
-        onClose={() => setRangeOpen(false)}
-      />
+      <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />
 
       <Sheet open={help} onClose={() => setHelp(false)} title="五大类的含义">
         <div className="flex flex-col gap-3">
