@@ -41,21 +41,24 @@ export function RangeSheet({ open, value, earliest, onChange, onClose }: Props) 
   return (
     <>
       <Sheet open={open} onClose={onClose} title="时间范围">
-        <div className="flex flex-col">
-          {options.map((k) => (
-            <button
-              key={k}
-              type="button"
-              className="flex items-center justify-between py-3 border-b border-line text-left"
-              onClick={() => {
-                onChange({ kind: k })
-                onClose()
-              }}
-            >
-              <span className="text-[15px]">{RANGE_LABEL[k]}</span>
-              {value.kind === k ? <Check /> : null}
-            </button>
-          ))}
+        {/* 两列格子。曾是竖列，加到六项后整块 560px 高，小屏要顶到状态栏；两列三行和原来四行差不多高（用户 2026-09-21 选的乙） */}
+        <div className="grid grid-cols-2 gap-2 mt-1">
+          {options.map((k) => {
+            const on = value.kind === k
+            return (
+              <button
+                key={k}
+                type="button"
+                className={`py-[11px] rounded-xl text-sm ${on ? 'bg-brand text-on-brand font-semibold' : 'bg-bg text-ink'}`}
+                onClick={() => {
+                  onChange({ kind: k })
+                  onClose()
+                }}
+              >
+                {RANGE_LABEL[k]}
+              </button>
+            )
+          })}
         </div>
 
         <div className="mt-4">
