@@ -42,14 +42,14 @@ export function RangeSheet({ open, value, earliest, onChange, onClose }: Props) 
     <>
       <Sheet open={open} onClose={onClose} title="时间范围">
         {/* 两列格子。曾是竖列，加到六项后整块 560px 高，小屏要顶到状态栏；两列三行和原来四行差不多高（用户 2026-09-21 选的乙） */}
-        <div className="grid grid-cols-2 gap-2 mt-1">
+        <div className="grid grid-cols-2 gap-2 mt-3">
           {options.map((k) => {
             const on = value.kind === k
             return (
               <button
                 key={k}
                 type="button"
-                className={`py-[11px] rounded-xl text-sm ${on ? 'bg-brand text-on-brand font-semibold' : 'bg-bg text-ink'}`}
+                className={`h-[52px] rounded-2xl text-[15px] ${on ? 'bg-brand text-on-brand font-semibold' : 'bg-bg text-ink'}`}
                 onClick={() => {
                   onChange({ kind: k })
                   onClose()
@@ -61,7 +61,7 @@ export function RangeSheet({ open, value, earliest, onChange, onClose }: Props) 
           })}
         </div>
 
-        <div className="mt-4">
+        <div className="mt-5">
           <div className="flex items-center justify-between mb-2">
             <span className="text-sm text-muted">自定义区间</span>
             {value.kind === 'custom' ? <Check /> : null}
