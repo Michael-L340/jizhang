@@ -321,14 +321,20 @@ export function balanceSeries(
  *   2. 用得一样多的，最近用过的在前
  *   3. 一次都没用过的，按分类管理页里的原有顺序
  *
- * 注意不看日期只看条数：补记一笔上个月的账，和今天记一笔，对顺序的影响是一样的。
+ * 只数**最近 30 天**（用户 2026-09-21：「使用频次的时间范围是一个月」）。
+ * 以前数全部历史，导进两年旧账之后 2023 年吃的 500 顿午餐把「午餐」永远压在第一。
+ * 用滚动 30 天而不是日历月：日历月每到 1 号次数全部归零，那几天顺序回到原始排序，记账体验最差。
+ * 30 天内一次都没用过的，按分类管理页里的原有顺序，不看更早的历史。
  */
-export function childOrderByUse(txs: Transaction[], cats: Category[], parentId: string): Category[] {
+export const USE_WINDOW_DAYS = 30
+
+export function childOrderByUse(txs: Transaction[], cats: Category[], parentId: string, todayStr: string = today()): Category[] {
   const children = cats.filter((c) => c.parent_id === parentId && !c.is_archived)
   const uses = new Map<string, number>()
   const lastUse = new Map<string, string>()
+  const from = addDays(todayStr, -USE_WINDOW_DAYS)
   for (const t of txs) {
-    if (!t.category_id) continue
+    if (!t.category_id || t.date < from) continue
     uses.set(t.category_id, (uses.get(t.category_id) ?? 0) + 1)
     const key = `${t.date}T${t.created_at}`
     const prev = lastUse.get(t.category_id)

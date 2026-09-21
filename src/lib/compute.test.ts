@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { applyTx, creditBill, currentDueDate, dueDateOf, dueNow, groupByDue, previewRepay, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { applyTx, creditBill, currentDueDate, dueDateOf, dueNow, groupByDue, previewRepay, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse as order, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -294,9 +294,21 @@ describe('balanceSeries', () => {
   })
 })
 
-describe('二级分类的排序：按用得多少，不是按最近用过谁', () => {
+describe('二级分类的排序：按最近 30 天用得多少，不是按最近用过谁', () => {
   const mk = (cat: string, n: number, day = '2026-09-01') =>
     Array.from({ length: n }, () => tx({ type: 'expense', amount: 100, account_id: 'wx', category_id: cat, date: day }))
+  // 测试里「今天」固定住，不然跑到 10 月这些 9 月的记录就滚出窗口了
+  const TODAY = '2026-09-10'
+  const childOrderByUse = (rows: Transaction[], c: Category[], p: string) => order(rows, c, p, TODAY)
+
+  it('只数最近 30 天：两年前吃过 500 顿午餐，不能把午餐永远压在第一', () => {
+    // 变异：去掉 `t.date < from` 那个 continue → 红
+    const rows = [...mk('lunch', 500, '2024-03-01'), ...mk('dinner', 2, '2026-09-05')]
+    expect(childOrderByUse(rows, cats, 'food').map((c) => c.name)).toEqual(['晚餐', '午餐'])
+    // 窗口边界：正好 30 天前算在内，31 天前不算
+    expect(order([...mk('dinner', 1, '2026-08-11'), ...mk('lunch', 1, '2026-08-12')], cats, 'food', TODAY).map((c) => c.name)).toEqual(['午餐', '晚餐'])
+    expect(order([...mk('lunch', 3, '2026-08-10'), ...mk('dinner', 1, '2026-09-01')], cats, 'food', TODAY).map((c) => c.name)).toEqual(['晚餐', '午餐'])
+  })
 
   it('用得多的排前面', () => {
     const rows = [...mk('lunch', 5), ...mk('dinner', 2)]
