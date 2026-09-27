@@ -9,7 +9,7 @@ import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthT
 import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { axisLabels, gridTopFor, legendRows, shortLabels } from '../lib/chart'
-import { adjustTotals, outerTxs, shiftSeries, visibleTxs } from '../lib/facade'
+import { outerBook } from '../lib/facade'
 import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, CHART, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
@@ -30,11 +30,13 @@ export function Stats() {
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
   const mode = useStore((s) => s.mode)
-  // 外页面的账本：藏了的记录整条不算。这一页所有算钱的地方只准吃它
-  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
+  const fadj = useStore((s) => s.facade_adjusts)
   // 余额曲线只画资产账户：白条是欠款，用户不要它出现在曲线里，合计线也只算资产
   const allAccounts = useActiveAccounts()
   const accounts = useMemo(() => splitAccounts(allAccounts).assets, [allAccounts])
+  // 当前模式那本账：里页面是原始流水，外页面是 outerBook。这一页所有算钱的地方只准吃它。
+  // 传全部账户不传 assets：outerBook 要靠账户种类认白条（白条的真实校准照旧算）
+  const otxs = useMemo(() => outerBook(txs, allAccounts, fadj, mode), [txs, allAccounts, fadj, mode])
   const nav = useNavigate()
   // 月份和下钻是「这次在看什么」：切去流水核一笔再回来还在，隔几个小时再开就回本月
   const [ym, setYm] = useRecentState('jz_stats_ym', () => monthOf(today()))
@@ -282,15 +284,9 @@ export function Stats() {
     }
   }, [lineMode, keys, trendAxis, trendTotal, trendByCat, fewPoints, unit, trendKind, chartW])
 
-  // 里外页面：外模式先把被修饰账户的校准从流水里摘掉，再按「偏移量 + 该账户校准合计」平移。
-  // 两件事必须配对，理由和算式写在 facade.ts 的 shiftSeries 上。
-  // adjustTotals 要拿 otxs 算——curveTxs 里校准已经没了，而原始 txs 里有藏掉的。
-  const curveTxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
-  const adjusts = useMemo(() => adjustTotals(otxs, accounts), [otxs, accounts])
-  const bal = useMemo(
-    () => shiftSeries(balanceSeries(curveTxs, accounts, keys, unit), accounts, mode, adjusts),
-    [curveTxs, accounts, keys, unit, mode, adjusts],
-  )
+  // 余额曲线直接画那本账：外页面校准记录是 adjust，在它的日期上是一级台阶，以前的点不动
+  //（2026-09-27 起；以前是整条平移，见 docs/里外页面.md）
+  const bal = useMemo(() => balanceSeries(otxs, accounts, keys, unit), [otxs, accounts, keys, unit])
   // 大数字其实是「最后一个桶结束时」的余额。切到 8 月它就是 8/31 收盘值，
   // 而账户页显示的是当前值，两个页面对不上会让人以为同步坏了。
   // 用 bucketEnd 而不是 tEnd：按月时最后一个桶到月末，两者可能差好几天。

@@ -6,8 +6,8 @@ import { ChipGroup } from '../components/ChipGroup'
 import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
 import type { BillRow, CreditBill } from '../lib/compute'
-import { daysBetween, fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
-import { applyFacade, hiddenSummary, lastAdjustAt, normalizeOffset, offsetFor, outerTxs, visibleTxs } from '../lib/facade'
+import { daysBetween, fmtDateZh, fmtIsoZh, monthOf, nowIso, today } from '../lib/date'
+import { facadeDelta, hiddenSummary, lastAdjustAt, latestFacadeAdjust, outerBook, outerList } from '../lib/facade'
 import { useCategoryMap, usePersistedState, useTabReset } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { guessIcon } from '../lib/icons'
@@ -26,8 +26,8 @@ export function Accounts() {
   const syncError = useStore((s) => s.syncError)
   const syncRetrying = useStore((s) => s.syncRetrying)
   const mode = useStore((s) => s.mode)
-  // 外页面的账本：藏了的记录整条不算。资产账户的余额吃它；白条那一套照旧吃原始 txs（白条不参与里外）
-  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
+  const fadj = useStore((s) => s.facade_adjusts)
+  const addFacadeAdjust = useStore((s) => s.addFacadeAdjust)
   const updateAccount = useStore((s) => s.updateAccount)
   const syncing = useStore((s) => s.syncing)
   const refresh = useStore((s) => s.refresh)
@@ -35,17 +35,20 @@ export function Accounts() {
   const accounts = useActiveAccounts()
   const catMap = useCategoryMap()
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
+  // 当前模式那本账：里页面是原始流水（真实余额），外页面是 outerBook（藏掉的不算、真实校准不算、外页面校准记录算）。
+  // 这一页所有算钱的地方只准吃它；白条那一套照旧吃原始 txs（白条不参与里外，两本账里它的数一样）
+  const otxs = useMemo(() => outerBook(txs, accounts, fadj, mode), [txs, accounts, fadj, mode])
   const bal = useMemo(() => balances(otxs, accounts), [otxs, accounts])
-  // 外页面藏掉被修饰账户的校准：卡片右下的「本月 ±」走它。
-  // 余额 0.00 底下挂一行「本月 +6,391.00」是最露馅的一处。余额本身仍然拿真实 txs 算。
-  // 副标题的「上次校准」不走它，见 lastAdjustAt 的注释。
-  const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
+  // 外页面那本账的余额，两种模式都算一份：里页面校准弹层的「对外显示」要预填外页面现在显示的数，
+  // 写外页面校准记录时差额也按它算（facade.test.ts 有源码守卫）
+  const outerBal = useMemo(() => balances(outerBook(txs, accounts, fadj, 'outer'), accounts), [txs, accounts, fadj])
+  // 卡片右下的「本月 ±」走外页面的列表口径（校准行外页面看不见）。副标题的「上次校准」不走它，见 lastAdjustAt 的注释
+  const vtxs = useMemo(() => outerList(txs, accounts, mode), [txs, accounts, mode])
   // 不用 totalOf(bal) + debt：debt 只加回负余额，某个白条多还成正数时那笔会留在合计里，
   // 而下面的卡片列表里没有它，两个数就对不上（首页同样的理由，同样的算法）
-  // 里外页面：外页面把资产账户的余额加上各自的偏移量。白条不参与，
-  // 所以下面所有和欠款有关的计算仍然用真实的 bal。
-  const dispBal = useMemo(() => applyFacade(bal, accounts, mode), [bal, accounts, mode])
-  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (dispBal[a.id] ?? 0), 0), [assets, dispBal])
+  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
+  // 里页面校准弹层那行「外页面上次校准 9/27」：外页面校准记录哪里都不列（用户 2026-09-27 定），只在这里露最近一条给本人核对
+  const lastFacade = useMemo(() => latestFacadeAdjust(fadj), [fadj])
   // 原来在 accounts.map() 内部对全量流水扫描，而输入框每次按键都会重渲染整页。
   // 用原始 txs 不用 vtxs：外页面下四个账户的副标题必须长一样（facade.test.ts 守着）
   const lastAdjusts = useMemo(() => lastAdjustAt(txs), [txs])
@@ -55,16 +58,20 @@ export function Accounts() {
   const [input, setInput] = useState('')
   // 里页面第二个框：这个账户在外页面显示多少
   const [facadeInput, setFacadeInput] = useState('')
+  // 真实校准那一行的备注（用户 2026-09-27 要的）。空着就是「余额校准」
+  const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
 
   // 白条：余额为负是欠款。核对时让用户输「待还」（正数），差额再翻回余额的方向。
   const creditTarget = target ? credits.some((c) => c.id === target.id) : false
-  // 外页面点开非白条账户时，这个框改的是「外面显示多少」，只动偏移量、不写任何流水。
+  // 外页面点开非白条账户时，这个框改的是「外面显示多少」：只记一条外页面校准记录、不写任何流水。
   // 白条不分里外，所以在外页面点白条走的还是真正的校准。
   const facadeOnly = mode === 'outer' && Boolean(target) && !creditTarget
   // 里页面的非白条账户才有第二个框
   const showFacadeField = mode === 'inner' && Boolean(target) && !creditTarget
-  const computed = target ? (facadeOnly ? dispBal[target.id] ?? 0 : bal[target.id] ?? 0) : 0
+  // bal 已经是当前模式该显示的数：里页面是真实余额，外页面是外页面那本账
+  const computed = target ? bal[target.id] ?? 0 : 0
+  const lf = target ? lastFacade.get(target.id) : undefined
   const shown = creditTarget ? -computed : computed
   const real = parseYuan(input)
   const rawDelta = calcDelta(input, shown) // 算式本体在 lib/money.ts，那里测得到
@@ -73,40 +80,51 @@ export function Accounts() {
   function open(a: Account) {
     setTarget(a)
     const isCred = credits.some((c) => c.id === a.id)
-    const real = bal[a.id] ?? 0
-    // 外页面预填的是屏幕上那个数（也就是修饰过的），里页面和白条预填真实值
-    const v = isCred ? -real : mode === 'outer' ? dispBal[a.id] ?? 0 : real
-    setInput(fmtYuan(v).replace(/,/g, ''))
-    setFacadeInput(fmtYuan(real + (a.facade_offset ?? 0)).replace(/,/g, ''))
+    // 预填屏幕上那个数：外页面就是外页面那本账的数，里页面是真实余额；白条按「待还」翻个方向
+    const cur = bal[a.id] ?? 0
+    setInput(fmtYuan(isCred ? -cur : cur).replace(/,/g, ''))
+    setFacadeInput(fmtYuan(outerBal[a.id] ?? 0).replace(/,/g, ''))
+    setNote('')
   }
 
   /**
-   * 里页面改「实际余额」时，「对外显示」跟着同幅变动——偏移量是固定的，
-   * 你看到的直接是最终结果，不用心算。想单独定外面那个数就直接改下面那个框。
+   * 里页面改「实际余额」时，「对外显示」跟着同幅变动：你看到的直接是最终结果，不用心算。
+   * 想单独定外面那个数就直接改下面那个框。差额按外页面现在显示的数算（outerBal），
+   * 不按真实余额算——真实校准外页面看不见，两本账各走各的。
    */
   function onRealInput(v: string) {
     setInput(v)
     if (!target || creditTarget || mode !== 'inner') return
     const r = parseYuan(v)
-    if (r !== null) setFacadeInput(fmtYuan(r + (target.facade_offset ?? 0)).replace(/,/g, ''))
+    if (r !== null) setFacadeInput(fmtYuan((outerBal[target.id] ?? 0) + (r - (bal[target.id] ?? 0))).replace(/,/g, ''))
   }
 
-  /** 把「对外显示多少」写成偏移量。realCents 是这一刻的真实余额 */
-  async function saveFacade(a: Account, realCents: number): Promise<boolean> {
+  /** 「对外显示」填的数和外页面现在显示的数不一样，才需要写一条外页面校准 */
+  function facadeChanged(a: Account): boolean {
+    if (creditTarget) return false
     const want = parseYuan(facadeOnly ? input : facadeInput)
-    if (want === null) return true
-    const next = normalizeOffset(offsetFor(want, realCents))
-    if (next === (a.facade_offset ?? null)) return true
-    return await updateAccount(a.id, { facade_offset: next })
+    return want !== null && facadeDelta(want, outerBal[a.id] ?? 0) !== 0
+  }
+
+  /**
+   * 把「对外显示多少」写成一条外页面校准记录：记在今天，差额 = 填的 − 外页面现在显示的数。
+   * 从今天起外页面就是填的那个数，以前的曲线不动（2026-09-27 起；以前是改固定差值、整条曲线上下移）。
+   * 没差额就不写；白条不参与里外。
+   */
+  async function saveFacade(a: Account): Promise<boolean> {
+    if (!facadeChanged(a)) return true
+    const want = parseYuan(facadeOnly ? input : facadeInput)!
+    // 键的顺序和 api.ts 的 rowToFa 一致，导出的 JSON 才和备份脚本抓的逐字节对得上
+    return await addFacadeAdjust({ id: newId(), account_id: a.id, date: today(), cents: facadeDelta(want, outerBal[a.id] ?? 0), created_at: nowIso() })
   }
 
   async function confirm() {
     if (!target) return
-    // 外页面：不写流水，只改这个账户在外面显示多少
+    // 外页面：不写流水，只记一条外页面校准（改这个账户在外面显示多少）
     if (facadeOnly) {
       if (parseYuan(input) === null) return
       setBusy(true)
-      const ok = await saveFacade(target, bal[target.id] ?? 0)
+      const ok = await saveFacade(target)
       setBusy(false)
       if (ok) setTarget(null)
       return
@@ -115,11 +133,12 @@ export function Accounts() {
     // 没差额就不留痕：以前会写一条 0 元「余额核对」，只是为了同步「上次核对时间」，
     // 结果流水里全是 0 元行，用户嫌碍眼。核对本身不产生数据。
     if (delta === 0) {
+      const changed = facadeChanged(target)
       setBusy(true)
-      const ok = await saveFacade(target, computed)
+      const ok = await saveFacade(target)
       setBusy(false)
       if (!ok) return
-      showToast(`${target.name} 核对无差异，没有产生记录`)
+      showToast(changed ? `${target.name} 真实余额无差异，对外显示已改` : `${target.name} 核对无差异，没有产生记录`)
       setTarget(null)
       return
     }
@@ -132,17 +151,20 @@ export function Accounts() {
       account_id: target.id,
       to_account_id: null,
       category_id: null,
-      note: '余额校准',
+      note: note.trim() || '余额校准',
       installments: null,
       settles: null,
       hidden: null,
       created_at: nowIso(),
     })
-    // 真实余额变成刚输入的那个数之后，再按「对外显示」反推偏移量
-    if (ok) await saveFacade(target, computed + delta)
+    // 真实校准外页面看不见，所以「对外显示」那一条按外页面现在显示的数算差额，和上面那笔无关；
+    // 默认预填的是「跟着同幅变」的结果，所以不特意改它的话，外页面今天也跟着一个同样的台阶
+    const fok = ok ? await saveFacade(target) : true
     setBusy(false)
     if (ok) {
-      showToast(`${target.name} 已校准 ${fmtYuan(delta, { sign: true })}`)
+      // 真实校准已经落了（没网也进了待传队列），弹层必须关——留着再点一次会再记一笔。
+      // 外页面那条没写成时要说清楚是哪一半没成，不能让 store 那句「校准失败」盖住「其实已校准」
+      showToast(fok ? `${target.name} 已校准 ${fmtYuan(delta, { sign: true })}` : `${target.name} 已校准 ${fmtYuan(delta, { sign: true })}，但对外显示没改成，稍后在这里再改一次`)
       setTarget(null)
     }
   }
@@ -151,7 +173,7 @@ export function Accounts() {
   const byAcc = useMemo(() => monthByAccount(vtxs, ym), [vtxs, ym])
   const nameOf = (id: string): string => accounts.find((a) => a.id === id)?.name ?? ''
   // 占比条跟着屏幕上的数字走，否则外页面「各占多少」和四张卡对不上
-  const shares = useMemo(() => balanceShares(dispBal, assets.map((a) => a.id)), [dispBal, assets])
+  const shares = useMemo(() => balanceShares(bal, assets.map((a) => a.id)), [bal, assets])
 
   // ---- 白条 ----
   const today0 = today()
@@ -447,7 +469,7 @@ export function Accounts() {
                 <span className="block text-xs text-muted">{lc ? `上次校准 ${fmtIsoZh(lc)}` : '点此输入实际余额核对'}</span>
               </span>
               <span className="text-right">
-                <span className={`block num text-lg font-semibold ${(dispBal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(dispBal[a.id] ?? 0)}</span>
+                <span className={`block num text-lg font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
                 {/* 本月这个账户进出了多少。转账两头都算、校准也算，所以它和余额的变化能对上。 */}
                 {(() => {
                   const m = byAcc.get(a.id)
@@ -737,13 +759,30 @@ export function Accounts() {
               />
             </div>
             {target && hiddenSum[target.id] ? (
-              // 只在里页面（这个框本身只有里页面有）、只在藏过记录的账户出现。上面「对外显示」那格照旧按实际余额 + 偏移量算，这行不改它
+              // 只在里页面（这个框本身只有里页面有）、只在藏过记录的账户出现。纯展示，上面「对外显示」那格不看它
               <div className="-mt-1 mb-3 flex items-center justify-between rounded-xl bg-brand-soft px-3 py-2 text-xs text-brand-ink">
                 <span>隐藏金额汇总 · {hiddenSum[target.id].count} 笔</span>
                 <span className="num font-medium">{fmtYuan(hiddenSum[target.id].cents, { sign: true })}</span>
               </div>
             ) : null}
+            {lf ? (
+              // 外页面校准记录哪里都不列，只在这里露最近一条（日期 + 差额）给本人核对；迁移出来的那条不算
+              <div className="-mt-1 mb-3 flex items-center justify-between px-1 text-xs text-muted">
+                <span>外页面上次校准 {fmtDateZh(lf.date, false)}</span>
+                <span className="num">{fmtYuan(lf.cents, { sign: true })}</span>
+              </div>
+            ) : null}
           </>
+        ) : null}
+        {!facadeOnly ? (
+          // 真实校准那一行的备注。外页面只有白条会走到这里（白条不分里外，是真校准），一个备注框不算露馅
+          <input
+            className="w-full mb-3 bg-bg rounded-xl px-3 py-2 text-sm"
+            placeholder="备注（选填，默认「余额校准」）"
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && confirm()}
+          />
         ) : null}
         <div className={`text-sm flex-col gap-1 mb-4 ${facadeOnly ? 'hidden' : 'flex'}`}>
           <div className="flex justify-between">

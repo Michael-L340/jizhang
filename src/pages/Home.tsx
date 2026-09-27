@@ -4,7 +4,7 @@ import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { balances, byCategory, debtOf, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
-import { applyFacade, outerTxs, visibleTxs } from '../lib/facade'
+import { outerBook, outerList } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtYuan } from '../lib/money'
 import { categoryColor } from '../lib/palette'
@@ -22,10 +22,12 @@ export function Home() {
   const refresh = useStore((s) => s.refresh)
   const outboxCount = useStore((s) => s.outboxCount)
   const mode = useStore((s) => s.mode)
-  // 外页面的账本：藏了的记录整条不算。这一页所有算钱的地方只准吃它（白条那几处除外，白条不参与里外）
-  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
+  const fadj = useStore((s) => s.facade_adjusts)
   const flushOutbox = useStore((s) => s.flushOutbox)
   const accounts = useActiveAccounts()
+  // 当前模式那本账：里页面是原始流水，外页面是 outerBook（藏掉的不算、真实校准不算、外页面校准记录算）。
+  // 这一页所有算钱的地方只准吃它（白条那几处除外，白条不参与里外，两本账里它的数一样）
+  const otxs = useMemo(() => outerBook(txs, accounts, fadj, mode), [txs, accounts, fadj, mode])
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   const accMap = useAccountMap()
   const catMap = useCategoryMap()
@@ -35,18 +37,13 @@ export function Home() {
 
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(otxs, ym), [otxs, ym])
+  // 余额直接是那本账加出来的：外页面下就是修饰过的数；白条两边一样，所以下面算欠款照样用它
   const bal = useMemo(() => balances(otxs, accounts), [otxs, accounts])
-  // 里外页面：外页面把资产账户的余额加上各自的偏移量，里页面原样。
-  // 只有余额被修饰——上面的本月收支、储蓄率、下面的饼图和流水全是真的。
-  // 白条不参与（applyFacade 里挡了），所以下面算欠款仍然用真实的 bal。
-  const shown = useMemo(() => applyFacade(bal, accounts, mode), [bal, accounts, mode])
-  // 外页面要藏掉被修饰账户的「余额校准」——余额显示 0.00、流水里却挂着一条 +6,391 就露馅了。
-  // 只有下面那个「最近流水」用它：上面的 bal 必须拿真实流水算，否则修饰过的余额也跟着变。
-  // 本月收支、储蓄率、饼图不受影响，校准本来就不进收支统计。
-  const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
+  // 外页面的流水列表不带校准行（真实的和外页面的都不带）；只有下面那个「最近流水」用它
+  const vtxs = useMemo(() => outerList(txs, accounts, mode), [txs, accounts, mode])
   // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 接下来要还」
   const debt = debtOf(bal, credits)
-  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (shown[a.id] ?? 0), 0), [assets, shown])
+  const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
   // 白条余额为正 = 多还了，平台欠你钱。少见但要说清楚，否则这笔钱在界面上无处可寻
   const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
   // 「接下来要还的钱」：各白条各按自己的还款日算本期，加起来。各家还款日不同，这是合计不是同一天
@@ -203,7 +200,7 @@ export function Home() {
               <AccountIcon name={a.name} size={28} />
               <span className="min-w-0">
                 <span className="block text-xs text-muted truncate">{a.name}</span>
-                <span className={`block num font-semibold ${(shown[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(shown[a.id] ?? 0)}</span>
+                <span className={`block num font-semibold ${(bal[a.id] ?? 0) < 0 ? 'text-expense' : ''}`}>{fmtYuan(bal[a.id] ?? 0)}</span>
               </span>
             </Link>
           ))}

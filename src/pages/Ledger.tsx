@@ -10,7 +10,7 @@ import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
-import { outerTxs, visibleTxs } from '../lib/facade'
+import { outerBook, outerList } from '../lib/facade'
 import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -28,10 +28,11 @@ export function Ledger() {
   const cats = useStore((s) => s.categories)
   const accounts = useActiveAccounts()
   const mode = useStore((s) => s.mode)
-  const otxs = useMemo(() => outerTxs(txs, mode), [txs, mode])
-  // 外页面藏掉被修饰账户的校准记录。列表、搜索、每日小计、顶上的月度合计全走它，
+  const fadj = useStore((s) => s.facade_adjusts)
+  const otxs = useMemo(() => outerBook(txs, accounts, fadj, mode), [txs, accounts, fadj, mode])
+  // 外页面的列表不带任何校准行（真实的、外页面的都不带，用户 2026-09-27 定）。列表、搜索、每日小计全走它，
   // 少了这一条任何一处都能把里页面的校准漏出去。
-  const vtxs = useMemo(() => visibleTxs(txs, accounts, mode), [txs, accounts, mode])
+  const vtxs = useMemo(() => outerList(txs, accounts, mode), [txs, accounts, mode])
   const accMap = useAccountMap()
   const catMap = useCategoryMap()
   const nav = useNavigate()

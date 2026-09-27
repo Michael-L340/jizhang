@@ -7,7 +7,7 @@
 //   四、外页面校准不是收支，进不了收入/支出统计。
 import { describe, expect, it } from 'vitest'
 import { balanceSeries, balances, monthSummary } from './compute'
-import { FACADE_EPOCH, facadeAsTx, facadeDelta, facadeIdFor, latestFacadeAdjust, migrateFacade, outerBook, outerList, type Mode } from './facade'
+import { FACADE_EPOCH, facadeAsTx, facadeDelta, facadeIdFor, latestFacadeAdjust, migrateFacade, outerBook, outerList } from './facade'
 import type { Account, FacadeAdjust, Transaction } from '../types'
 
 const acc = (id: string, kind: Account['kind'], facade_offset: number | null = null): Account => ({
@@ -288,7 +288,3 @@ describe('「外页面上次校准」', () => {
     expect(latestFacadeAdjust([rows[0]]).size).toBe(0)
   })
 })
-
-// Mode 只是为了让上面 'inner' | 'outer' 的字面量有个落点；不用它 tsc 会报未使用
-const _m: Mode = 'outer'
-void _m
