@@ -76,6 +76,24 @@ export interface Transaction {
   created_at: string // ISO
 }
 
+/**
+ * 0010：外页面自己的校准记录（里外校准分家，2026-09-27）。
+ *
+ * 外页面的余额和曲线 = 真实流水 − 藏掉的 − 非白条账户的真实校准 + 这些记录；里页面看不见它。
+ * 一条 = 「从 date 这天起，外页面这个账户的余额加 cents」，以前的点不动——和里页面的真实校准一个脾气，
+ * 不再是老模型那种一改整条曲线上下移的固定差值（`Account.facade_offset`）。
+ *
+ * `cents` 是整数「分」，可正可负；数据库里也是整数（bigint），不走元↔分换算，备份脚本就少一处会算错 100 倍的地方。
+ * 单独一张表而不是流水表加一列：回退旧版本时旧代码看不见这张表，不会把假校准当真校准算进里页面。
+ */
+export interface FacadeAdjust {
+  id: string
+  account_id: string
+  date: string // YYYY-MM-DD
+  cents: number
+  created_at: string // ISO
+}
+
 export interface Snapshot {
   accounts: Account[]
   categories: Category[]
