@@ -28,9 +28,10 @@ export interface Account {
    */
   defer_after_repay: boolean | null
   /**
-   * 里外页面：外页面显示的余额 = 真实余额 + 这个偏移量（整数「分」）。
-   * null = 不做修饰，里外一样。白条不参与（`facade.ts` 的 offsetOf 里挡了一道）。
-   * 存分不存元：accounts 表没有别的金额列，不存在和谁不一致的问题，还省掉一层换算。
+   * 0007，**已退役**（2026-09-27 里外校准分家）：老模型「外页面显示的余额 = 真实余额 + 这个偏移量」。
+   * 新模型改用 facade_adjusts 表（见 FacadeAdjust），代码不再读这一列，但**值留在库里不动**：
+   * 回退到旧版本时旧代码照常用它；导入 0010 之前的老备份时 parseImport 也靠它换算出外页面校准记录。
+   * 整数「分」，null = 没修饰过。
    */
   facade_offset: number | null
 }
@@ -98,6 +99,8 @@ export interface Snapshot {
   accounts: Account[]
   categories: Category[]
   transactions: Transaction[]
+  /** 0010：外页面校准记录。老备份文件没有这一节，parseImport 会按老偏移量换算出来 */
+  facade_adjusts: FacadeAdjust[]
 }
 
 export const TX_TYPE_LABEL: Record<TxType, string> = {

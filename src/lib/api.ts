@@ -1,6 +1,6 @@
 // ★ 全项目唯一接触 Supabase 的文件。换数据库只改这里。
 // 对外只暴露业务函数；金额在这里完成 分 ↔ numeric 的转换。
-import type { Account, Category, CatKind, Snapshot, Transaction, TxType } from '../types'
+import type { Account, Category, CatKind, FacadeAdjust, Snapshot, Transaction, TxType } from '../types'
 import type { BackupStatus } from './backup'
 import { centsFromDb, centsToDb } from './money'
 import { supabase } from './supabase'
@@ -23,6 +23,21 @@ interface TxRow {
 const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,created_at'
 const ACC_COLS = 'id,name,kind,sort,is_archived,repay_day,facade_offset,defer_after_repay'
 const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived,note'
+/** 0010：外页面校准记录。cents 在库里就是整数「分」（bigint），不过元↔分换算 */
+const FA_COLS = 'id,account_id,date,cents,created_at'
+
+interface FaRow {
+  id: string
+  account_id: string
+  date: string
+  cents: number | string
+  created_at: string
+}
+
+/** bigint 走 JSON 一般是数字，但别赌：统一收成 number */
+function rowToFa(r: FaRow): FacadeAdjust {
+  return { id: r.id, account_id: r.account_id, date: r.date, cents: Number(r.cents), created_at: r.created_at }
+}
 
 function rowToTx(r: TxRow): Transaction {
   return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null, installments: r.installments ?? null, settles: r.settles ?? null, hidden: r.hidden ?? null }
@@ -132,7 +147,15 @@ export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
     transactions.push(...(data as TxRow[]).map(rowToTx))
     if (data.length < PAGE) break
   }
-  return { accounts: a.data as Account[], categories: c.data as Category[], transactions }
+  // 外页面校准记录一般就几条，但分页写法照抄流水那段：将来多了也不会静默截断
+  const facade_adjusts: FacadeAdjust[] = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await withSignal(supabase.from('facade_adjusts').select(FA_COLS).order('id').range(from, from + PAGE - 1))
+    if (error) throw error
+    facade_adjusts.push(...(data as FaRow[]).map(rowToFa))
+    if (data.length < PAGE) break
+  }
+  return { accounts: a.data as Account[], categories: c.data as Category[], transactions, facade_adjusts }
 }
 
 // ---------- 流水 ----------
@@ -163,6 +186,13 @@ export async function deleteTx(id: string): Promise<void> {
   if (error) throw error
 }
 
+// ---------- 外页面校准记录 ----------
+
+export async function insertFacadeAdjust(f: FacadeAdjust): Promise<void> {
+  const { error } = await supabase.from('facade_adjusts').insert(f)
+  if (error) throw error
+}
+
 // ---------- 分类 ----------
 
 export async function addCategory(input: { kind: CatKind; parent_id: string | null; name: string; sort: number }): Promise<Category> {
@@ -189,6 +219,8 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  * 危险：清空当前登录账号的全部数据。只给「整库恢复」用，调用方必须先拿到完整备份。
  *
  * 顺序不能反（以下都由 npm run test:db 在真的 Postgres 上实测过）：
+ * - facade_adjusts.account_id 是 on delete restrict，先删账户会被拒绝；它排第一句，
+ *   所以 step === 'facade_adjusts' 就是「第一句就失败，云端一行没动」。
  * - transactions.account_id / category_id 都是 on delete restrict，先删账户或分类会被拒绝。
  * - categories.parent_id 也是 restrict，只删一级、留着二级同样会被拒绝。
  *
@@ -200,6 +232,8 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  * PostgREST 不允许无条件 delete，每条都带一个「匹配全部」的过滤条件；RLS 保证只删自己的行。
  */
 export async function wipeAll(): Promise<void> {
+  const fa = await supabase.from('facade_adjusts').delete().not('id', 'is', null)
+  if (fa.error) wipeFailed('facade_adjusts', fa.error)
   const tx = await supabase.from('transactions').delete().not('id', 'is', null)
   if (tx.error) wipeFailed('transactions', tx.error)
   const child = await supabase.from('categories').delete().not('parent_id', 'is', null)
@@ -212,11 +246,11 @@ export async function wipeAll(): Promise<void> {
 
 /**
  * wipeAll 抛的错会挂上 step，指出是删到哪一步炸的。
- * 用处只有一个但很要紧：step === 'transactions' 表示**第一句就失败了，云端一行都没删**，
+ * 用处只有一个但很要紧：step === 'facade_adjusts' 表示**第一句就失败了，云端一行都没删**，
  * 调用方据此可以老实告诉用户「账本原封不动」，而不是吓人的「可能只剩一半」。
- * 这四个删除不是一个事务，别的 step 都意味着已经删掉了一部分。
+ * 这五个删除不是一个事务，别的 step 都意味着已经删掉了一部分。
  */
-export type WipeStep = 'transactions' | 'child_categories' | 'root_categories' | 'accounts'
+export type WipeStep = 'facade_adjusts' | 'transactions' | 'child_categories' | 'root_categories' | 'accounts'
 export interface WipeFailure extends Error {
   step: WipeStep
 }
@@ -236,6 +270,11 @@ function wipeFailed(step: WipeStep, cause: unknown): never {
 export async function importAll(snap: Snapshot): Promise<void> {
   const acc = await supabase.from('accounts').upsert(snap.accounts, { onConflict: 'id' })
   if (acc.error) throw acc.error
+  // 外页面校准记录只引用账户，账户进去之后就能写；cents 本来就是整数分，不过换算
+  for (let i = 0; i < snap.facade_adjusts.length; i += 500) {
+    const { error } = await supabase.from('facade_adjusts').upsert(snap.facade_adjusts.slice(i, i + 500), { onConflict: 'id' })
+    if (error) throw error
+  }
   const parents = snap.categories.filter((c) => !c.parent_id)
   const children = snap.categories.filter((c) => c.parent_id)
   const p = await supabase.from('categories').upsert(parents, { onConflict: 'id' })

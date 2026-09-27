@@ -58,7 +58,8 @@ export function Settings() {
   const health = backupHealth(backup?.at ?? null, nowIso())
   /** 这次导出的东西信不信得过：本次会话成功同步过、且最近一次没失败 */
   const trustworthy = exportTrustworthy({ loaded, syncFailed })
-  const snapshot = useMemo(() => ({ accounts, categories, transactions }), [accounts, categories, transactions])
+  const facade_adjusts = useStore((st) => st.facade_adjusts)
+  const snapshot = useMemo(() => ({ accounts, categories, transactions, facade_adjusts }), [accounts, categories, transactions, facade_adjusts])
   const [busy, setBusy] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   // 用 ref 不用 state：setMode 之后要立刻 click()，ref 是同步的，不用等重渲染

@@ -19,7 +19,10 @@ import mig0006 from '../../supabase/migrations/0006_repay_day_and_settles.sql?ra
 import mig0007 from '../../supabase/migrations/0007_facade_offset.sql?raw'
 import mig0008 from '../../supabase/migrations/0008_defer_after_repay.sql?raw'
 import mig0009 from '../../supabase/migrations/0009_hidden_transaction.sql?raw'
-import type { Snapshot } from '../types'
+import mig0010 from '../../supabase/migrations/0010_facade_adjusts.sql?raw'
+import migrateSql from '../../scripts/migrate-facade.sql?raw'
+import type { Account, Snapshot, Transaction } from '../types'
+import { migrateFacade } from './facade'
 import { centsFromDb, centsToDb } from './money'
 import { validateImport } from './validate'
 
@@ -44,6 +47,7 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0007)
   await db.exec(mig0008)
   await db.exec(mig0009)
+  await db.exec(mig0010)
   return db
 }
 
@@ -55,6 +59,7 @@ interface Snap {
   accounts: Row[]
   categories: Row[]
   transactions: Row[]
+  facade_adjusts: Row[]
 }
 
 /** 对应 csv.ts 的 buildJson：库里存的是「元」，备份文件里是整数「分」 */
@@ -66,16 +71,25 @@ async function exportBackup(db: PGlite): Promise<Snap> {
       ...t,
       amount: centsFromDb(t.amount as string),
     })),
+    // 0010：cents 在库里就是整数分，不换算。bigint 从驱动出来可能是 BigInt，统一收成 number（api.ts 的 rowToFa 同样）
+    facade_adjusts: (await q(db, 'select id,account_id,date::text as date,cents,created_at from facade_adjusts')).map((f) => ({ ...f, cents: Number(f.cents) })),
   }
 }
 
-/** 对应 api.ts 的 importAll 的前半段：账户 → 一级分类 → 二级分类 */
+/** 对应 api.ts 的 importAll 的前半段：账户 → 外页面校准记录 → 一级分类 → 二级分类 */
 async function importRefs(db: PGlite, snap: Snap): Promise<void> {
   for (const a of snap.accounts) {
     await db.query(
       `insert into accounts (id,name,kind,sort,is_archived,repay_day,facade_offset,defer_after_repay) values ($1,$2,$3,$4,$5,$6,$7,$8)
        on conflict (id) do update set name=excluded.name,kind=excluded.kind,sort=excluded.sort,is_archived=excluded.is_archived,repay_day=excluded.repay_day,facade_offset=excluded.facade_offset,defer_after_repay=excluded.defer_after_repay`,
       [a.id, a.name, a.kind, a.sort, a.is_archived, a.repay_day ?? null, a.facade_offset ?? null, a.defer_after_repay ?? null],
+    )
+  }
+  for (const f of snap.facade_adjusts ?? []) {
+    await db.query(
+      `insert into facade_adjusts (id,account_id,date,cents,created_at) values ($1,$2,$3,$4,$5)
+       on conflict (id) do update set account_id=excluded.account_id,date=excluded.date,cents=excluded.cents`,
+      [f.id, f.account_id, f.date, f.cents, f.created_at],
     )
   }
   const ordered = [...snap.categories.filter((c) => !c.parent_id), ...snap.categories.filter((c) => c.parent_id)]
@@ -111,8 +125,9 @@ async function importFailingAtBatch(db: PGlite, snap: Snap, failAt: number, batc
   }
 }
 
-/** 对应 api.ts 的 wipeAll：流水 → 二级分类 → 一级分类 → 账户 */
+/** 对应 api.ts 的 wipeAll：外页面校准记录 → 流水 → 二级分类 → 一级分类 → 账户 */
 async function wipeAll(db: PGlite): Promise<void> {
+  await db.exec('delete from facade_adjusts where id is not null')
   await db.exec('delete from transactions where id is not null')
   await db.exec('delete from categories where parent_id is not null')
   await db.exec('delete from categories where parent_id is null')
@@ -136,6 +151,9 @@ async function seed(db: PGlite): Promise<void> {
   await mk('2026-09-03', 'transfer', 30000, boc, null, wx)
   await mk('2026-09-03', 'adjust', -1084, wx, null, null, '余额校准')
   await mk('2026-09-04', 'adjust', 214874, boc, null, null, '余额校准')
+  // 0010：外页面校准记录，一条负的一条正的，cents 直接是整数分
+  await db.query('insert into facade_adjusts (account_id,date,cents) values ($1,$2,$3)', [boc, '2026-09-04', -216326])
+  await db.query('insert into facade_adjusts (account_id,date,cents) values ($1,$2,$3)', [wx, '2026-09-05', 50000])
 }
 
 const byId = (rows: Row[]) => [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))
@@ -169,6 +187,8 @@ describe('整库恢复', () => {
     expect(byId(back.accounts)).toEqual(byId(backup.accounts))
     expect(byId(back.categories)).toEqual(byId(backup.categories))
     expect(byId(back.transactions)).toEqual(byId(backup.transactions))
+    expect(byId(back.facade_adjusts)).toEqual(byId(backup.facade_adjusts))
+    expect(back.facade_adjusts.map((f) => f.cents).sort()).toEqual([-216326, 50000])
   })
 
   it('金额往返零误差：大额小数、1 分、负数校准都不能变', async () => {
@@ -187,6 +207,18 @@ describe('清空的顺序', () => {
     const db = await freshDb()
     await seed(db)
     await expect(db.exec('delete from accounts where id is not null')).rejects.toThrow(/RESTRICT|foreign key/i)
+  })
+
+  it('留着外页面校准记录去删账户，会被外键拒绝——所以 wipeAll 第一句删的是它', async () => {
+    const db = await freshDb()
+    await seed(db)
+    await db.exec('delete from transactions where id is not null')
+    await db.exec('delete from categories where parent_id is not null')
+    await db.exec('delete from categories where parent_id is null')
+    await expect(db.exec('delete from accounts where id is not null')).rejects.toThrow(/RESTRICT|foreign key/i)
+    await db.exec('delete from facade_adjusts where id is not null')
+    await db.exec('delete from accounts where id is not null')
+    expect(await count(db, 'accounts')).toBe(0)
   })
 
   it('只删一级分类、留着二级，会被外键拒绝', async () => {
@@ -286,6 +318,7 @@ const asSnap = (s: Snapshot): Snap => ({
   accounts: s.accounts as unknown as Row[],
   categories: s.categories as unknown as Row[],
   transactions: s.transactions as unknown as Row[],
+  facade_adjusts: s.facade_adjusts as unknown as Row[],
 })
 
 /** 完整走一遍 store.ts 的 restoreSnapshot：**先校验**，不过就一个字节都不动云端；过了才 wipe→import */
@@ -299,6 +332,7 @@ interface RawFile {
   accounts: unknown[]
   categories: unknown[]
   transactions: unknown[]
+  facade_adjusts?: unknown[]
 }
 
 const uid = (n: number): string => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`
@@ -357,6 +391,11 @@ function legalBackup(): RawFile {
       t(12, { account_id: A.gone, amount: 99, note: '记在归档账户上的历史流水' }),
       t(13, { account_id: A.jd, amount: 120000, installments: 3, note: '白条分 3 期（0004/0005）' }),
       t(14, { type: 'transfer', category_id: null, account_id: A.boc, to_account_id: A.jd, amount: 40000, note: '还白条' }),
+    ],
+    // 0010：一条迁移出来的（记在 2000-01-01）、一条人做的；负数、正数各一
+    facade_adjusts: [
+      { id: uid(201), account_id: A.boc, date: '2000-01-01', cents: -1452, created_at: '2000-01-01T00:00:00.000Z' },
+      { id: uid(202), account_id: A.wx, date: '2026-09-04', cents: 800000, created_at: '2026-09-04T03:00:00.000Z' },
     ],
   }
 }
@@ -458,6 +497,12 @@ const BAD_CASES: BadCase[] = [
     msg: /重复/,
     dbRejects: false,
   },
+  // 0010 外页面校准记录
+  { name: '外页面校准用的账户在文件里不存在', mutate: (f) => ((f.facade_adjusts![0] as Row).account_id = uid(92)), msg: /外页面校准.*账户在这个文件里找不到/, dbRejects: true },
+  { name: '外页面校准的金额不是整数分', mutate: (f) => ((f.facade_adjusts![0] as Row).cents = 12.5), msg: /外页面校准.*整数分/, dbRejects: false },
+  { name: '外页面校准的日期是 2025-02-30', mutate: (f) => ((f.facade_adjusts![0] as Row).date = '2025-02-30'), msg: /外页面校准.*这一天不存在/, dbRejects: true },
+  { name: '外页面校准没有账户', mutate: (f) => ((f.facade_adjusts![0] as Row).account_id = null), msg: /外页面校准.*没有账户/, dbRejects: true },
+  { name: '两条外页面校准同一个 id', mutate: (f) => f.facade_adjusts!.push({ ...(f.facade_adjusts![0] as Row) }), msg: /外页面校准.*重复/, dbRejects: false },
 ]
 
 describe('落地前校验：凡是通过的都能真的导进去', () => {
@@ -482,11 +527,13 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     expect(await count(db, 'accounts')).toBe(4)
     expect(await count(db, 'categories')).toBe(8)
     expect(await count(db, 'transactions')).toBe(14)
+    expect(await count(db, 'facade_adjusts')).toBe(2)
 
     const back = await exportBackup(db)
     expect(byId(back.accounts)).toEqual(byId(snap.accounts as unknown as Row[]))
     expect(byId(back.categories)).toEqual(byId(snap.categories as unknown as Row[]))
     expect(isoTx(back.transactions)).toEqual(isoTx(snap.transactions as unknown as Row[]))
+    expect(isoTx(back.facade_adjusts)).toEqual(isoTx(snap.facade_adjusts as unknown as Row[]))
   })
 
   it('金额边界逐个核对：1 分、上限、负数校准、0 元校准都不能变样', async () => {
@@ -541,8 +588,69 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     const db = await freshDb()
     await seed(db)
     const snap = await exportBackup(db)
-    const asFile: RawFile = { ...snap, transactions: snap.transactions.map((t) => ({ ...t, created_at: new Date(t.created_at as string).toISOString() })) }
+    const iso = <T extends Row>(rows: T[]): T[] => rows.map((r) => ({ ...r, created_at: new Date(r.created_at as string).toISOString() }))
+    const asFile: RawFile = { ...snap, transactions: iso(snap.transactions), facade_adjusts: iso(snap.facade_adjusts) }
     expect(() => validateImport(asFile)).not.toThrow()
+  })
+})
+
+// ══════════════════════════════════════════════════════════════════════
+// 一次性迁移脚本 scripts/migrate-facade.sql（老偏移量 → facade_adjusts）
+//
+// 云端只跑一次，但跑之前得先在真 Postgres 上证明它和 facade.ts 的 migrateFacade 算的是同一批行：
+// 那个 TS 函数被 facade.book.test.ts 拿随机账本证明过「迁移前后曲线逐点不变」，
+// SQL 只要和它逐行相等，云端迁移就继承了同一条保证。
+// ══════════════════════════════════════════════════════════════════════
+
+describe('一次性迁移脚本：SQL 和 migrateFacade 逐行相等', () => {
+  /** 老模型的库：两个修饰过的账户、一个没修饰的、一个白条，各种校准都来一点 */
+  async function legacyDb(): Promise<{ db: PGlite; accounts: Account[]; txs: Transaction[] }> {
+    const db = await freshDb()
+    await seed(db)
+    await db.exec('delete from facade_adjusts where id is not null') // seed 里那两条是新模型的，这里要的是「迁移前」
+    const id = async (n: string) => (await q(db, 'select id from accounts where name=$1', [n]))[0].id
+    const [wx, boc, ali] = [await id('微信'), await id('中国银行'), await id('支付宝')]
+    await db.query('update accounts set facade_offset=$1 where id=$2', [-216326, boc]) // 修饰过：偏移量 + 校准 214874 = −1452
+    await db.query('update accounts set facade_offset=$1 where id=$2', [-639100, ali]) // 修饰过，正好抵消 → 不该写记录
+    await db.query("insert into transactions (date,type,amount,account_id,note) values ('2026-09-07','adjust',$1,$2,'余额校准')", [centsToDb(639100), ali])
+    await db.query("insert into transactions (date,type,amount,account_id,note,hidden) values ('2026-09-08','adjust',$1,$2,'藏起来的',true)", [centsToDb(-100), boc]) // 藏掉的不算
+    await db.query("insert into transactions (date,type,amount,account_id,note) values ('2026-09-09','adjust',$1,$2,'0 元')", [centsToDb(0), wx]) // 0 元不写
+    // 0004 可能已经预置了京东白条，有就用，没有再建
+    const jd = (await q(db, "select id from accounts where name='京东白条'"))[0]?.id ?? (await q(db, "insert into accounts (name,kind,repay_day) values ('京东白条','credit',17) returning id"))[0].id
+    await db.query("insert into transactions (date,type,amount,account_id,note) values ('2026-09-10','adjust',$1,$2,'白条校准')", [centsToDb(5000), jd]) // 白条不参与
+    const snap = await exportBackup(db)
+    const accounts = snap.accounts as unknown as Account[]
+    const txs = (snap.transactions as unknown as Transaction[]).map((t) => ({ ...t, created_at: new Date(t.created_at).toISOString(), hidden: t.hidden ?? null }))
+    return { db, accounts, txs }
+  }
+  const pick = (rows: Row[]) => byId(rows).map((r) => ({ id: r.id, account_id: r.account_id, date: r.date, cents: Number(r.cents), created_at: new Date(r.created_at as string).toISOString() }))
+
+  it('跑一遍：写出来的行和 migrateFacade 一模一样（id、账户、日期、分、记录时间）', async () => {
+    const { db, accounts, txs } = await legacyDb()
+    const want = migrateFacade(accounts, txs)
+    expect(want.length).toBe(2) // 中国银行一条 EPOCH，微信一条孪生；支付宝抵消、藏掉的、0 元、白条都不写
+    await db.exec(migrateSql)
+    const got = pick((await exportBackup(db)).facade_adjusts)
+    expect(got).toEqual(pick(want as unknown as Row[]))
+    // 迁移只加行：老列一个字没动
+    expect((await q(db, 'select facade_offset from accounts where name=$1', ['中国银行']))[0].facade_offset).toBe(-216326)
+  })
+
+  it('重复跑不翻倍：id 由来源推出，第二次全部撞上 on conflict do nothing', async () => {
+    const { db } = await legacyDb()
+    await db.exec(migrateSql)
+    const once = pick((await exportBackup(db)).facade_adjusts)
+    await db.exec(migrateSql)
+    expect(pick((await exportBackup(db)).facade_adjusts)).toEqual(once)
+  })
+
+  it('老备份文件（没有 facade_adjusts 这一节）导入后算出来的也是同一批 id：和云端迁移过的行合并不会翻倍', async () => {
+    const { db, accounts, txs } = await legacyDb()
+    await db.exec(migrateSql)
+    // 老文件 = 迁移前导出的三张表；parseImport 会用 migrateFacade 补上第四节（csv.test.ts 守那一步），这里直接拿函数结果
+    const synthesized = migrateFacade(accounts, txs)
+    await importAll(db, { accounts: [], categories: [], transactions: [], facade_adjusts: synthesized as unknown as Row[] })
+    expect(await count(db, 'facade_adjusts')).toBe(synthesized.length)
   })
 })
 

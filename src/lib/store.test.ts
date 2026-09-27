@@ -4,7 +4,7 @@
 // 缓存写满。它们全是纯数据层的时序问题，把 api.ts 换成可控的假实现就能在这里精确重放，
 // 不需要浏览器，也不需要真的联网。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Category, Snapshot, Transaction } from '../types'
+import type { Category, FacadeAdjust, Snapshot, Transaction } from '../types'
 
 // ---------- 假的 api.ts ----------
 // vi.hoisted 保证这个对象在 vi.mock 提升后仍是同一个引用，resetModules 之后也不会换。
@@ -16,6 +16,7 @@ const api = vi.hoisted(() => ({
   addCategory: vi.fn(),
   updateCategory: vi.fn(),
   updateAccount: vi.fn(),
+  insertFacadeAdjust: vi.fn(),
   importAll: vi.fn(),
   wipeAll: vi.fn(),
   fetchBackupStatus: vi.fn(),
@@ -94,7 +95,11 @@ function cat(id: string, over: Partial<Category> = {}): Category {
 }
 
 function snap(transactions: Transaction[] = [], categories: Category[] = []): Snapshot {
-  return { accounts: [], categories, transactions }
+  return { accounts: [], categories, transactions, facade_adjusts: [] }
+}
+
+function fa(id: string, cents = -800000): FacadeAdjust {
+  return { id, account_id: 'acc1', date: '2026-09-27', cents, created_at: '2026-09-27T02:00:00.000Z' }
 }
 
 let store: typeof import('./store')
@@ -288,11 +293,11 @@ describe('S2 本机缓存', () => {
     expect(JSON.parse(ls.getItem(CACHE_KEY)!).transactions).toHaveLength(3)
   })
 
-  it('只写三张表和时间戳，不把 auth/toast/syncing 一起写进去', async () => {
+  it('只写四张表和时间戳，不把 auth/toast/syncing 一起写进去', async () => {
     st().showToast('随便一句')
     st().persist()
     await vi.advanceTimersByTimeAsync(600)
-    expect(Object.keys(JSON.parse(ls.getItem(CACHE_KEY)!)).sort()).toEqual(['accounts', 'at', 'categories', 'outbox', 'transactions'])
+    expect(Object.keys(JSON.parse(ls.getItem(CACHE_KEY)!)).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'outbox', 'transactions'])
   })
 
   it('缓存占用按 UTF-16 算：(键长 + 值长) × 2', async () => {
@@ -491,7 +496,7 @@ describe('同步失败留痕', () => {
 //   恢复是唯一会主动删数据的路径，顺序错一步就是删了没导回来。
 // ══════════════════════════════════════════════════════════════
 describe('导入与整库恢复', () => {
-  const snapshot = { accounts: [], categories: [], transactions: [tx('t1')] }
+  const snapshot: Snapshot = { accounts: [], categories: [], transactions: [tx('t1')] , facade_adjusts: [] }
 
   it('整库恢复必须先清空再导入，最后把界面拉到云端', async () => {
     const order: string[] = []
@@ -511,10 +516,10 @@ describe('导入与整库恢复', () => {
   })
 
   it('清空的第一句就失败：云端一行都没删，不许吓唬人，也没什么可回滚的', async () => {
-    // wipeAll 的四条 DELETE 不是一个事务。api.ts 给错误挂了 step，
-    // step==='transactions' 表示第一条就没发出去，云端还是原样
+    // wipeAll 的五条 DELETE 不是一个事务。api.ts 给错误挂了 step，
+    // step==='facade_adjusts'（0010 起排第一句）表示第一条就没发出去，云端还是原样
     store.useStore.setState({ transactions: [tx('old1')] })
-    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'transactions' }))
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'facade_adjusts' }))
     await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/一条数据都没删/)
     expect(api.importAll).not.toHaveBeenCalled()
   })
@@ -522,11 +527,28 @@ describe('导入与整库恢复', () => {
   it('清空到一半失败：绝不能接着导入新文件，只能拿操作前的快照往回填', async () => {
     store.useStore.setState({ transactions: [tx('old1')] })
     api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'accounts' }))
+    // 变异：store 里的判断改回 step === 'transactions' → 下面这条会被当成「第一句就失败」而不回滚，红
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'transactions' }))
     api.importAll.mockResolvedValueOnce(undefined)
     api.fetchAll.mockResolvedValueOnce(snap([tx('old1')]))
     await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
     expect(api.importAll).toHaveBeenCalledTimes(1)
     expect(api.importAll.mock.calls[0][0].transactions.map((t: Transaction) => t.id)).toEqual(['old1'])
+    // 第二句（删流水）失败：外页面校准记录已经删掉了，同样要回滚
+    api.importAll.mockResolvedValueOnce(undefined)
+    api.fetchAll.mockResolvedValueOnce(snap([tx('old1')]))
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
+    expect(api.importAll).toHaveBeenCalledTimes(2)
+  })
+
+  it('回滚写回去的快照要带上外页面校准记录，不然恢复失败一次它们就没了', async () => {
+    store.useStore.setState({ transactions: [tx('old1')], facade_adjusts: [fa('f1')] })
+    api.wipeAll.mockResolvedValueOnce(undefined)
+    api.importAll.mockRejectedValueOnce(new Error('网络不通'))
+    api.importAll.mockResolvedValueOnce(undefined)
+    api.fetchAll.mockResolvedValueOnce({ ...snap([tx('old1')]), facade_adjusts: [fa('f1')] })
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
+    expect(api.importAll.mock.calls[1][0].facade_adjusts.map((f: FacadeAdjust) => f.id)).toEqual(['f1'])
   })
 
   it('导入中途失败：立刻用操作前的快照回滚，并明确告诉用户没丢东西', async () => {
@@ -912,6 +934,58 @@ describe('loadBackupStatus', () => {
 // 离线记账 —— 断网时写不进云端的那几笔进待传队列，联网后自动补
 //   手工复现方式：开飞行模式记一笔，关掉飞行模式看它自己传上去
 // ══════════════════════════════════════════════════════════════
+describe('外页面校准记录（0010）', () => {
+  it('写成功：进 state、落缓存、返回 true', async () => {
+    api.insertFacadeAdjust.mockResolvedValueOnce(undefined)
+    expect(await st().addFacadeAdjust(fa('f1'))).toBe(true)
+    expect(st().facade_adjusts.map((f) => f.id)).toEqual(['f1'])
+    expect(api.insertFacadeAdjust.mock.calls[0][0]).toEqual(fa('f1'))
+    await vi.advanceTimersByTimeAsync(600)
+    expect(JSON.parse(ls.getItem(CACHE_KEY)!).facade_adjusts).toEqual([fa('f1')])
+  })
+
+  it('写失败：state 不动、返回 false、报错不带「外页面」三个字（这条 toast 会在外页面上弹）', async () => {
+    // 变异：catch 里也 set 进 state → 红；toast 文案写成「外页面校准失败」→ 红
+    api.insertFacadeAdjust.mockRejectedValueOnce(offline())
+    expect(await st().addFacadeAdjust(fa('f1'))).toBe(false)
+    expect(st().facade_adjusts).toEqual([])
+    expect(st().toast?.msg).toMatch(/校准失败/)
+    expect(st().toast?.msg).not.toMatch(/外页面/)
+  })
+
+  it('已经在飞的同步不会把刚写的冲掉，之后的同步以服务端为准', async () => {
+    // 变异：addFacadeAdjust 不登记 pendingFa → 第一个断言红
+    const d = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(d.promise) // GET 先出门，此刻服务端还没有这条
+    const rp = st().refresh()
+    api.insertFacadeAdjust.mockResolvedValueOnce(undefined)
+    await st().addFacadeAdjust(fa('f1'))
+    d.resolve(snap())
+    await rp
+    expect(st().facade_adjusts.map((f) => f.id)).toEqual(['f1'])
+
+    api.fetchAll.mockResolvedValueOnce(snap())
+    await st().refresh()
+    expect(st().facade_adjusts).toEqual([])
+  })
+
+  it('同步拉回来的记录进 state；0010 之前写的缓存没有这一节，读出来是空数组不是 undefined', async () => {
+    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
+    api.hasSession.mockResolvedValue(true)
+    api.fetchAll.mockResolvedValueOnce({ ...snap([tx('t1')]), facade_adjusts: [fa('f9')] })
+    await st().init()
+    expect(st().facade_adjusts.map((f) => f.id)).toEqual(['f9'])
+    await vi.advanceTimersByTimeAsync(600)
+    expect(JSON.parse(ls.getItem(CACHE_KEY)!).facade_adjusts).toHaveLength(1)
+  })
+
+  it('退出登录要清掉，换个账号登进来不能看到上一个人的外页面校准', async () => {
+    store.useStore.setState({ facade_adjusts: [fa('f1')] })
+    await st().signOut()
+    expect(st().facade_adjusts).toEqual([])
+  })
+})
+
 describe('旧版本写的缓存', () => {
   it('缺少新列的旧缓存要在入口补成 null，不能让 undefined 流进算式', async () => {
     // 加列之前的缓存长这样：账户没有 repay_day，流水没有 settles / installments

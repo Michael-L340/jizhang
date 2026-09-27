@@ -14,6 +14,7 @@ interface Fixture {
   accounts: Raw[]
   categories: Raw[]
   transactions: Raw[]
+  facade_adjusts?: Raw[]
 }
 
 const uuid = (n: number): string => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`
@@ -66,6 +67,57 @@ function cat(over: Raw, i = 1): Fixture {
 }
 
 const run = (f: Fixture) => (): unknown => validateImport(f)
+
+// ══════════════════════════════════════════════════════════════
+// facade_adjusts（0010）—— 外页面校准记录
+// ══════════════════════════════════════════════════════════════
+describe('外页面校准记录', () => {
+  const fa = (over: Raw = {}): Fixture => {
+    const f = base()
+    f.facade_adjusts = [{ id: uuid(31), account_id: A1, date: '2026-09-27', cents: -800000, created_at: '2026-09-27T02:00:00.000Z', ...over }]
+    return f
+  }
+
+  it('合法的原样返回，cents 是整数分、不做任何换算', () => {
+    // 变异：readFacadeAdjust 对 cents 做 ×100 或 /100 → 红
+    const out = validateImport(fa())
+    expect(out.facade_adjusts).toEqual([{ id: uuid(31), account_id: A1, date: '2026-09-27', cents: -800000, created_at: '2026-09-27T02:00:00.000Z' }])
+  })
+
+  it('没有这一节（0010 之前的文件）→ 空数组，不报错', () => {
+    expect(validateImport(base()).facade_adjusts).toEqual([])
+  })
+
+  it('账户在文件里找不到 → 拒绝（外键）', () => {
+    expect(run(fa({ account_id: uuid(99) }))).toThrow(/第 1 条外页面校准.*账户在这个文件里找不到/)
+  })
+
+  it('没有账户 → 拒绝', () => {
+    expect(run(fa({ account_id: null }))).toThrow(/外页面校准.*没有账户/)
+  })
+
+  it('金额不是整数分 → 拒绝；超过 numeric 上限也拒绝', () => {
+    expect(run(fa({ cents: 12.5 }))).toThrow(/外页面校准.*整数分/)
+    expect(run(fa({ cents: '800000' }))).toThrow(/整数分/)
+    expect(run(fa({ cents: MAX_CENTS + 1 }))).toThrow(/超出范围/)
+  })
+
+  it('日期不存在或格式不对 → 拒绝', () => {
+    expect(run(fa({ date: '2025-02-30' }))).toThrow(/这一天不存在/)
+    expect(run(fa({ date: '2026/09/27' }))).toThrow(/日期格式/)
+  })
+
+  it('id 不是 UUID、或重复 → 拒绝', () => {
+    expect(run(fa({ id: 'f1' }))).toThrow(/UUID/)
+    const f = fa()
+    f.facade_adjusts!.push({ ...f.facade_adjusts![0] })
+    expect(run(f)).toThrow(/第 2 条外页面校准.*重复/)
+  })
+
+  it('记录时间不合法 → 拒绝', () => {
+    expect(run(fa({ created_at: '刚才' }))).toThrow(/记录时间/)
+  })
+})
 
 describe('底稿本身是合法的', () => {
   it('不改任何东西就能通过，并且原样返回', () => {

@@ -10,10 +10,11 @@
 //   accounts      unique(user_id,name)、kind check、sort smallint、id 是 uuid 列
 //   categories    cat_root_uniq、cat_child_uniq、categories_depth_guard、kind check
 //   transactions  tx_shape（0002 版）、tx_category_kind_guard、三个外键、numeric(12,2)、date
+//   facade_adjusts（0010）account_id 外键、date、cents bigint、id 是 uuid 列
 //
 // 报错必须是人话，还要指出第几条、哪个字段、什么问题：真出事那天，用户是一个人
 // 举着手机看着这句话决定下一步怎么办的。只报第一个错，报一串没人看得完。
-import type { Account, CatKind, Category, Snapshot, Transaction, TxType } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, Snapshot, Transaction, TxType } from '../types'
 import { TX_TYPE_LABEL } from '../types'
 
 const KIND_LABEL: Record<CatKind, string> = { expense: '支出', income: '收入' }
@@ -237,6 +238,28 @@ function readTransaction(v: unknown, i: number): Transaction {
   }
 }
 
+/**
+ * 0010：外页面校准记录。cents 在库里就是整数「分」（bigint），文件里也是，不做换算。
+ * 上限按 MAX_CENTS 收：bigint 装得下更大的数，但一条校准超过一百亿元只可能是文件坏了。
+ */
+function readFacadeAdjust(v: unknown, i: number): FacadeAdjust {
+  const fail: Fail = failer(`备份文件第 ${i + 1} 条外页面校准`)
+  const r = asRow(v)
+  if (!r) fail('不是一条记录，文件可能已损坏')
+  if (typeof r.id !== 'string') fail('缺少 id，文件可能已损坏')
+  if (!isUuid(r.id)) fail(`的 id「${String(r.id)}」不是合法的 UUID，数据库不接受`)
+  const account_id = refOf(r.account_id, '账户 id', fail)
+  if (account_id === null) fail('没有账户。外页面校准就是改某个账户在外页面显示的数，不能不指定账户')
+  const date: unknown = r.date
+  if (typeof date !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(date)) fail(`的日期格式不对（读到 ${JSON.stringify(r.date)}），应该长得像 2026-09-27`)
+  if (!isRealDate(date as string)) fail(`的日期是 ${String(date)}，这一天不存在`)
+  const cents: unknown = r.cents
+  if (!Number.isInteger(cents)) fail(`的金额不是整数分（读到 ${String(cents)}）`)
+  if (Math.abs(cents as number) > MAX_CENTS) fail(`的金额 ${String(cents)} 分超出范围（最多 ±9,999,999,999.99 元）`)
+  if (!isTimestamp(r.created_at)) fail(`的记录时间不是合法的时间（读到 ${JSON.stringify(r.created_at)}）`)
+  return { id: r.id as string, account_id: account_id as string, date: date as string, cents: cents as number, created_at: r.created_at as string }
+}
+
 // ── 跨行：外键、唯一索引、触发器，这些都要看过整份文件才知道 ──
 
 function checkAccounts(accounts: Account[]): void {
@@ -320,16 +343,31 @@ function checkTransactions(tx: Transaction[], accounts: Account[], categories: C
   })
 }
 
+function checkFacadeAdjusts(rows: FacadeAdjust[], accounts: Account[]): void {
+  const accIds = new Set(accounts.map((a) => a.id))
+  const ids = new Set<string>()
+  rows.forEach((f, i) => {
+    const fail: Fail = failer(`备份文件第 ${i + 1} 条外页面校准`)
+    if (ids.has(f.id)) fail(`的 id 和前面某一条重复了（${f.id}）`)
+    ids.add(f.id)
+    // 外键：整库恢复是先清空再重建，账户必须在同一个文件里
+    if (!accIds.has(f.account_id)) fail(`用的账户在这个文件里找不到（id=${f.account_id}），恢复时会被外键拒绝`)
+  })
+}
+
 /**
- * 校验并归一化一份备份文件的三张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
+ * 校验并归一化一份备份文件的四张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
  * 返回的对象只含数据库真有的那几列，字段齐全（缺的按数据库默认值补），可以直接交给 importAll。
+ * facade_adjusts 缺失按空处理（0010 之前的文件）；要不要按老偏移量换算，是 csv.ts parseImport 的事。
  */
-export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[] }): Snapshot {
+export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[]; facade_adjusts?: unknown[] }): Snapshot {
   const accounts = raw.accounts.map(readAccount)
   checkAccounts(accounts)
   const categories = raw.categories.map(readCategory)
   checkCategories(categories)
   const transactions = raw.transactions.map(readTransaction)
   checkTransactions(transactions, accounts, categories)
-  return { accounts, categories, transactions }
+  const facade_adjusts = (raw.facade_adjusts ?? []).map(readFacadeAdjust)
+  checkFacadeAdjusts(facade_adjusts, accounts)
+  return { accounts, categories, transactions, facade_adjusts }
 }

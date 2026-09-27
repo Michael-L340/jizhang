@@ -4,7 +4,7 @@
 // 断言我们发出去的请求长什么样、按什么顺序发。真正的数据库行为由 SQL 约束保证，
 // 这里守的是「前端有没有按约束要求的顺序去做」。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Snapshot, Transaction } from '../types'
+import type { FacadeAdjust, Snapshot, Transaction } from '../types'
 
 interface Call {
   table: string
@@ -169,12 +169,13 @@ describe('fetchBackupStatus', () => {
 })
 
 describe('wipeAll 的删除顺序', () => {
-  it('必须是 流水 → 二级分类 → 一级分类 → 账户', async () => {
-    // 三处外键都是 on delete restrict：顺序反了数据库会直接拒绝。
+  it('必须是 外页面校准 → 流水 → 二级分类 → 一级分类 → 账户', async () => {
+    // 四处外键都是 on delete restrict：顺序反了数据库会直接拒绝。
     // 二级和一级分开删，是因为 PostgREST 每次调用只发一条带过滤条件的 DELETE。
     // 这里只锁「我们发出去的顺序」，数据库真实反应由 npm run test:db 验证。
     await wipeAll()
     expect(shape()).toEqual([
+      'facade_adjusts:delete:not.id.is.null',
       'transactions:delete:not.id.is.null',
       'categories:delete:not.parent_id.is.null',
       'categories:delete:is.parent_id.null',
@@ -190,17 +191,20 @@ describe('wipeAll 的删除顺序', () => {
   it('中途失败就停下，不继续删后面的', async () => {
     h.results.push({ error: { message: '网络不通' } })
     await expect(wipeAll()).rejects.toBeTruthy()
-    expect(shape()).toEqual(['transactions:delete:not.id.is.null'])
+    expect(shape()).toEqual(['facade_adjusts:delete:not.id.is.null'])
   })
 
   it('失败时要说清楚是删到哪一步炸的——第一句就失败意味着云端一行没动', async () => {
     // store.ts 的整库恢复靠这个 step 决定要不要回滚、以及怎么跟用户说：
-    // 'transactions' = 一行都没删，可以老实说「账本原封不动」；
+    // 'facade_adjusts'（0010 起的第一句）= 一行都没删，可以老实说「账本原封不动」；
     // 其他 step = 已经删掉一部分，必须立刻拿操作前的快照写回去
     h.results.push({ error: { message: '网络不通' } })
-    await expect(wipeAll()).rejects.toMatchObject({ step: 'transactions' })
+    await expect(wipeAll()).rejects.toMatchObject({ step: 'facade_adjusts' })
 
     h.results.push({}, { error: { message: '网络不通' } })
+    await expect(wipeAll()).rejects.toMatchObject({ step: 'transactions' })
+
+    h.results.push({}, {}, { error: { message: '网络不通' } })
     await expect(wipeAll()).rejects.toMatchObject({ step: 'child_categories' })
   })
 })
@@ -209,13 +213,13 @@ describe('importAll', () => {
   it('金额按整数分转成 numeric 字符串，不能原样发出去', async () => {
     // 备份 JSON 里 12.50 元存的是 1250。直接塞进 numeric(12,2) 会变成 1250 元。
     // 这是唯一一处元↔分转换，错了不报错，只是金额全变一百倍。
-    await importAll({ accounts: [], categories: [], transactions: [tx({ amount: 1250 })] })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], transactions: [tx({ amount: 1250 })] })
     const rows = h.calls.find((c) => c.table === 'transactions')?.rows as { amount: string }[]
     expect(rows[0].amount).toBe('12.50')
   })
 
   it('负数校准也要转对', async () => {
-    await importAll({ accounts: [], categories: [], transactions: [tx({ id: 'a1', type: 'adjust', amount: -5, category_id: null })] })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], transactions: [tx({ id: 'a1', type: 'adjust', amount: -5, category_id: null })] })
     const rows = h.calls.find((c) => c.table === 'transactions')?.rows as { amount: string }[]
     expect(rows[0].amount).toBe('-0.05')
   })
@@ -228,6 +232,7 @@ describe('importAll', () => {
         { id: 'c1', kind: 'expense', parent_id: null, name: '日常开支', icon: null, sort: 1, is_archived: false, note: null },
       ],
       transactions: [],
+      facade_adjusts: [],
     }
     await importAll(snap)
     const catCalls = h.calls.filter((c) => c.table === 'categories')
@@ -235,15 +240,25 @@ describe('importAll', () => {
     expect((catCalls[1].rows as { id: string }[]).map((c) => c.id)).toEqual(['c2'])
   })
 
+  it('外页面校准记录在账户之后、分类之前写；cents 原样发，不过元↔分换算', async () => {
+    // 变异：importAll 把 facade 那段挪到 accounts 之前 → 顺序断言红；对 cents 也做 centsToDb → 值断言红
+    const f: FacadeAdjust = { id: 'f1', account_id: 'acc1', date: '2026-09-27', cents: -800000, created_at: '2026-09-27T02:00:00.000Z' }
+    await importAll({ accounts: [{ id: 'acc1', name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }], categories: [], transactions: [], facade_adjusts: [f] })
+    expect(h.calls.map((c) => c.table)).toEqual(['accounts', 'facade_adjusts', 'categories'])
+    const rows = h.calls.find((c) => c.table === 'facade_adjusts')?.rows as FacadeAdjust[]
+    expect(rows[0]).toEqual(f)
+    expect(rows[0].cents).toBe(-800000)
+  })
+
   it('全部是按 id 合并，一条删除都不发', async () => {
-    await importAll({ accounts: [], categories: [], transactions: [tx()] })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], transactions: [tx()] })
     expect(h.calls.every((c) => c.op === 'upsert')).toBe(true)
     expect(h.calls.every((c) => (c.opts as { onConflict: string }).onConflict === 'id')).toBe(true)
   })
 
   it('超过 500 条要分批', async () => {
     const many = Array.from({ length: 1200 }, (_, i) => tx({ id: `t${i}` }))
-    await importAll({ accounts: [], categories: [], transactions: many })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], transactions: many })
     const batches = h.calls.filter((c) => c.table === 'transactions')
     expect(batches.map((b) => (b.rows as unknown[]).length)).toEqual([500, 500, 200])
   })
@@ -278,7 +293,7 @@ describe('fetchAll 的中止信号', () => {
     // 永远不 settle。最容易卡住的恰恰是分页循环里那个 transactions 查询。
     const ac = new AbortController()
     await fetchAll(ac.signal)
-    expect(h.calls.map((c) => c.table)).toEqual(['accounts', 'categories', 'transactions'])
+    expect(h.calls.map((c) => c.table)).toEqual(['accounts', 'categories', 'transactions', 'facade_adjusts'])
     expect(h.calls.every((c) => c.aborted === true)).toBe(true)
   })
 
@@ -292,6 +307,16 @@ describe('fetchAll 的中止信号', () => {
     const tx = h.calls.find((c) => c.table === 'transactions')
     expect(tx?.filters).toContain('order.id')
     expect(tx?.filters).toContain('range.0.999')
+    const fa = h.calls.find((c) => c.table === 'facade_adjusts')
+    expect(fa?.filters).toContain('order.id')
+    expect(fa?.filters).toContain('range.0.999')
+  })
+
+  it('外页面校准记录：cents 就算以字符串回来也要收成数字，日期原样', async () => {
+    // bigint 走 JSON 一般是数字，但 PostgREST 的配置能让它变成字符串；进了 balances 一相加就是字符串拼接
+    h.results.push({ data: [] }, { data: [] }, { data: [] }, { data: [{ id: 'f1', account_id: 'a1', date: '2026-09-27', cents: '-800000', created_at: '2026-09-27T02:00:00.000Z' }] })
+    const snap = await fetchAll()
+    expect(snap.facade_adjusts).toEqual([{ id: 'f1', account_id: 'a1', date: '2026-09-27', cents: -800000, created_at: '2026-09-27T02:00:00.000Z' }])
   })
 })
 

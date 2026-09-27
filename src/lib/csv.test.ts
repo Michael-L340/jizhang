@@ -2,7 +2,8 @@
 // 这里每一条都对应一种「文件坏了但看起来正常」的情况。
 import { describe, expect, it } from 'vitest'
 import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta } from './csv'
-import type { Account, Category, Snapshot, Transaction } from '../types'
+import type { Account, Category, FacadeAdjust, Snapshot, Transaction } from '../types'
+import { FACADE_EPOCH, facadeIdFor } from './facade'
 
 // id 用真的 UUID：数据库三张表的 id 都是 uuid 列，'a1' 这种字符串根本进不去（22P02），
 // 拿它当测试数据会让「校验通过 = 一定导得进去」这条性质在测试里假成立
@@ -27,10 +28,12 @@ const tx: Transaction = {
   hidden: null,
   created_at: '2026-09-04T02:00:00.000Z',
 }
-const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx] }
+const F1 = '55555555-5555-4555-8555-555555555555'
+const fadj: FacadeAdjust = { id: F1, account_id: A1, date: '2026-09-27', cents: -800000, created_at: '2026-09-27T02:00:00.000Z' }
+const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [] }
 
 function file(over: Record<string, unknown> = {}): string {
-  return JSON.stringify({ version: 1, exported_at: '2026-09-04T00:00:00.000Z', accounts: [acc], categories: [cat], transactions: [tx], ...over })
+  return JSON.stringify({ version: 1, exported_at: '2026-09-04T00:00:00.000Z', accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [], ...over })
 }
 
 describe('parseImport', () => {
@@ -58,6 +61,46 @@ describe('parseImport', () => {
   it('「外面不显示」导出再导入不变——它是真数据，备份必须带着', () => {
     const withHidden: Snapshot = { ...snap, transactions: [{ ...tx, hidden: true }] }
     expect(parseImport(buildJson(withHidden))).toEqual(withHidden)
+  })
+
+  // ── 0010 外页面校准记录 ──
+  it('外页面校准记录导出再导入不变——它是外页面的账本，备份必须带着', () => {
+    // 变异：buildJson 不写 facade_adjusts → 导入回来是空的，红
+    const withFa: Snapshot = { ...snap, facade_adjusts: [fadj] }
+    expect(parseImport(buildJson(withFa))).toEqual(withFa)
+    expect(buildJson(withFa)).toContain('"facade_adjusts"')
+  })
+
+  it('CSV 不带外页面校准记录——CSV 是给人看的，多一张表等于自曝', () => {
+    const csv = buildCsv({ ...snap, facade_adjusts: [fadj] })
+    expect(csv).not.toContain(F1)
+    expect(csv).not.toMatch(/外页面|facade/)
+  })
+
+  it('0010 之前的老文件没有这一节：按老偏移量换算出来，否则整库恢复完外页面就不修饰了', () => {
+    // 变异：parseImport 不调 migrateFacade → 空数组，红。
+    // 修饰过的账户 → 一条记在 EPOCH 的（偏移量 + 校准合计）；id 由来源推出，和云端迁移过的那批是同一批
+    const adj: Transaction = { ...tx, id: T2, type: 'adjust', amount: 100000, category_id: null, note: '余额校准' }
+    const old = JSON.parse(file({ accounts: [{ ...acc, facade_offset: -216326 }], transactions: [tx, adj] })) as Record<string, unknown>
+    delete old.facade_adjusts
+    const got = parseImport(JSON.stringify(old))
+    expect(got.facade_adjusts).toEqual([{ id: facadeIdFor('offset', A1), account_id: A1, date: FACADE_EPOCH, cents: -216326 + 100000, created_at: '2000-01-01T00:00:00.000Z' }])
+    // 换算出来的东西自己也得过得了校验（它会被拿去 importAll）
+    expect(() => parseImport(buildJson(got))).not.toThrow()
+  })
+
+  it('有这一节就一律以文件为准，哪怕是空的：0010 之后导出的文件不再换算，合并导入才不会翻倍', () => {
+    // 变异：parseImport 按「数组为空」判断老文件 → 这里会算出一条，红
+    const got = parseImport(file({ accounts: [{ ...acc, facade_offset: -216326 }], facade_adjusts: [] }))
+    expect(got.facade_adjusts).toEqual([])
+  })
+
+  it('这一节存在但不是数组：文件坏了，拒绝', () => {
+    expect(() => parseImport(file({ facade_adjusts: 'x' }))).toThrow(/不是本应用导出/)
+  })
+
+  it('外页面校准用的账户不在文件里就拒绝', () => {
+    expect(() => parseImport(file({ facade_adjusts: [{ ...fadj, account_id: T2 }] }))).toThrow(/外页面校准.*账户在这个文件里找不到/)
   })
 
   it('金额不是整数分就拒绝——这是「元当成分」那类错误的唯一防线', () => {

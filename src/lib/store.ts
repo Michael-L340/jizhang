@@ -1,7 +1,7 @@
 // 全局状态。页面只从这里读数据、只调这里的动作；这里是唯一调用 api.ts 的地方。
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { Account, CatKind, Category, Snapshot, Transaction } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, Snapshot, Transaction } from '../types'
 import * as api from './api'
 import { cacheBytes, type BackupStatus } from './backup'
 import { nowIso } from './date'
@@ -30,6 +30,8 @@ function readCache(): Cache | null {
       ...c,
       accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null, facade_offset: a.facade_offset ?? null, defer_after_repay: a.defer_after_repay ?? null })),
       transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null, hidden: t.hidden ?? null })),
+      // 0010 之前写的缓存没有这一节。补成空数组就行：下一次同步会拉到云端的
+      facade_adjusts: Array.isArray(c.facade_adjusts) ? c.facade_adjusts : [],
     }
   } catch {
     return null
@@ -37,12 +39,12 @@ function readCache(): Cache | null {
 }
 
 /**
- * 写缓存。只写三张表，不要把整个 store 展开进来（否则 auth/syncing/toast 也会被写）。
+ * 写缓存。只写四张表，不要把整个 store 展开进来（否则 auth/syncing/toast 也会被写）。
  * 返回占用的字节数（口径见 backup.ts 的 cacheBytes：UTF-16，键也算）。
  * 抛错交给调用方处理，不再静默吞掉。
  */
 function writeCache(s: Snapshot, outbox: Outbox): number {
-  const c: Cache = { accounts: s.accounts, categories: s.categories, transactions: s.transactions, at: nowIso(), outbox: packOutbox(outbox) }
+  const c: Cache = { accounts: s.accounts, categories: s.categories, transactions: s.transactions, facade_adjusts: s.facade_adjusts, at: nowIso(), outbox: packOutbox(outbox) }
   const json = JSON.stringify(c)
   localStorage.setItem(CACHE_KEY, json)
   return cacheBytes([[CACHE_KEY, json]])
@@ -82,7 +84,7 @@ export interface State extends Snapshot {
   /**
    * 里外页面。outer = 平时用的外页面（余额被偏移量修饰过），inner = 只有本人知道的里页面（真实余额）。
    * **绝不写进缓存**：冷启动必须永远是 outer，否则这个开关就没有意义了。
-   * persist() 只写三张表，所以这条不用额外处理——但以后有人想「顺手把整个 store 存下来」时，
+   * persist() 只写四张表，所以这条不用额外处理——但以后有人想「顺手把整个 store 存下来」时，
    * 这就是不能那么干的理由。
    */
   mode: Mode
@@ -110,6 +112,11 @@ export interface State extends Snapshot {
   addCategory: (kind: CatKind, parentId: string | null, name: string) => Promise<Category | null>
   updateCategory: (id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note' | 'parent_id'>>) => Promise<boolean>
   updateAccount: (id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived' | 'facade_offset' | 'defer_after_repay'>>) => Promise<boolean>
+  /**
+   * 记一条外页面校准（0010）。先写云端再进 state，和 addCategory 一样不做乐观更新：
+   * 校准是难得一做的事，失败了让弹层留在原地比「界面先变了再弹回去」清楚。没有离线队列。
+   */
+  addFacadeAdjust: (f: FacadeAdjust) => Promise<boolean>
   /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
   /**
@@ -140,6 +147,7 @@ let hiddenAt: number | null = null
 // 所以 refresh 落地前先把在途补丁叠回去。
 const pendingTx: Pending<Transaction> = new Map()
 const pendingCat: Pending<Category> = new Map()
+const pendingFa: Pending<FacadeAdjust> = new Map()
 
 // ── 待上传队列 ────────────────────────────────────────────────
 // 上面那两张补丁表管的是「请求飞在路上」，60 秒就过期；这一张管的是「请求根本没发出去」，
@@ -158,6 +166,7 @@ let flushing = false
 let fetchSeq = 0
 const settledTx = new Map<string, number>()
 const settledCat = new Map<string, number>()
+const settledFa = new Map<string, number>()
 
 // 备份状态这一路也编号，理由同类但简单得多：只有「最后一次问的答案」算数。
 // 设置页每次挂载都发一次，来回切页就有两次在飞；退出登录也算改朝换代。
@@ -177,6 +186,11 @@ function retirePatches(my: number): void {
     if (g >= my) continue
     pendingCat.delete(id)
     settledCat.delete(id)
+  }
+  for (const [id, g] of settledFa) {
+    if (g >= my) continue
+    pendingFa.delete(id)
+    settledFa.delete(id)
   }
 }
 
@@ -271,6 +285,7 @@ export const useStore = create<State>((set, get) => ({
   accounts: [],
   categories: [],
   transactions: [],
+  facade_adjusts: [],
   auth: 'loading',
   loaded: false,
   syncing: false,
@@ -292,7 +307,7 @@ export const useStore = create<State>((set, get) => ({
     if (cache) {
       // 队列要在拉云端之前装回来，否则第一次 refresh 会把上次没传上去的那几笔冲掉
       for (const [id, v] of unpackOutbox(cache.outbox)) outboxTx.set(id, v)
-      set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, lastSync: cache.at, outboxCount: outboxTx.size })
+      set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, facade_adjusts: cache.facade_adjusts, lastSync: cache.at, outboxCount: outboxTx.size })
       try {
         set({ cacheBytes: cacheBytes([[CACHE_KEY, localStorage.getItem(CACHE_KEY) ?? '']]) })
       } catch {
@@ -343,6 +358,7 @@ export const useStore = create<State>((set, get) => ({
         // 两层叠加，顺序不能反：先盖在途补丁，再盖待传队列。
         // 队列在最上面，因为那是用户改完、云端至今不知道的最新状态。
         transactions: applyPending(applyPending(snap.transactions, pendingTx), outboxTx),
+        facade_adjusts: applyPending(snap.facade_adjusts, pendingFa),
       }
       cancelRetry()
       retryAt = 0
@@ -414,9 +430,9 @@ export const useStore = create<State>((set, get) => ({
     if (persistTimer) clearTimeout(persistTimer)
     persistTimer = setTimeout(() => {
       persistTimer = null
-      const { accounts, categories, transactions } = get()
+      const { accounts, categories, transactions, facade_adjusts } = get()
       try {
-        set({ cacheBytes: writeCache({ accounts, categories, transactions }, outboxTx), cacheDegraded: false })
+        set({ cacheBytes: writeCache({ accounts, categories, transactions, facade_adjusts }, outboxTx), cacheDegraded: false })
       } catch {
         // 配额满或被禁用。云端数据不受影响，但离线看到的会是旧的，必须让用户知道
         if (!get().cacheDegraded) {
@@ -453,8 +469,10 @@ export const useStore = create<State>((set, get) => ({
     }
     pendingTx.clear()
     pendingCat.clear()
+    pendingFa.clear()
     settledTx.clear()
     settledCat.clear()
+    settledFa.clear()
     // 换个人登录进来必须是外页面
     hiddenAt = null
     set({ mode: 'outer' })
@@ -474,7 +492,7 @@ export const useStore = create<State>((set, get) => ({
     // 退出登录之后别有个定时器还挂在那儿。
     cancelRetry()
     retryAt = 0
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
   },
 
   async addTx(t) {
@@ -640,6 +658,22 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  async addFacadeAdjust(f) {
+    try {
+      await api.insertFacadeAdjust(f)
+      // 登记为在途：紧接着的一次 refresh 可能还拉不到它，会把它冲掉（和 addCategory 一样）
+      pendingFa.set(f.id, f)
+      settle(settledFa, pendingFa, f.id)
+      set((s) => ({ facade_adjusts: [...s.facade_adjusts, f] }))
+      get().persist()
+      return true
+    } catch (e) {
+      // 措辞不带「外页面」：这条 toast 会在外页面上弹，外页面不许出现任何露馅的字（CLAUDE.md）
+      get().showToast(`校准失败：${api.friendlyError(e)}`)
+      return false
+    }
+  },
+
   async importSnapshot(snap) {
     try {
       await api.importAll(snap)
@@ -654,15 +688,15 @@ export const useStore = create<State>((set, get) => ({
     // 回滚底稿。wipeAll 一执行，云端就没有第二份了，所以先把「操作前的样子」留在内存里。
     // 它只是本机现在显示的样子：本次会话没同步成功过的话，它可能比云端少几条——
     // 页面在确认框里已经就这一点提醒过用户（Settings.tsx 的 exportTrustworthy 那段）。
-    const before: Snapshot = { accounts: get().accounts, categories: get().categories, transactions: get().transactions }
+    const before: Snapshot = { accounts: get().accounts, categories: get().categories, transactions: get().transactions, facade_adjusts: get().facade_adjusts }
     const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0
     try {
       await api.wipeAll()
       await api.importAll(snap)
     } catch (e) {
       const why = api.friendlyError(e)
-      // wipeAll 的第一句就失败 = 云端还没被动过，没什么可回滚的，也别吓唬人
-      if ((e as Partial<api.WipeFailure>).step === 'transactions') {
+      // wipeAll 的第一句（删外页面校准记录）就失败 = 云端还没被动过，没什么可回滚的，也别吓唬人
+      if ((e as Partial<api.WipeFailure>).step === 'facade_adjusts') {
         throw new RestoreFailed(`恢复失败：${why}。云端一条数据都没删，账本还是原来的样子，联网之后可以再试一次。`)
       }
       // 到这里云端已经被清空（或清了一半），必须立刻把底稿写回去。

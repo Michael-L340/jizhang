@@ -1,5 +1,6 @@
 // 导出 / 导入。导出优先走系统分享（iOS 主屏 App 里 <a download> 不可靠）。
-import type { Account, Category, Snapshot, Transaction } from '../types'
+import type { Account, Category, FacadeAdjust, Snapshot, Transaction } from '../types'
+import { migrateFacade } from './facade'
 import { fmtYuan } from './money'
 import { TX_TYPE_LABEL } from '../types'
 import { validateImport } from './validate'
@@ -53,6 +54,11 @@ export interface ExportFile {
   accounts: Account[]
   categories: Category[]
   transactions: Transaction[]
+  /**
+   * 0010：外页面校准记录。新文件一定有；0010 之前导出的没有，读的时候按老偏移量换算（见 parseImport）。
+   * CSV 不带它：CSV 是给人看的，多一张「外页面校准」表等于自曝；机器恢复走 JSON。
+   */
+  facade_adjusts?: FacadeAdjust[]
 }
 
 /** meta 不传就不写同步标记（给测试和老调用方留的口子） */
@@ -64,6 +70,7 @@ export function buildJson(snap: Snapshot, meta?: { synced: boolean; lastSync: st
     accounts: snap.accounts,
     categories: snap.categories,
     transactions: snap.transactions,
+    facade_adjusts: snap.facade_adjusts,
   }
   return JSON.stringify(file, null, 2)
 }
@@ -82,7 +89,14 @@ export function parseImport(text: string): Snapshot {
   if (!obj || typeof obj.version !== 'number' || obj.version < 1 || !Array.isArray(obj.accounts) || !Array.isArray(obj.categories) || !Array.isArray(obj.transactions)) {
     throw new Error('不是本应用导出的 JSON 文件')
   }
-  return validateImport({ accounts: obj.accounts, categories: obj.categories, transactions: obj.transactions })
+  // 这一节缺失 = 0010 之前导出的老文件；有但不是数组 = 文件坏了
+  const hasFacade = obj.facade_adjusts !== undefined
+  if (hasFacade && !Array.isArray(obj.facade_adjusts)) throw new Error('不是本应用导出的 JSON 文件')
+  const snap = validateImport({ accounts: obj.accounts, categories: obj.categories, transactions: obj.transactions, facade_adjusts: hasFacade ? obj.facade_adjusts : [] })
+  // 老文件按老偏移量换算出外页面校准记录，否则整库恢复完外页面就不修饰了（露馅）。
+  // 换算出来的 id 由来源 id 推出，和一次性 SQL 迁移写进云端的是同一批，合并导入不会翻倍。
+  if (!hasFacade) snap.facade_adjusts = migrateFacade(snap.accounts, snap.transactions)
+  return snap
 }
 
 /** 读文件头上的自述：这份备份导出时同步过没有。读不出来就是「不知道」（null） */
