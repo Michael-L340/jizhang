@@ -62,6 +62,21 @@ export function describeFilter(f: LedgerFilter, names: SearchNames): string[] {
   return out
 }
 
+/**
+ * 别的页带参数跳到流水页时，筛选换成什么。**只有带了 cat 才换**，返回 null = 筛选原样不动
+ * （首页「今天」那张卡只带 date，不该清掉用户自己设的筛选）。
+ *
+ * 带了 cat 就整个换掉，一个旧条件都不留：type / sub / acc 没带的回到「全部」。
+ * cat=all 就是「不筛分类」——图表跳转用它清掉上一次留下的条件：先在瀑布图上点过「日常餐饮」，
+ * 再点「收入」，要是只带月份，流水页还筛着日常餐饮，一笔收入都看不到（2026-09-29 审出来的）。
+ * acc 是账户（CREDIT_ALL = 四家白条一起）。
+ */
+export function filterFromQuery(q: { get(key: string): string | null }): LedgerFilter | null {
+  const cat = q.get('cat')
+  if (!cat) return null
+  return { type: q.get('type') || 'all', accountId: q.get('acc') || 'all', parentId: cat, childId: q.get('sub') || 'all', hiddenOnly: false }
+}
+
 export function isFiltered(f: LedgerFilter): boolean {
   return f.type !== 'all' || f.accountId !== 'all' || f.parentId !== 'all' || Boolean(f.hiddenOnly)
 }

@@ -163,6 +163,16 @@ describe('分类颜色只有一个来源', () => {
     expect(hits, `Stats.tsx 里写死了颜色：${hits.join(' ')}`).toEqual([])
   })
 
+  // 进阶分析页只管排卡片，图上的颜色全在 lib/more/*.ts 里走 CHART / categoryColor（那边各有各的守卫）
+  it('进阶分析页也不许写死十六进制颜色', () => {
+    // 变异：卡片标题加一个 style={{ color: '#c95a4e' }} → 红
+    for (const p of ['../pages/StatsMore.tsx', '../components/ChartMore.tsx']) {
+      const src = readFileSync(new URL(p, import.meta.url), 'utf8')
+      const hits = src.match(/#[0-9a-fA-F]{3,8}\b/g) ?? []
+      expect(hits, `${p} 里写死了颜色：${hits.join(' ')}`).toEqual([])
+    }
+  })
+
   // CHART 是图表上唯一允许出现十六进制的地方，代价是它可能和主题脱节。
   // 从 index.css 现读来对账，改了主题不改这张表就红在这里。
   it('CHART 里每个色值都等于 index.css 的对应 token', () => {
@@ -172,5 +182,7 @@ describe('分类颜色只有一个来源', () => {
     expect(CHART.axis).toBe(themeColor('line'))
     expect(CHART.label).toBe(themeColor('muted'))
     expect(CHART.gap).toBe(themeColor('card'))
+    // 变异：brandInk 写成 '#8a6027' → 红
+    expect(CHART.brandInk).toBe(themeColor('brand-ink'))
   })
 })

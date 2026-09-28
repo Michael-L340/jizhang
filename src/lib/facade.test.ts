@@ -128,9 +128,10 @@ describe('「外面隐藏」：外页面当这一笔不存在', () => {
   it('页面里算钱的地方一律不许吃原始 txs——只准吃 otxs / vtxs；账本必须从 outerBook 来', () => {
     // 页面测不了（没有 DOM），守源码。第一版漏的正是这里：12 处调用各吃各的。
     // 变异：把 Home 的 monthSummary(otxs 改回 monthSummary(txs → 红
+    // 变异：进阶分析页 firstFlowDate(otxs) 改成 firstFlowDate(txs)、outerBook 的 mode 写死成 'inner' → 红
     const read = (p: string) => readFileSync(new URL(p, import.meta.url), 'utf8')
     const money = /(monthSummary|byCategory|balances|monthTotals|firstFlowDate|seriesTotals|seriesByCategory|balanceSeries|searchTx)\(\s*txs\b/
-    for (const p of ['../pages/Home.tsx', '../pages/Stats.tsx', '../pages/Ledger.tsx', '../pages/Accounts.tsx']) {
+    for (const p of ['../pages/Home.tsx', '../pages/Stats.tsx', '../pages/Ledger.tsx', '../pages/Accounts.tsx', '../pages/StatsMore.tsx']) {
       const src = read(p)
       expect(src, `${p} 里有算钱的函数直接吃了原始 txs`).not.toMatch(money)
       expect(src, `${p} 必须建 otxs = outerBook(txs, 全部账户, fadj, mode)`).toMatch(/const otxs = useMemo\(\(\) => outerBook\(txs, (accounts|allAccounts), fadj, mode\)/)
@@ -141,6 +142,23 @@ describe('「外面隐藏」：外页面当这一笔不存在', () => {
     for (const p of ['./compute.ts', './chart.ts']) expect(read(p), `${p} 不该碰 hidden`).not.toMatch(/\.hidden/)
     // 统计页的曲线直接画那本账，不许再叠任何平移
     expect(read('../pages/Stats.tsx')).toMatch(/balanceSeries\(otxs, accounts, keys, unit\)/)
+  })
+
+  it('进阶分析页：十张图只吃 otxs；页面里没有 hidden、没有「隐」「外页面」这几个字', () => {
+    // 这一页在外页面下照常打开，也没有里页面专属的东西，所以整个源文件（连注释）都不许出现这几个字——
+    // 比「只查 JSX 里的字」好守，也不会有人顺手在界面上写个「显示 / 隐藏」开关。
+    // 变异：MoreInput 里写成 txs: txs → 红；自定义开关文案写成「隐藏」→ 红；读一下 t.hidden → 红
+    const src = readFileSync(new URL('../pages/StatsMore.tsx', import.meta.url), 'utf8')
+    expect(src).toMatch(/\(\{ txs: otxs, accounts, cats, ym, start, end, today: t \}\)/)
+    // 原始 txs 只准出现在「从 store 取」和「建 otxs」这两行（注释不算）
+    const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '')
+    const rest = code
+      .replace('const txs = useStore((s) => s.transactions)', '')
+      .replace('outerBook(txs, accounts, fadj, mode), [txs, accounts, fadj, mode]', '')
+      .replace('({ txs: otxs,', '')
+    expect(rest.match(/.{0,30}\btxs\b.{0,30}/g) ?? [], '原始 txs 漏到别处去了').toEqual([])
+    expect(src).not.toMatch(/\.hidden\b/)
+    expect(src).not.toMatch(/隐|外页面|外面|mode ===|mode !==/)
   })
 
   it('账户页：「对外显示」的差额必须按外页面那本账算，两种模式都算一份', () => {

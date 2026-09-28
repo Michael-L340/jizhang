@@ -6,10 +6,11 @@ import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
-import { addDays, fmtDateZh, fmtMonthZh, monthOf, monthRange, shiftMonth, today } from '../lib/date'
+import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { axisLabels, gridTopFor, legendRows, shortLabels } from '../lib/chart'
 import { outerBook } from '../lib/facade'
+import { rangeBounds } from '../lib/range'
 import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, CHART, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
@@ -121,19 +122,9 @@ export function Stats() {
     nav(unit === 'day' ? `/ledger?ym=${monthOf(k)}&date=${k}` : `/ledger?ym=${k}`)
   }
 
-  // 趋势区间：终点跟随顶部选中的月份（当月则到今天），起点由范围选项决定
-  const { start: tStart, end: tEnd } = useMemo(() => {
-    if (range.kind === 'custom' && range.start && range.end) return { start: range.start, end: range.end }
-    const monthEnd = monthRange(ym).end
-    const t = today()
-    const end = monthEnd > t ? t : monthEnd
-    if (range.kind === 'all') return { start: earliest < end ? earliest : end, end }
-    if (range.kind === 'month') return { start: monthRange(ym).start, end }
-    if (range.kind === 'ytd') return { start: `${ym.slice(0, 4)}-01-01`, end }
-    const back = range.kind === 'quarter' ? 3 : range.kind === 'half' ? 6 : 12
-    const start = addDays(monthRange(shiftMonth(monthOf(end), -(back - 1))).start, 0)
-    return { start, end }
-  }, [range, ym, earliest])
+  // 趋势区间：终点跟随顶部选中的月份（当月则到今天），起点由范围选项决定。
+  // 算法在 lib/range.ts，进阶分析页读同一对钥匙、调同一个函数，两页的「近一年」必须是同一段
+  const { start: tStart, end: tEnd } = useMemo(() => rangeBounds(range, ym, earliest, today()), [range, ym, earliest])
 
   const keys = useMemo(() => bucketKeys(tStart, tEnd, unit), [tStart, tEnd, unit])
   // 趋势必须先按真实区间裁一刀。bucketKeys 在「按月」时会把两端折成整月，
@@ -549,6 +540,16 @@ export function Stats() {
           每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录；点一下看明细，再点一下看当时的流水。
         </div>
       </div>
+
+      {/* 进阶分析的入口：那一页的月份和时间范围就是这一页的（同一对钥匙）。
+          fromEntry：只有从这里进去才回到那一页顶上；点图跳去流水再回来时停在原来那张卡上 */}
+      <button type="button" className="card w-full p-4 mb-3 flex items-center gap-3 text-left active:opacity-70" onClick={() => nav('/stats/more', { state: { fromEntry: true } })}>
+        <span className="flex-1 min-w-0">
+          <span className="block text-sm font-semibold">进阶分析</span>
+          <span className="block text-[11px] text-muted mt-0.5 truncate">消费日历、钱的流向、累计支出……可以自己挑显示哪几张</span>
+        </span>
+        <span className="text-muted shrink-0">›</span>
+      </button>
 
       <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />
 

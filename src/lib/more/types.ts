@@ -24,12 +24,19 @@ export interface MoreInput {
 export interface MoreTile {
   label: string
   value: string
+  /** 点这一格跳去哪（流水页的 query，同 onPoint）；不填 = 不能点 */
+  go?: string
 }
 
 export interface MoreChart {
   /** 唯一键，也是设置里开关 / 排序用的 id */
   key: string
   title: string
+  /**
+   * 这张图实际按哪段时间算，写在标题旁边（「25.10–26.9」「26.9」）。
+   * 顶上有月份和时间段两个控件，各管几张图——不写出来，用户会把「近一年的流向」当成「9 月的流向」。
+   */
+  span?: string
   /** 卡片底下一行小字：口径说明，写死的人话 */
   note: string
   /** ECharts option；null = 这张图不用画（只有 tiles，或者没数据） */

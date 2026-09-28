@@ -4,6 +4,7 @@ import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
+import { itemTapStep, type ArmedTap, type TapItem } from '../lib/tap'
 
 echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
@@ -31,15 +32,29 @@ interface Props {
    * 而且用户很可能是慢慢点两下，不该有时间限制。点到别的下标就重新开始。
    */
   onAxisClick?: (dataIndex: number) => void
+  /**
+   * 没有直角坐标的图（日历热力图）用这个：同样**要点两下**，第一下得点中某个图形——
+   * onAxisClick 靠 containPixel({ gridIndex: 0 }) 判断点没点在绘图区，没有 grid 的图永远不触发。
+   * 第一下弹提示框；第二下落在第一下周围几个像素之内（点中哪一格、空格、提示框都算）就按第一下那格回调，
+   * 离得远、点中了别的图形就改看那一个（规则见 lib/tap.ts，和 onAxisClick 一样不限时）。
+   */
+  onItemTap?: (dataIndex: number, seriesIndex: number) => void
 }
 
-export default function Chart({ option, height = 240, onClick, onAxisClick }: Props) {
+export default function Chart({ option, height = 240, onClick, onAxisClick, onItemTap }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const inst = useRef<echarts.ECharts | null>(null)
   const clickRef = useRef(onClick)
   clickRef.current = onClick
   const axisClickRef = useRef(onAxisClick)
   axisClickRef.current = onAxisClick
+  const itemTapRef = useRef(onItemTap)
+  itemTapRef.current = onItemTap
+  // onItemTap 第一下选中的图形和点的位置；null = 还没点过
+  const itemArmedRef = useRef<ArmedTap | null>(null)
+  // 这一下点中的数据图形。ECharts 的 click 事件排在 zrender 的 click 之后才发（zrEventfulCallAtLast），
+  // 所以 zrender 那边先记下事件、等微任务里再看这一下有没有点中图形
+  const itemHitRef = useRef<{ ev: unknown; item: TapItem } | null>(null)
   const countRef = useRef(0)
   // 上一次点中的下标；-1 = 还没点过。option 一换（切档、换区间）就清掉
   const armedRef = useRef(-1)
@@ -49,8 +64,33 @@ export default function Chart({ option, height = 240, onClick, onAxisClick }: Pr
     if (!el) return
     const chart = echarts.init(el)
     inst.current = chart
-    chart.on('click', (p) => clickRef.current?.(p as unknown as ChartClick))
+    chart.on('click', (p) => {
+      clickRef.current?.(p as unknown as ChartClick)
+      const q = p as unknown as { seriesIndex?: number; dataIndex?: number; event?: unknown }
+      if (itemTapRef.current && typeof q.dataIndex === 'number') {
+        itemHitRef.current = { ev: q.event, item: { seriesIndex: q.seriesIndex ?? 0, dataIndex: q.dataIndex } }
+      }
+    })
     chart.getZr().on('click', (e) => {
+      if (itemTapRef.current) {
+        const x = e.offsetX
+        const y = e.offsetY
+        queueMicrotask(() => {
+          const tap = itemTapRef.current
+          if (!tap) return
+          const hit = itemHitRef.current?.ev === e ? itemHitRef.current.item : null
+          itemHitRef.current = null
+          const step = itemTapStep(itemArmedRef.current, hit, x, y)
+          if (!step) return
+          if ('go' in step) {
+            itemArmedRef.current = null
+            tap(step.go.dataIndex, step.go.seriesIndex)
+            return
+          }
+          itemArmedRef.current = step.arm
+          chart.dispatchAction({ type: 'showTip', seriesIndex: step.arm.seriesIndex, dataIndex: step.arm.dataIndex })
+        })
+      }
       const fn = axisClickRef.current
       if (!fn) return
       const pt: [number, number] = [e.offsetX, e.offsetY]
@@ -81,6 +121,7 @@ export default function Chart({ option, height = 240, onClick, onAxisClick }: Pr
     const axis = Array.isArray(o.xAxis) ? o.xAxis[0] : o.xAxis
     countRef.current = axis?.data?.length ?? 0
     armedRef.current = -1
+    itemArmedRef.current = null
     inst.current?.setOption(option, true)
   }, [option])
 

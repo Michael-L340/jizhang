@@ -12,7 +12,7 @@ import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
 import { outerBook, outerList } from '../lib/facade'
-import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
+import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, filterFromQuery, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
 import { fmtYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 
@@ -50,7 +50,7 @@ export function Ledger() {
   const scrolledFor = useRef<string | null>(null)
   const stickyRef = useRef<HTMLDivElement>(null)
 
-  // 从统计页跳过来时带着 ym / date，点二级分类进来还带着 type / cat / sub
+  // 从统计页跳过来时带着 ym / date，点二级分类进来还带着 type / cat / sub；进阶分析的图还会带 cat=all、acc
   useEffect(() => {
     const qYm = params.get('ym')
     const qDate = params.get('date')
@@ -63,11 +63,12 @@ export function Ledger() {
       setTarget(qDate)
       scrolledFor.current = null
     }
-    if (qCat) {
+    const jumped = filterFromQuery(params)
+    if (jumped) {
       // 搜索一开就无视月份，那样带过来的月份和分类会对不上，所以先关掉
       setQ('')
       setSearchOpen(false)
-      setFilter({ type: params.get('type') || 'all', accountId: 'all', parentId: qCat, childId: params.get('sub') || 'all' })
+      setFilter(jumped)
     }
     setParams({}, { replace: true })
   }, [params, setParams])

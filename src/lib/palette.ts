@@ -9,7 +9,8 @@
 // 现在是暖色的 --color-expense / --color-income）。旧配色里「意外开支」正好等于
 // 当时的支出红，同一屏里一个颜色两种意思。palette.test.ts 从 index.css 现读来守这条，
 // 别在任何地方抄一份色值——抄了就会在换主题时悄悄过期。
-// 品牌色不在这条约束里：它只给按钮和选中态上色，从不给数据上色。
+// 品牌色不在这条约束里：它只给按钮和选中态上色，从不给分类上色。唯一进图表的是 CHART.brandInk，
+// 画「参照线」（进阶分析「累计支出」的前三个月平均）——不是一笔钱、也不是哪个分类。
 const BY_NAME: { test: (n: string) => boolean; color: string }[] = [
   { test: (n) => n.includes('餐饮') || n.includes('日常') || n.includes('吃'), color: '#c7820a' },
   // 「非经常」必须排在「经常」前面，否则前者会被后者先匹配走
@@ -151,4 +152,9 @@ export const CHART = {
   label: '#918a80',
   /** 堆叠柱各段之间的缝 = --color-card。和饼图的分段白线同一个做法 */
   gap: '#ffffff',
+  /**
+   * 参照线（前几个月的平均）= --color-brand-ink。和支出红、坐标轴灰都分得开，图例上一眼对得上。
+   * 不用浅的 --color-brand（#e8b77c）：它在白卡片上的对比度只有 1.8:1，1.5px 的虚线几乎看不见。
+   */
+  brandInk: '#8a6026',
 } as const

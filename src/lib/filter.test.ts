@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
+import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, filterFromQuery, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
 import type { Transaction } from '../types'
 
 const rootOf = (id: string) => ({ p1: 'p1', c1: 'p1', c2: 'p2' } as Record<string, string>)[id]
@@ -150,5 +150,42 @@ describe('「已筛选」后面把条件写出来', () => {
     const src = readFileSync(new URL('../pages/Ledger.tsx', import.meta.url), 'utf8')
     expect(src).toMatch(/describeFilter\(eff, names\)/)
     expect(src).not.toMatch(/describeFilter\(filter/)
+  })
+})
+
+describe('filterFromQuery：从别的页带参数跳到流水页，筛选换成什么', () => {
+  const q = (s: string) => filterFromQuery(new URLSearchParams(s))
+
+  it('进阶分析瀑布图：先点「日常餐饮」→ 支出·日常餐饮；再点「收入」→ 只看收入，日常餐饮那个条件清掉', () => {
+    // 流水页的筛选会记两小时（jz_ledger_filter），第二次跳过来时上一次的还在；带了 cat 就整个换掉
+    // 变异：filterFromQuery 里 parentId 写死 'all'（不认 cat）→ 第一条红
+    expect(q('ym=2026-09&type=expense&cat=food')).toEqual({ type: 'expense', accountId: 'all', parentId: 'food', childId: 'all', hiddenOnly: false })
+    const income = q('ym=2026-09&type=income&cat=all')!
+    expect(income).toEqual({ ...NO_FILTER, type: 'income' })
+    expect(matchesFilter(tx({ type: 'income', category_id: null }), income, rootOf)).toBe(true)
+    expect(isFiltered(q('ym=2026-09&cat=all')!)).toBe(false)
+  })
+
+  it('白条曲线点 9 月 → 9 月、账户筛成「白条」（四家一起）', () => {
+    // 变异：不读 acc（accountId 写死 'all'，改前的写法）→ 红
+    expect(q('ym=2026-09&cat=all&acc=credit')).toEqual({ ...NO_FILTER, accountId: CREDIT_ALL })
+  })
+
+  it('只带 ym / date、没带 cat（首页「今天」那张卡、统计页趋势图）→ 不动筛选（返回 null）', () => {
+    // 变异：没带 cat 也返回 NO_FILTER → 红（首页点「今天」会把用户自己设的筛选清掉）
+    expect(q('date=2026-09-28')).toBeNull()
+    expect(q('ym=2026-09&date=2026-09-12')).toBeNull()
+  })
+
+  it('统计页点二级分类：type / cat / sub 原样带过来', () => {
+    // 变异：parentId 写死 'all' → 红；sub 不读（childId 写死 'all'）→ 红
+    expect(q(`ym=2026-09&type=expense&cat=p1&sub=${CHILD_NONE}`)).toEqual({ type: 'expense', accountId: 'all', parentId: 'p1', childId: CHILD_NONE, hiddenOnly: false })
+  })
+
+  it('流水页读参数走的是这个函数', () => {
+    // 页面测不了（没有 DOM），守源码。变异：Ledger.tsx 退回自己拼筛选（不读 acc 的那版）→ 红
+    const src = readFileSync(new URL('../pages/Ledger.tsx', import.meta.url), 'utf8')
+    expect(src).toMatch(/const jumped = filterFromQuery\(params\)/)
+    expect(src).not.toMatch(/accountId: 'all', parentId: qCat/)
   })
 })

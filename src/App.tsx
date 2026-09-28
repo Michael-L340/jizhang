@@ -13,6 +13,7 @@ import { Ledger } from './pages/Ledger'
 import { Login } from './pages/Login'
 import { Settings } from './pages/Settings'
 import { Stats } from './pages/Stats'
+import { StatsMore } from './pages/StatsMore'
 
 function UpdateBanner() {
   const { needRefresh, updateServiceWorker } = useRegisterSW({
@@ -131,6 +132,7 @@ const router = createHashRouter([
           { index: true, element: page('首页', <Home />) },
           { path: 'ledger', element: page('流水', <Ledger />) },
           { path: 'stats', element: page('统计', <Stats />) },
+          { path: 'stats/more', element: page('进阶分析', <StatsMore />) },
           { path: 'accounts', element: page('账户', <Accounts />) },
           { path: 'settings', element: page('设置', <Settings />) },
           { path: 'categories', element: page('分类管理', <Categories />) },

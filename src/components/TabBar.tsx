@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 import { HOLD_MS } from '../lib/facade'
 import { useStore } from '../lib/store'
+import { isStatsPath, statsTabTarget } from '../lib/tabs'
 
 /**
  * 五个标签页的图标。全部是单条 path，viewBox 24、22px 渲染、1.8 描边。
@@ -98,6 +99,10 @@ export function TabBar() {
   const { pathname } = useLocation()
   const nav = useNavigate()
   const hold = useHoldToggle()
+  // 统计标签记得上次停在它下面哪一页（统计页 / 进阶分析），规则见 lib/tabs.ts。
+  // TabBar 常驻不卸载，记在 ref 里就够了；App 重开回统计页首页
+  const lastStats = useRef<string | null>(null)
+  if (isStatsPath(pathname)) lastStats.current = pathname
   return (
     <nav className="safe-bottom bg-card border-t border-line">
       <div className="grid grid-cols-5 h-14">
@@ -121,7 +126,7 @@ export function TabBar() {
           ) : (
             <NavLink
               key={t.to}
-              to={t.to}
+              to={t.to === '/stats' ? statsTabTarget(pathname, lastStats.current) : t.to}
               end={t.to === '/'}
               onClick={(e) => {
                 if (pathname === t.to && RESET_ON_REPEAT_TAP.includes(t.to)) {
