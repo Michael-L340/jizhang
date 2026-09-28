@@ -142,3 +142,12 @@ export function shortLabels(names: string[]): string[] {
   })
   return new Set(short).size === short.length ? short : names
 }
+
+/**
+ * 折线上的圆点：平时不画，只画最后一个点（用户 2026-09-28 选的「丙」：点太大太密像一串珠子）。
+ * 点中某一天时的位置由 tooltip 的轴指示线给出，不靠圆点。给 ECharts 的 symbolSize 用：
+ * 返回一个函数，最后一个点是 size，其余 0（0 = 不画，但轴提示照常）。
+ */
+export function endDotOnly(count: number, size: number): (value: unknown, params: { dataIndex: number }) => number {
+  return (_v, p) => (p.dataIndex === count - 1 ? size : 0)
+}

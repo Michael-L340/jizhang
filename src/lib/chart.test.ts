@@ -144,3 +144,15 @@ describe('图例缩写', () => {
     expect(legendRows(shortLabels(full), 329)).toBe(1)
   })
 })
+
+describe('折线圆点只画末点', () => {
+  it('最后一个点是给定大小，其余 0', async () => {
+    // 变异：p.dataIndex === count - 1 改成 === count → 全是 0，红；改成 >= 0 → 全画，红
+    const { endDotOnly } = await import('./chart')
+    const f = endDotOnly(12, 7)
+    expect(f(0, { dataIndex: 11 })).toBe(7)
+    expect(f(0, { dataIndex: 0 })).toBe(0)
+    expect(f(0, { dataIndex: 10 })).toBe(0)
+    expect(endDotOnly(1, 5)(0, { dataIndex: 0 })).toBe(5)
+  })
+})

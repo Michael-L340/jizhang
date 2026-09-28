@@ -8,7 +8,7 @@ import { Sheet } from '../components/Sheet'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
-import { axisLabels, gridTopFor, legendRows, shortLabels } from '../lib/chart'
+import { axisLabels, endDotOnly, gridTopFor, legendRows, shortLabels } from '../lib/chart'
 import { outerBook } from '../lib/facade'
 import { rangeBounds } from '../lib/range'
 import { CHILD_NONE } from '../lib/filter'
@@ -119,7 +119,8 @@ export function Stats() {
   function gotoLedger(i: number) {
     const k = keys[i]
     if (!k) return
-    nav(unit === 'day' ? `/ledger?ym=${monthOf(k)}&date=${k}` : `/ledger?ym=${k}`)
+    // cat=all：清掉流水页上一次留下的分类筛选（进阶分析那边审出来的，这里同样会碰到）
+    nav(unit === 'day' ? `/ledger?ym=${monthOf(k)}&date=${k}&cat=all` : `/ledger?ym=${k}&cat=all`)
   }
 
   // 趋势区间：终点跟随顶部选中的月份（当月则到今天），起点由范围选项决定。
@@ -179,8 +180,9 @@ export function Stats() {
             name: trendKind === 'expense' ? '支出' : '收入',
             type: 'line',
             smooth: true,
-            showSymbol: keys.length <= 40,
-            symbolSize: 7,
+            // 圆点只画末点（用户 2026-09-28 选的丙），点中的那天靠轴指示线
+            showSymbol: true,
+            symbolSize: endDotOnly(keys.length, 7),
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
             label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
@@ -267,8 +269,8 @@ export function Stats() {
         name: c.name,
         type: 'line',
         smooth: true,
-        showSymbol: keys.length <= 40,
-        symbolSize: 6,
+        showSymbol: true,
+        symbolSize: endDotOnly(keys.length, 5),
         lineStyle: { width: 2 },
         data: c.data.map((v) => v / 100),
       })),
@@ -314,8 +316,8 @@ export function Stats() {
             name: '总余额',
             type: 'line',
             smooth: true,
-            showSymbol: keys.length <= 40,
-            symbolSize: 7,
+            showSymbol: true,
+            symbolSize: endDotOnly(keys.length, 7),
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
             label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
@@ -333,8 +335,8 @@ export function Stats() {
         name: a.name,
         type: 'line',
         smooth: true,
-        showSymbol: keys.length <= 40,
-        symbolSize: 6,
+        showSymbol: true,
+        symbolSize: endDotOnly(keys.length, 5),
         lineStyle: { width: 2 },
         data: bal.byAccount[a.id].map((v) => v / 100),
       })),
