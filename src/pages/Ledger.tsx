@@ -5,6 +5,7 @@ import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
 import { TxRow } from '../components/TxRow'
+import { TxSwipe } from '../components/TxSwipe'
 import { groupByDay, inMonth, monthSummary, monthTotals, splitAccounts } from '../lib/compute'
 import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
@@ -299,7 +300,9 @@ export function Ledger() {
             </div>
             <div className={`card mx-4 divide-y divide-line overflow-hidden ${target === g.date ? 'day-flash' : ''}`}>
               {g.items.map((t) => (
-                <TxRow key={t.id} tx={t} accounts={accMap} categories={catMap} onClick={() => nav(`/add?id=${t.id}`)} />
+                <TxSwipe key={t.id} tx={t}>
+                  <TxRow tx={t} accounts={accMap} categories={catMap} onClick={() => nav(`/add?id=${t.id}`)} />
+                </TxSwipe>
               ))}
             </div>
           </div>

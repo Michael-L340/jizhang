@@ -108,6 +108,8 @@ export function Entry() {
   const nav = useNavigate()
   const [params] = useSearchParams()
   const editId = params.get('id')
+  /** 「再记一笔」（流水行滑动手势）：照着这条填好，日期换成今天，存的时候是新的一笔 */
+  const copyId = params.get('copy')
 
   const txs = useStore((s) => s.transactions)
   const cats = useStore((s) => s.categories)
@@ -122,6 +124,8 @@ export function Entry() {
   const online = useOnline()
 
   const editing = useMemo(() => (editId ? txs.find((t) => t.id === editId) ?? null : null), [txs, editId])
+  // 回填的来源：编辑态是那条记录本身，「再记一笔」是被复制的那条
+  const source = useMemo(() => editing ?? (copyId ? txs.find((t) => t.id === copyId) ?? null : null), [editing, copyId, txs])
   const memRef = useRef<Memory>(loadLocal(MEM_KEY, DEFAULT_MEM))
   const mem = memRef.current
 
@@ -168,38 +172,39 @@ export function Entry() {
   // 编辑态要等回填完成，默认值兜底才允许动账户。新增时（editId 为空）直接放行。
   // 必须是 state 不能是 ref：ref 在回填那一帧就被同步改掉，同一帧的兜底 effect
   // 立刻读到新值，门等于没设。
-  const [backfilled, setBackfilled] = useState(!editId)
+  const [backfilled, setBackfilled] = useState(!editId && !copyId)
   // 用户有没有手动改过日期。没改过的，切回前台时要跟着滚到新的今天。
   const [dateTouched, setDateTouched] = useState(false)
 
-  // 编辑态：把记录回填到表单（只做一次）
+  // 编辑态 / 再记一笔：把记录回填到表单（只做一次）。再记一笔的日期是今天、不带「外面隐藏」记号
   useEffect(() => {
-    if (!editing || loadedEdit.current === editing.id) return
-    loadedEdit.current = editing.id
-    setType(editing.type)
-    setAmount(fmtYuan(Math.abs(editing.amount)).replace(/,/g, '').replace(/\.00$/, ''))
-    setNeg(editing.amount < 0)
-    setDate(editing.date)
-    setNote(editing.note ?? '')
-    setHidden(Boolean(editing.hidden))
-    setMore(Boolean(editing.note) || editing.date !== today())
-    if (editing.installments) {
-      const n = String(editing.installments)
+    if (!source || loadedEdit.current === source.id) return
+    loadedEdit.current = source.id
+    const copying = !editing
+    setType(source.type)
+    setAmount(fmtYuan(Math.abs(source.amount)).replace(/,/g, '').replace(/\.00$/, ''))
+    setNeg(source.amount < 0)
+    setDate(copying ? today() : source.date)
+    setNote(source.note ?? '')
+    setHidden(!copying && Boolean(source.hidden))
+    setMore(Boolean(source.note) || (!copying && source.date !== today()))
+    if (source.installments) {
+      const n = String(source.installments)
       if (INST_OPTS.some((o) => o.id === n)) setInst(n)
       else {
         setInst('custom')
         setCustomInst(n)
       }
     }
-    if (editing.type === 'transfer') {
-      setFromId(editing.account_id)
-      setToId(editing.to_account_id)
+    if (source.type === 'transfer') {
+      setFromId(source.account_id)
+      setToId(source.to_account_id)
     } else {
-      setAccountId(editing.account_id)
+      setAccountId(source.account_id)
       setAccountTouched(true)
     }
-    if (editing.category_id) {
-      const c = cats.find((x) => x.id === editing.category_id)
+    if (source.category_id) {
+      const c = cats.find((x) => x.id === source.category_id)
       if (c?.kind === 'income') setIncomeCatId(c.id)
       else if (c) {
         setParentId(c.parent_id ?? c.id)
@@ -207,7 +212,7 @@ export function Entry() {
       }
     }
     setBackfilled(true)
-  }, [editing, cats])
+  }, [source, editing, cats])
 
   const parents = useMemo(() => cats.filter((c) => c.kind === 'expense' && !c.parent_id && !c.is_archived).sort((a, b) => a.sort - b.sort), [cats])
   const children = useMemo(() => (parentId ? childOrderByUse(txs, cats, parentId) : []), [txs, cats, parentId])

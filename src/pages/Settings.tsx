@@ -9,6 +9,7 @@ import { fmtIsoZh, nowIso, today } from '../lib/date'
 import { checkForUpdate, hardReload } from '../lib/sw'
 import { RestoreFailed, useStore } from '../lib/store'
 import type { Snapshot } from '../types'
+import { effectiveSwipe, readSwipe, SWIPE_LABEL, swipeOptions, writeSwipe, type SwipeConfig } from '../lib/gesture'
 
 /**
  * 可点的状态格右上角的小转圈箭头。
@@ -35,6 +36,9 @@ export function Settings() {
   const signOut = useStore((st) => st.signOut)
   const updateAccount = useStore((st) => st.updateAccount)
   const importSnapshot = useStore((st) => st.importSnapshot)
+  const mode = useStore((st) => st.mode)
+  const [swipe, setSwipe] = useState<SwipeConfig>(() => readSwipe())
+  const [swipePick, setSwipePick] = useState<'left' | 'right' | null>(null)
   const restoreSnapshot = useStore((st) => st.restoreSnapshot)
   const showToast = useStore((st) => st.showToast)
   const syncFailed = useStore((st) => st.syncFailed)
@@ -287,6 +291,12 @@ export function Settings() {
       {/* 放在 Group 外面：隐藏元素也算 :last-child，留在卡片里会让最后一行多一条分隔线 */}
       <input ref={fileRef} type="file" accept="application/json,.json" className="hidden" onChange={(e) => e.target.files?.[0] && importJson(e.target.files[0])} />
 
+      <Group title="滑动手势">
+        {/* 动作清单和显示的文案都要过 gesture.ts：外页面下清单里没有 hide 那一项、配置了它也显示成「不用」（死规则，gesture.test.ts 守着这页不许出现那四个字，注释也算） */}
+        <Item icon="👈" label="左滑" hint="流水行往左滑" action={SWIPE_LABEL[effectiveSwipe(swipe, mode).left]} onClick={() => setSwipePick('left')} />
+        <Item icon="👉" label="右滑" hint="流水行往右滑" action={SWIPE_LABEL[effectiveSwipe(swipe, mode).right]} onClick={() => setSwipePick('right')} />
+      </Group>
+
       <Group title="账号">
         <Item icon="🔑" label="修改密码" onClick={() => setPwOpen(true)} />
         <Item
@@ -375,6 +385,33 @@ export function Settings() {
         <button type="button" className="w-full rounded-2xl bg-brand text-on-brand py-3 font-semibold" onClick={() => setPwDone(false)}>
           我知道了
         </button>
+      </Sheet>
+
+      <Sheet open={swipePick !== null} onClose={() => setSwipePick(null)} title={swipePick === 'left' ? '左滑做什么' : '右滑做什么'}>
+        <div className="flex flex-col">
+          {swipeOptions(mode).map((a) => {
+            const on = swipePick !== null && effectiveSwipe(swipe, mode)[swipePick] === a
+            return (
+              <button
+                key={a}
+                type="button"
+                className="flex items-center justify-between py-3 border-b border-line last:border-0 text-left"
+                onClick={() => {
+                  if (swipePick) {
+                    const next = { ...swipe, [swipePick]: a }
+                    setSwipe(next)
+                    writeSwipe(next)
+                  }
+                  setSwipePick(null)
+                }}
+              >
+                <span className="text-[15px]">{SWIPE_LABEL[a]}</span>
+                {on ? <span className="text-brand-ink font-bold">✓</span> : null}
+              </button>
+            )
+          })}
+        </div>
+        <div className="text-xs text-muted mt-3">滑过大约四分之一行宽松手就触发。删除可以在底部提示里撤销。</div>
       </Sheet>
 
       <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">

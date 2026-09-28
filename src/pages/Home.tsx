@@ -2,6 +2,7 @@ import { lazy, Suspense, useMemo } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
+import { TxSwipe } from '../components/TxSwipe'
 import { balances, byCategory, debtOf, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { outerBook, outerList } from '../lib/facade'
@@ -259,7 +260,9 @@ export function Home() {
         ) : (
           <div className="divide-y divide-line">
             {recent.map((t) => (
-              <TxRow key={t.id} tx={t} accounts={accMap} categories={catMap} showDate={t.date.slice(5).replace('-', '/')} onClick={() => nav(`/add?id=${t.id}`)} />
+              <TxSwipe key={t.id} tx={t}>
+                <TxRow tx={t} accounts={accMap} categories={catMap} showDate={t.date.slice(5).replace('-', '/')} onClick={() => nav(`/add?id=${t.id}`)} />
+              </TxSwipe>
             ))}
           </div>
         )}
