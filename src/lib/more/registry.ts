@@ -73,7 +73,7 @@ export const MORE_CHARTS: Record<MoreKey, MoreEntry> = {
   histogram: { title: '单笔多大', desc: '每笔多少钱，按金额分档数笔数', scope: 'range', build: (i) => histogram(i) },
   habits: { title: '记账习惯', desc: '连续记账几天、每天记几笔', scope: 'range', build: (i) => habits(i) },
   // ---- 第二批（默认都不显示） ----
-  treemap: { title: '支出版图', desc: '大类→二级，面积=金额', scope: 'range', build: (i, c) => treemap(i, c.chartWidth) },
+  treemap: { title: '支出版图', desc: '大类→二级，面积=金额', scope: 'range', build: (i) => treemap(i) },
   delta: { title: '环比涨跌榜', desc: '比上月多花、少花最多的分类', scope: 'month', build: (i, c) => delta(i, c.chartWidth) },
   position: { title: '所选月份在历史里的位置', desc: '所选月份和往前 12 个月同期比', scope: 'month', build: (i) => positionChart(i) },
   fixed: { title: '固定开销', desc: '每月都有、金额差不多的开销', scope: 'month', build: (i) => fixedChart(i) },

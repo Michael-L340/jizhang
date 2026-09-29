@@ -13,7 +13,7 @@ import { addDays, monthRange } from '../date'
 import { categoryColor, CHART, childShade, contrast, readableOn } from '../palette'
 import { sampleInput } from './sample'
 import { rangeSpan } from './span'
-import { blockIcon, blockMoney, BLOCK_ICON_PX, MONEY_MIN_PX, moneyFits, ROOT_NAME, TREEMAP_TITLE, treemap, treeOf, UNSPLIT_NAME } from './treemap'
+import { blockIcon, blockMoney, BLOCK_ICON_PX, boxWidth, ROOT_NAME, TREEMAP_TITLE, treemap, treeOf, UNSPLIT_NAME } from './treemap'
 import type { MoreChart, MoreInput } from './types'
 
 echarts.use([TreemapChart, TooltipComponent, SVGRenderer])
@@ -51,7 +51,11 @@ const open = (txs: Transaction[], start = '2026-09-01', end = '2026-09-20'): Mor
 
 type Leaf = { id: string; name: string; value: number; itemStyle: { color: string }; label: { color: string } }
 type Node = Leaf & { children?: Leaf[]; upperLabel: { color: string } }
-type Series = { data: Node[]; leafDepth: number; nodeClick: string | false; roam: boolean; breadcrumb: { show: boolean }; label: { formatter: (p: unknown) => string } }
+type Series = {
+  data: Node[]; leafDepth: number; nodeClick: string | false; roam: boolean; breadcrumb: { show: boolean }
+  label: { formatter: (p: unknown) => string; rich: Record<string, { width?: number; backgroundColor?: { image: string } }> }
+  levels: { upperLabel?: { formatter: (p: unknown) => string } }[]
+}
 type Opt = { series: Series[]; tooltip: { formatter: (p: unknown) => string } }
 const opt = (c: MoreChart) => c.option as unknown as Opt
 /** 「名字 金额」一行一个，子块缩进，读起来就是用户在图上看到的两层 */
@@ -87,6 +91,10 @@ function renderScreens(c: MoreChart, width: number): string[] {
 }
 /** 图上印着的、「¥」开头的字 */
 const moneyTexts = (svg: string) => [...svg.matchAll(/>(¥[^<]*)</g)].map((m) => m[1])
+/** 图上印着的每一段字 */
+const svgTexts = (svg: string) => [...svg.matchAll(/<text[^>]*>([^<]*)</g)].map((m) => m[1])
+/** 块上的字读成人看到的样子：一格一段，图片格子写「[图]」，空隙格写一个空格 */
+const plain = (s: string) => s.replace(/\{(\w+)\|([^}]*)\}/g, (_m, k: string, t: string) => (k.startsWith('i') ? '[图]' : t || ' '))
 
 /**
  * 9/1–9/20 这段时间：午餐 30、晚餐 20、直接记在「日常餐饮」上的 10；房租 3500；手机 800（非经常，没二级）；
@@ -198,18 +206,38 @@ describe('支出版图（矩形树图）', () => {
     expect(opt(c).tooltip.formatter({ data: { id: 'p:life' } })).not.toContain('占经常')
   })
 
-  it('块上的字：「名字\\n¥金额（整数元）」；窄到放不下的块只写名字——「¥3,456」截成「¥3」会被读成三块钱', () => {
-    // 变异：moneyFits 恒为 true → 「游戏充值」那 5 块（占 0.1%）也写金额，红
-    const c = open(BOOK)
-    const fmt = opt(c).series[0].label.formatter
-    expect(fmt({ data: { id: 'p:life' } })).toBe('经常生活开支\n¥3,500')
-    expect(fmt({ data: { id: 'p:fun' } })).toBe('娱乐消费')
-    // 钻进日常餐饮里比：午餐占 50%，写金额
-    expect(fmt({ data: { id: 's:lunch' } })).toBe('午餐\n¥30')
+  it('块上的字：第一行名字、第二行「¥金额（整数元）」，每一段都是声明了宽度的一整格——放不下就整格不画，不会截成半截', () => {
+    // 用户 2026-09-29：「如果太小的，字或数字无法显示全的，就不显示了」。
+    // 变异：cell 不声明宽度（rich 里登记成 {}）→ 红
+    // 变异：金额那格不和名字比宽（去掉 Math.max）→「午餐 / ¥30」那块金额比名字窄，红
+    const s = opt(open(BOOK)).series[0]
+    const fmt = s.label.formatter
+    const upper = s.levels[1].upperLabel!.formatter
+    expect(plain(fmt({ data: { id: 'p:life' } }))).toBe('经常生活开支\n¥3,500')
+    expect(plain(fmt({ data: { id: 's:lunch' } }))).toBe('午餐\n¥30')
+    expect(plain(upper({ data: { id: 'p:food' } }))).toBe('日常餐饮 ¥60')
     expect(blockMoney(123456)).toBe('¥1,235')
-    // 最窄可能 = 占比 × 宽
-    expect(moneyFits(MONEY_MIN_PX / 329, 329)).toBe(true)
-    expect(moneyFits(MONEY_MIN_PX / 329 - 0.001, 329)).toBe(false)
+    const ids = s.data.flatMap((n) => [n.id, ...(n.children ?? []).map((ch) => ch.id)])
+    for (const id of ids) {
+      for (const t of [fmt({ data: { id } }), upper({ data: { id } })]) {
+        // 格子外面只有换行
+        expect(t.replace(/\{\w+\|[^}]*\}/g, '')).toMatch(/^\n?$/)
+        for (const [, k] of t.matchAll(/\{(\w+)\|/g)) expect(typeof s.label.rich[k]?.width, `${id} 的 ${k}`).toBe('number')
+      }
+      // 金额那格至少和名字那格一样宽（没图标时认块靠名字）：名字放不下的块，金额也放不下，不会只剩一个数
+      const [nameCell, moneyCell] = [...fmt({ data: { id } }).matchAll(/\{w(\d+)\|/g)].map((m) => Number(m[1]))
+      expect(moneyCell, id).toBeGreaterThanOrEqual(nameCell)
+    }
+  })
+
+  it('boxWidth（一格声明多宽）宁宽勿窄：汉字正好一个字宽，数字、¥、emoji 都不比 iPhone 上实际画的窄', () => {
+    // 声明窄了，字会伸出自己的格子压到隔壁块上。iPhone 上图表的字是 Helvetica：数字、¥ 0.556 个字宽，逗号 0.278；emoji 约 1.25。
+    // 变异：emoji 按 chart.textWidth 的 0.55 算 → 红；数字按 0.5 算 → 红
+    expect(boxWidth('日常餐饮')).toBe(45)
+    expect(boxWidth('¥3,456')).toBeGreaterThanOrEqual(Math.ceil((0.556 * 5 + 0.278) * 11))
+    expect(boxWidth('¥3,456')).toBeLessThanOrEqual(40)
+    expect(boxWidth('🍚')).toBeGreaterThanOrEqual(Math.ceil(1.25 * 11))
+    expect(boxWidth('🕹️')).toBe(boxWidth('🍚'))
   })
 
   it('真画出来（SSR）：一年的示例账本，第一屏的金额都是完整的（没有截断），底下面包屑第一格是「全部支出」', () => {
@@ -217,7 +245,7 @@ describe('支出版图（矩形树图）', () => {
     // 注意：它**守不住** moneyFits——示例账本里没有窄到会截断的块，把 moneyFits 改成恒为 true 它照样绿
     // （原注释写「意外开支画成 ¥3 → 红」，实测不红，审阅 #19）。截断由下面两条守。
     // 变异：去掉 series 的 name → 面包屑印成 series0，红
-    const [svg] = renderScreens(treemap(sampleInput(), 329), 329)
+    const [svg] = renderScreens(treemap(sampleInput()), 329)
     const money = moneyTexts(svg)
     expect(money.length).toBeGreaterThan(0)
     const whole = new Set(treeOf(sampleInput()).map((n) => blockMoney(n.cents)))
@@ -225,33 +253,36 @@ describe('支出版图（矩形树图）', () => {
     expect(svg).toContain(`>${ROOT_NAME}<`)
   })
 
-  it('真画出来（SSR，302 宽）：房租 ¥153、意外开支 ¥1,226 → 房租那条窄块只写名字，不印成「¥1」', () => {
-    // 房租占 11%，最窄 33 px：扣掉 ECharts 左右 5 + 5 的内边距，放不下「两个数字 + ...」，省略号被扔掉，「¥153」印成「¥1」。
-    // 变异：moneyFits 恒为 true → 印出「¥1」，红
-    // 变异：MONEY_MIN_PX 改回 24（没算内边距）→ 33 px ≥ 24 照样写金额，印出「¥1」，红
+  it('真画出来（SSR，302 宽）：房租 ¥153、意外开支 ¥1,226 → 房租那条窄块金额放不下就整格不写，不印成「¥1」', () => {
+    // 房租占 11%，那条块三十来 px 宽。原来整串交给 ECharts 截断，省略号放不下时被扔掉，「¥153」印成「¥1」。
+    // 变异：cell 不声明宽度 → 印出「¥1」，红
     const txs = [spend('2026-09-01', 153.4, 'rent'), spend('2026-09-02', 1226.4, 'oops')]
-    const c = treemap({ ...inputOf(txs, '2026-09-01', '2026-09-20'), cats: [...CATS, C('oops', '意外开支', 5)] }, 302)
+    const c = treemap({ ...inputOf(txs, '2026-09-01', '2026-09-20'), cats: [...CATS, C('oops', '意外开支', 5)] })
     const money = renderScreens(c, 302).flatMap(moneyTexts)
     expect(money).toContain('¥1,226')
     expect(money).not.toContain('¥1')
     expect(money.every((m) => m === '¥153' || m === '¥1,226')).toBe(true)
   })
 
-  it('真画出来（SSR，随机账本 × 随机屏宽 110–330，大类一屏 + 钻进每个大类各一屏）：图上每个「¥」开头的字要么是完整金额，要么带着「...」，没有截成「¥1」的', () => {
-    // 变异：moneyFits 恒为 true → 第 13 张（302 宽，房租 ¥153）起印出「¥1」，红
-    // 变异：MONEY_MIN_PX 改回 24 → 同一张，红。
-    // （门槛是这么定的：同样的随机法跑 1500 张，34 还剩两张印出「¥1,」「¥2,」，36 起一张都没有，取 38。这里只跑 150 张，34 撞不到那两张）
-    const cats = [...CATS, C('oops', '意外开支', 5)]
+  it('真画出来（SSR，随机账本 × 随机屏宽 110–330，大类一屏 + 钻进每个大类各一屏）：图上每一段字都是完整的名字、金额或图标，没有一处被截断', () => {
+    // 用户 2026-09-29：「如果太小的，字或数字无法显示全的，就不显示了」。
+    // 变异：cell 不声明宽度（交给 ECharts 截断）→ 印出「日常...」「¥1,2...」，红
+    // 变异：boxWidth 把汉字按半个字宽算 → 名字格声明得比实际窄，ECharts 照画整格，SSR 量出来伸出块外——这条管不到，由上面 boxWidth 那条管
+    const cats: Category[] = [
+      ...CATS.map((c) => (c.id === 'food' ? { ...c, icon: '🍚' } : c.id === 'lunch' ? { ...c, icon: 'img:lunch' } : c.id === 'fun' ? { ...c, icon: '🕹️' } : c)),
+      { ...C('oops', '意外开支', 5), icon: '⚡' },
+    ]
     const IDS = ['rent', 'oops', 'big', 'game', 'lunch', 'dinner']
     for (let k = 0; k < 150; k++) {
       let seed = k * 7919 + 13
       const rnd = () => ((seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0) / 2 ** 32)
       const txs = IDS.slice(0, 2 + Math.floor(rnd() * 5)).map((id, i) => spend(`2026-09-0${i + 1}`, Math.round(100 + rnd() ** 3 * 20000) + 0.4, id))
       const w = 110 + Math.floor(rnd() * 220)
-      const c = treemap({ ...inputOf(txs, '2026-09-01', '2026-09-20'), cats }, w)
-      const whole = new Set(treeOf({ txs, cats, start: '2026-09-01', end: '2026-09-20' }).flatMap((n) => [n, ...n.children]).map((n) => blockMoney(n.cents)))
-      for (const m of renderScreens(c, w).flatMap(moneyTexts)) {
-        if (!whole.has(m) && !m.endsWith('...')) expect.fail(`第 ${k} 张（${w} 宽）：图上印着「${m}」，是被截断的金额`)
+      const c = treemap({ ...inputOf(txs, '2026-09-01', '2026-09-20'), cats })
+      const nodes = treeOf({ txs, cats, start: '2026-09-01', end: '2026-09-20' }).flatMap((n) => [n, ...n.children])
+      const whole = new Set([...nodes.flatMap((n) => [n.name, blockMoney(n.cents)]), '🍚', '🕹️', '⚡', ROOT_NAME])
+      for (const t of renderScreens(c, w).flatMap(svgTexts)) {
+        if (!whole.has(t)) expect.fail(`第 ${k} 张（${w} 宽）：图上印着「${t}」，是被截断的字`)
       }
     }
   }, 30000)
@@ -345,23 +376,24 @@ describe('支出版图：块上的图标是分类自己的，不是一排一样�
   ]
   const txs = [spend('2026-09-02', 300, 'lunch'), spend('2026-09-03', 200, 'dinner'), spend('2026-09-04', 100, 'fun')]
   const c = treemap({ ...inputOf(txs, '2026-09-01', '2026-09-20'), cats: ICON_CATS })
-  const series = opt(c).series[0] as unknown as Series & { drillDownIcon: string; label: { rich: Record<string, { width: number; backgroundColor: { image: string } }> } }
+  const series = opt(c).series[0] as Series & { drillDownIcon: string }
   const fmt = series.label.formatter
 
   it('一级用 emoji 的：名字前面就是那个 emoji；没设图标的只写名字', () => {
-    // 变异：label 不拼 pre → 「日常餐饮」前面没有 🍚，红
-    expect(fmt({ data: { id: 'p:food' } })).toBe('🍚 日常餐饮\n¥500')
-    expect(fmt({ data: { id: 'p:fun' } })).toBe('娱乐消费\n¥100')
+    // 变异：head 不拼图标那格 → 「日常餐饮」前面没有 🍚，红
+    expect(plain(fmt({ data: { id: 'p:food' } }))).toBe('🍚 日常餐饮\n¥500')
+    expect(plain(fmt({ data: { id: 'p:fun' } }))).toBe('娱乐消费\n¥100')
   })
 
   it('用 3D 图的：富文本图片格子，图就是「我的图」里那一张；图被撤掉了（登记表里没有）就只写名字', () => {
     // 变异：不把 rich 交给 label → 图片格子没登记，ECharts 印出「{i1|}」字样，红
     const lunch = fmt({ data: { id: 's:lunch' } })
-    const key = lunch.match(/^\{(\w+)\|\} 午餐/)?.[1]
+    const key = lunch.match(/^\{(i\d+)\|\}/)?.[1]
     expect(key).toBeTruthy()
-    expect(series.label.rich[key!].backgroundColor.image).toMatch(/art\/lunch-v1\.png$/)
+    expect(plain(lunch)).toBe('[图] 午餐\n¥300')
+    expect(series.label.rich[key!].backgroundColor!.image).toMatch(/art\/lunch-v1\.png$/)
     expect(series.label.rich[key!].width).toBe(BLOCK_ICON_PX)
-    expect(fmt({ data: { id: 's:dinner' } })).toMatch(/^晚餐/)
+    expect(plain(fmt({ data: { id: 's:dinner' } }))).toBe('晚餐\n¥200')
   })
 
   it('默认的「▶」关掉了', () => {
@@ -371,9 +403,9 @@ describe('支出版图：块上的图标是分类自己的，不是一排一样�
   })
 
   it('blockIcon 本身：emoji、3D 图、撤掉的图、没设', () => {
-    expect(blockIcon('🎮', 'i0')).toEqual({ prefix: '🎮 ' })
-    expect(blockIcon('img:bag', 'i7').prefix).toBe('{i7|} ')
-    expect(blockIcon('img:nope', 'i1')).toEqual({ prefix: '' })
-    expect(blockIcon(null, 'i2')).toEqual({ prefix: '' })
+    expect(blockIcon('🎮', 'i0')).toEqual({ emoji: '🎮' })
+    expect(blockIcon('img:bag', 'i7')).toMatchObject({ image: '{i7|}' })
+    expect(blockIcon('img:nope', 'i1')).toBeNull()
+    expect(blockIcon(null, 'i2')).toBeNull()
   })
 })

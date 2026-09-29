@@ -27,7 +27,7 @@ export const ROOT_NAME = '全部支出'
 /** 面包屑那条的高度（px）；图的下沿给它让出这么多再加 6 */
 const CRUMB_H = 20
 
-const NOTE = `标题旁那段时间里的支出，一块的面积就是花了多少。先看大类，点一个大类看它的二级，点底下的「${ROOT_NAME}」回到大类；直接记在大类上的算「未细分」。转账、还白条、校准不算。`
+const NOTE = `标题旁那段时间里的支出，一块的面积就是花了多少。先看大类，点一个大类看它的二级，点底下的「${ROOT_NAME}」回到大类；块太小写不下的不写字，点一下看。直接记在大类上的算「未细分」。转账、还白条、校准不算。`
 
 const RIGHT = 'float:right;margin-left:16px;font-weight:600'
 
@@ -98,65 +98,102 @@ export function treeOf(inp: Pick<MoreInput, 'txs' | 'cats' | 'start' | 'end'>): 
   })
 }
 
+/** 块上字的字号（px） */
+const FONT = 11
 /** 块上图标的边长（px）：和 11px 的字差不多高 */
 export const BLOCK_ICON_PX = 13
+/** 图标和名字之间、钻进去之后顶上那条里名字和金额之间的空隙（px） */
+const ICON_GAP = 3
+const MONEY_GAP = 8
+
+const EMOJI = /\p{Extended_Pictographic}/u
+/** 不占宽度的：ZWJ、变体选择符、肤色 */
+const ZERO = /[\u200d\ufe0e\ufe0f\u{1f3fb}-\u{1f3ff}]/u
 
 /**
- * 块上名字前面的图标：分类自己的那个（和流水行、记账页同一个），emoji 直接写进字里，
- * 3D 图（`img:<key>`）用 ECharts 富文本的图片格子（rich 里登记一格 backgroundColor.image）。
+ * 块上一格字要占多宽（px），宁宽勿窄：声明得比实际窄，字会伸出自己的格子；声明宽了只是早一点不写。
+ * iPhone 上图表的字是 Helvetica（汉字落到苹方）：汉字正好一个字宽；数字、「¥」0.56，按 0.58 算；
+ * 逗号 0.28，按 0.35 算；emoji 按 1.3 算；再留 1px。
+ * （chart.ts 的 textWidth 是估平均的，数字按 0.55、emoji 当半个字，拿来声明格子会偏窄）
+ */
+export function boxWidth(s: string, fontSize = FONT): number {
+  let em = 0
+  for (const ch of s) {
+    em += ZERO.test(ch) ? 0 : EMOJI.test(ch) ? 1.3 : ch === '¥' ? 0.58 : ch > '\x7f' ? 1 : /[A-Z]/.test(ch) ? 0.72 : /\w/.test(ch) ? 0.58 : 0.35
+  }
+  return Math.ceil(em * fontSize) + 1
+}
+
+/**
+ * 块上名字前面的图标：分类自己的那个（和流水行、记账页同一个）。
+ * 3D 图（`img:<key>`）是 ECharts 富文本的图片格子（rich 里登记一格 backgroundColor.image）；emoji 是一格字，交给 treemap 里的 cell。
  * 原来是 ECharts 默认的「▶」，每个大类前面都一样，iPhone 上还被画成一个蓝色方块 emoji
  * （用户 2026-09-29：「怎么都是一样的，而且好丑」）。
- * 没设图标、或者 img 指到登记表里没有的图（art.ts 撤掉过）→ 什么都不加，只写名字。
+ * 没设图标、或者 img 指到登记表里没有的图（art.ts 撤掉过）→ null，只写名字。
  */
-export function blockIcon(icon: string | null, richKey: string): { prefix: string; rich?: Record<string, object> } {
-  if (!icon) return { prefix: '' }
+export function blockIcon(icon: string | null, richKey: string): { image: string; rich: Record<string, object> } | { emoji: string } | null {
+  if (!icon) return null
   if (isImgIcon(icon)) {
     const url = artUrl(imgKey(icon) ?? '')
-    if (!url) return { prefix: '' }
-    return { prefix: `{${richKey}|} `, rich: { [richKey]: { width: BLOCK_ICON_PX, height: BLOCK_ICON_PX, backgroundColor: { image: url } } } }
+    if (!url) return null
+    return { image: `{${richKey}|}`, rich: { [richKey]: { width: BLOCK_ICON_PX, height: BLOCK_ICON_PX, backgroundColor: { image: url } } } }
   }
-  return { prefix: `${icon} ` }
+  return { emoji: icon }
 }
 
 /** 块上的金额：整数元带千分位（块小，写不下分；精确到分的在提示框里） */
 export const blockMoney = (cents: number) => `¥${Math.round(cents / 100).toLocaleString('en-US')}`
 
-/** 纯函数量不到屏幕：没传宽度时按 393 宽的手机算（393 − 页面和卡片的内边距 64） */
-export const TREEMAP_W = 329
-/**
- * 一块最窄可能多窄：面积 = 占比 × 宽 × 高，高最多是整张图那么高，所以宽 ≥ 占比 × 整张图的宽。
- * 这么宽都放不下「两个字 + ...」的块，ECharts 截断时会把省略号也扔掉，只剩前两个字——
- * 「¥3,456」画成「¥3」，看着像三块钱（2026-09-29 SSR 画出来才发现）。这种块只写名字，金额在提示框里。
- *
- * 38px = 左右内边距 5 + 5（ECharts 块上字的默认 padding）+ 截断时扣的 1 + 两个 11px 数字
- * （TreemapView 写死 truncateMinChar = 2，先扣掉两个字宽，剩下的放不下「...」就把省略号扔掉）+「...」+ 块之间的缝，再留几 px（SSR 随机 1500 张图：34 还有漏网的，36 起一张都没有，取 38）。
- * 原来是 24，漏算了那 10px 内边距：SSR 随机撞出来 30 多 px 宽的块照样印成「¥1」（审阅 #19 补真会红的测试时发现）。
- */
-export const MONEY_MIN_PX = 38
-export function moneyFits(share: number, chartWidth: number): boolean {
-  return share * chartWidth >= MONEY_MIN_PX
-}
+/** 名字里的花括号会被 ECharts 当成富文本的格子标记，换成全角的 */
+const plainText = (s: string) => s.replace(/\{/g, '｛').replace(/\}/g, '｝')
 
-export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
+export function treemap(inp: MoreInput): MoreChart {
   const base = { key: 'treemap', title: TREEMAP_TITLE, span: rangeSpan(inp.start, inp.end, inp.today), note: NOTE }
   const tree = treeOf(inp)
   const total = tree.reduce((s, n) => s + n.cents, 0)
   if (total <= 0) return { ...base, option: null, empty: '这段时间没有支出' }
 
-  // ECharts 那边只认 id；提示框、块上的字要的全名和精确的分从这里查。
-  // money：这一块上写不写金额（见 moneyFits）。大类在第一屏里比，二级在钻进去之后那一屏里比
-  // pre：块上名字前面的图标（blockIcon）；rich：3D 图要登记的富文本格子，一块一格
-  const info = new Map<string, { name: string; cents: number; parent?: TreeNode; money: boolean; pre: string }>()
+  // 块上的字一段一格（ECharts 富文本），每格都声明好宽度：块里剩的地方放得下就整格画，放不下就整格不画——
+  // zrender 对声明了宽度的格子就是这么处理的（parseText.js：声明了 width 又放不下 → token.text = ''），
+  // 块多大是 ECharts 排完版才知道的，这样它自己按每一块的实际大小取舍，不用这边猜。
+  // 原来是整串字交给 ECharts 截断：小块上印出「日常…」「¥1,2...」，省略号放不下时「¥3,456」还会印成「¥3」
+  // （用户 2026-09-29：「如果太小的，字或数字无法显示全的，就不显示了」）。
+  // 一格宽度一个样式（w38 = 宽 38），块上的字和钻进去之后顶上那条共用
   const rich: Record<string, object> = {}
-  let nth = 0
-  const iconOf = (icon: string | null) => {
-    const b = blockIcon(icon, `i${nth++}`)
-    Object.assign(rich, b.rich)
-    return b.prefix
+  const cell = (text: string, width = boxWidth(text)) => {
+    rich[`w${width}`] = { width }
+    return `{w${width}|${text}}`
   }
+  // 图标、空隙、名字各一格：名字放不下时图标照样画（小块上只剩一个图标，比截成半个名字好认）。
+  // anchor：认得出是哪一块的那一格有多宽，金额那格用得着
+  let nth = 0
+  const head = (icon: string | null, name: string) => {
+    const b = blockIcon(icon, `i${nth++}`)
+    const nameW = boxWidth(plainText(name))
+    const nameCell = cell(plainText(name), nameW)
+    if (!b) return { text: nameCell, anchor: nameW }
+    if ('rich' in b) Object.assign(rich, b.rich)
+    const iconW = 'emoji' in b ? boxWidth(b.emoji) : BLOCK_ICON_PX
+    return { text: `${'emoji' in b ? cell(b.emoji, iconW) : b.image}${cell('', ICON_GAP)}${nameCell}`, anchor: iconW }
+  }
+  // 块上：第一行图标 + 名字，第二行金额；高度不够两行时第二行整行不画（lineOverflow）。
+  // 金额不单独出现：那格至少声明得和「认得出是哪块」的那格一样宽——有图标比图标，没图标比名字。
+  // 放得下金额的块一定放得下它，不会只剩一个没头没尾的数。
+  // 钻进去之后顶上那条是一行：图标、名字、金额（那条和整张图一样宽，放不下名字的情况实际碰不到）
+  const texts = (icon: string | null, name: string, cents: number) => {
+    const h = head(icon, name)
+    const money = blockMoney(cents)
+    return {
+      label: `${h.text}\n${cell(money, Math.max(boxWidth(money), h.anchor))}`,
+      upper: `${h.text}${cell('', MONEY_GAP)}${cell(money)}`,
+    }
+  }
+
+  // ECharts 那边只认 id；提示框、块上的字要的全名和精确的分从这里查
+  const info = new Map<string, { name: string; cents: number; parent?: TreeNode; label: string; upper: string }>()
   const data = tree.map((n) => {
-    info.set(`p:${n.id}`, { name: n.name, cents: n.cents, money: moneyFits(n.cents / total, chartWidth), pre: iconOf(n.icon) })
-    for (const ch of n.children) info.set(`s:${ch.id}`, { name: ch.name, cents: ch.cents, parent: n, money: moneyFits(ch.cents / n.cents, chartWidth), pre: iconOf(ch.icon) })
+    info.set(`p:${n.id}`, { name: n.name, cents: n.cents, ...texts(n.icon, n.name, n.cents) })
+    for (const ch of n.children) info.set(`s:${ch.id}`, { name: ch.name, cents: ch.cents, parent: n, ...texts(ch.icon, ch.name, ch.cents) })
     return {
       id: `p:${n.id}`,
       name: n.name,
@@ -182,15 +219,8 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
   })
 
   const pct = (part: number, whole: number) => `${((part / whole) * 100).toFixed(1)}%`
-  const label = (p: { data?: { id?: string } }) => {
-    const x = p.data?.id ? info.get(p.data.id) : undefined
-    return x ? (x.money ? `${x.pre}${x.name}\n${blockMoney(x.cents)}` : `${x.pre}${x.name}`) : ''
-  }
-  // 钻进去之后顶上那条只有 22px 高，写成一行
-  const upper = (p: { data?: { id?: string } }) => {
-    const x = p.data?.id ? info.get(p.data.id) : undefined
-    return x ? `${x.pre}${x.name}  ${blockMoney(x.cents)}` : ''
-  }
+  const label = (p: { data?: { id?: string } }) => (p.data?.id ? info.get(p.data.id)?.label : undefined) ?? ''
+  const upper = (p: { data?: { id?: string } }) => (p.data?.id ? info.get(p.data.id)?.upper : undefined) ?? ''
 
   return {
     ...base,
@@ -246,10 +276,14 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
             show: true,
             formatter: label,
             rich,
-            fontSize: 11,
+            fontSize: FONT,
             lineHeight: 14,
+            // ECharts 默认四周 5：左右各让 1px 给字，小块多放得下一点
+            padding: [5, 4],
             // 兜底的白字（卡片底色）；每一块实际的字色在 data 里按底色单独给（readableOn）
             color: CHART.gap,
+            // 'truncate' 不能去掉：zrender 只在这个模式下才去比「放不放得下」。格子都声明了宽度，
+            // 所以它不会截出半截字，放不下的格子整格不画（见上面 cell）
             overflow: 'truncate',
             lineOverflow: 'truncate',
           },
@@ -259,7 +293,7 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
             // 第 1 层 = 一级分类。钻进去之后顶上一条写着是哪个大类（没有面包屑，得告诉人现在在哪）
             {
               itemStyle: { borderWidth: 0, gapWidth: 1 },
-              upperLabel: { show: true, height: 22, padding: [0, 6], color: CHART.gap, fontSize: 11, formatter: upper, rich },
+              upperLabel: { show: true, height: 22, padding: [0, 6], color: CHART.gap, fontSize: FONT, formatter: upper, rich },
             },
             // 第 2 层 = 二级分类：一圈细白边，挨着的两块同色系也分得开
             { itemStyle: { borderColor: CHART.gap, borderWidth: 1 } },

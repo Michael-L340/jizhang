@@ -77,8 +77,8 @@ describe('登记表', () => {
     expect(shown(narrow)).toBeLessThan(shown(wide))
   })
 
-  it('第二批跟宽度有关的六张，宽度都从页面传进去（窄屏、宽屏吐出来的不一样）', () => {
-    // 变异：登记表里 delta 写成 (i) => delta(i)（用默认 329）→ 红；treemap 同样 → 红；
+  it('第二批跟宽度有关的五张，宽度都从页面传进去（窄屏、宽屏吐出来的不一样）', () => {
+    // 变异：登记表里 delta 写成 (i) => delta(i)（用默认 329）→ 红；
     // engel 不转发 axisWidth → 红；bigticket 不转发 chartWidth → 红；assets 不转发 axisWidth → 红；
     // creditplan 不转发 axisWidth → 红；assets 不转发 chartWidth（图例宽度）→ 红
     const N = { chartWidth: 104, axisWidth: 60 }
@@ -91,12 +91,7 @@ describe('登记表', () => {
     // 环比涨跌榜：金额轴一边多长按宽度算（放得下柱头的金额）
     const dMax = (ctx: typeof N) => (at('delta', ctx).xAxis as { max: number }).max
     expect(dMax(N)).not.toBe(dMax(W))
-    // 支出版图：窄的块只写名字，放得下才写金额——把每一块上印的字连起来比
-    const tm = (ctx: typeof N) => {
-      const s = (at('treemap', ctx).series as { data: { id: string }[]; label: { formatter: (p: unknown) => string } }[])[0]
-      return s.data.map((n) => s.label.formatter({ data: { id: n.id } })).join('|')
-    }
-    expect(tm(N)).not.toBe(tm(W))
+    // （支出版图不在这里：块上的字写不写，由 ECharts 排完版按每一块的实际大小定，不用页面传宽度，见 treemap.ts 的 cell）
     expect(labelsShown(at('engel', N).xAxis)).toBeLessThan(labelsShown(at('engel', W).xAxis))
     expect(labelsShown(at('bigticket', N).singleAxis)).toBeLessThan(labelsShown(at('bigticket', W).singleAxis))
     expect(labelsShown(at('assets', N).xAxis)).toBeLessThan(labelsShown(at('assets', W).xAxis))
