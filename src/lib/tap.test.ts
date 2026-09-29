@@ -83,9 +83,9 @@ describe('点绘图区按哪根轴取下标（Chart.tsx 的 onAxisClick）', () 
   })
 })
 
-describe('进阶分析页的提示框：和统计页一样，只有「钱的流向」点一下才弹', () => {
-  it('钱的流向：点一下才弹、划过不变暗；其余十九张不改 triggerOn（和统计页一样手指划过跟着显示）', async () => {
-    // 变异：桑基去掉 triggerOn: 'click' → 红；桑基改回 emphasis focus adjacency → 红；
+describe('进阶分析页的提示框：二十张图都和统计页一样', () => {
+  it('没有一张图改 triggerOn（和统计页一样手指划过跟着显示）；钱的流向只关掉了「高亮相连、其余变暗」', async () => {
+    // 变异：桑基加回 triggerOn: 'click'（只让它点一下才弹那一版）→ 红；桑基改回 emphasis focus adjacency → 红；
     // 某张折线图加上 triggerOn: 'click'（整页点一下才弹那一版）→ 红
     const { MORE_CHARTS } = await import('./more/registry')
     const { MORE_KEYS } = await import('./more/layout')
@@ -95,10 +95,8 @@ describe('进阶分析页的提示框：和统计页一样，只有「钱的流�
       const c = MORE_CHARTS[k].build(inp, { chartWidth: 329, axisWidth: 285 })
       const o = c.option as { tooltip?: { triggerOn?: string }; series?: { emphasis?: unknown }[] } | null
       if (!o?.tooltip) continue
-      if (k === 'sankey') {
-        expect(o.tooltip.triggerOn, k).toBe('click')
-        expect(o.series?.[0].emphasis, k).toEqual({ disabled: true })
-      } else expect(o.tooltip.triggerOn, k).toBeUndefined()
+      expect(o.tooltip.triggerOn, k).toBeUndefined()
+      if (k === 'sankey') expect(o.series?.[0].emphasis, k).toEqual({ disabled: true })
     }
   })
 

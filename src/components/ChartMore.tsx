@@ -21,6 +21,6 @@ import Chart from './Chart'
 
 echarts.use([SankeyChart, HeatmapChart, RadarChart, TreemapChart, ScatterChart, CalendarComponent, VisualMapContinuousComponent, RadarComponent, MarkPointComponent, SingleAxisComponent])
 
-// 提示框和统计页一样：点一下弹、按住滑动跟着看、点别处就收。只有「钱的流向」（桑基）在自己的 option 里改成点一下才弹，
-// 理由写在 sankey.ts。v1.3.19 试过整页都「点一下才弹」，用户嫌不好用：不能滑着看、不好消失（2026-09-29）。
+// 提示框和统计页一样：点一下弹、按住滑动跟着看、点别处就收，二十张图没有例外（钱的流向只关掉了「高亮相连变暗」，见 sankey.ts）。
+// v1.3.19 试过整页都「点一下才弹」，用户嫌不好用：不能滑着看、不好消失（2026-09-29）。
 export default Chart
