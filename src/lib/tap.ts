@@ -58,16 +58,3 @@ export function categoryAxisOf(option: unknown): { dim: 0 | 1; count: number } {
   if (y && y.type === 'category' && Array.isArray(y.data)) return { dim: 1, count: y.data.length }
   return { dim: 0, count: 0 }
 }
-
-/**
- * 提示框改成「点一下才弹」：ECharts 的 tooltip 默认 triggerOn 是 'mousemove|click'，手机上 touchmove 被当成 mousemove，
- * 上下滑页面时手指从图上经过，数字就一个个蹦出来（用户 2026-09-29：「钱的流向…我滑动的时候，他好像太敏感了」）。
- * 进阶分析页的图一律走这个（ChartMore 传 tapOnly）。option 原样不动，返回改过的新对象；没有 tooltip 就原样返回。
- * 程序里喊的 showTip（点两下跳流水的第一下）不受 triggerOn 影响，照常弹。
- */
-export function tapOnlyTooltip<T>(option: T): T {
-  const o = option as { tooltip?: unknown } | null
-  if (!o || typeof o !== 'object' || !o.tooltip) return option
-  const fix = (t: unknown) => (t && typeof t === 'object' ? { ...(t as object), triggerOn: 'click' } : t)
-  return { ...(o as object), tooltip: Array.isArray(o.tooltip) ? o.tooltip.map(fix) : fix(o.tooltip) } as T
-}

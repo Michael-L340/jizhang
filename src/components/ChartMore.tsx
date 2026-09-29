@@ -14,7 +14,6 @@
 // 其余第二批的图（环比涨跌榜、历史位置、固定开销、吃饭占多少、备注里常写的、资产结构、白条未来负担）
 // 只用柱 / 折线 / grid / 图例 / 提示框，Chart.tsx 已经注册过。
 // 漏注册的后果是那张图一片空白、生产环境连报错都没有——ChartMore.test.ts 用 SSR 把每张图真画一遍守着。
-import type { ComponentProps } from 'react'
 import * as echarts from 'echarts/core'
 import { HeatmapChart, RadarChart, SankeyChart, ScatterChart, TreemapChart } from 'echarts/charts'
 import { CalendarComponent, MarkPointComponent, RadarComponent, SingleAxisComponent, VisualMapContinuousComponent } from 'echarts/components'
@@ -22,10 +21,6 @@ import Chart from './Chart'
 
 echarts.use([SankeyChart, HeatmapChart, RadarChart, TreemapChart, ScatterChart, CalendarComponent, VisualMapContinuousComponent, RadarComponent, MarkPointComponent, SingleAxisComponent])
 
-/**
- * 进阶分析页的图一律「点一下才弹提示框」（tapOnly）：那一页一屏好几张图，上下滑时手指总会经过某张图，
- * 默认的「手指划过就弹」让数字一个个蹦出来（用户 2026-09-29：钱的流向滑动时太敏感）。
- */
-export default function ChartMore(props: ComponentProps<typeof Chart>) {
-  return <Chart {...props} tapOnly />
-}
+// 提示框和统计页一样：点一下弹、按住滑动跟着看、点别处就收。只有「钱的流向」（桑基）在自己的 option 里改成点一下才弹，
+// 理由写在 sankey.ts。v1.3.19 试过整页都「点一下才弹」，用户嫌不好用：不能滑着看、不好消失（2026-09-29）。
+export default Chart

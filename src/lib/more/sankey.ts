@@ -174,6 +174,10 @@ export function sankeyChart(inp: MoreInput): MoreChart {
   const pct = (v: number) => `${((v / total) * 100).toFixed(1)}%`
   const tooltip = {
     trigger: 'item',
+    // 只有这张图「点一下才弹」，别的图和统计页一样手指划过就跟着显示。
+    // 它又高又铺满一条条带子，上下滑页面时手指一碰到就算悬停，数字一个接一个地闪（用户 2026-09-29 嫌太敏感）；
+    // 而且它不像折线图那样能「按住滑着看」，滑动本来就没用。整页都这么改过（v1.3.19），用户嫌折线图不能滑、不好消失，又改回来了
+    triggerOn: 'click',
     confine: true,
     formatter: (p: { dataType?: string; data: { id?: string; source?: string; target?: string; value: number } }) => {
       const v = p.data.value
@@ -210,7 +214,7 @@ export function sankeyChart(inp: MoreInput): MoreChart {
           label: { fontSize: SANKEY_FONT, color: CHART.label, formatter: '{b}' },
           lineStyle: { color: 'target', opacity: 0.35, curveness: 0.5 },
           // 不要「高亮相连、其余变暗」：手机上手指划过就算悬停，上下滑页面时整张图一闪一闪地变暗（用户 2026-09-29 嫌太敏感）。
-          // 点一下照样弹提示框（进阶页的图一律点一下才弹，见 ChartMore 的 tapOnly）
+          // 点一下照样弹提示框（上面 tooltip.triggerOn）
           emphasis: { disabled: true },
           data: nodes,
           links,
