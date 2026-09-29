@@ -156,3 +156,39 @@ describe('折线圆点只画末点', () => {
     expect(endDotOnly(1, 5)(0, { dataIndex: 0 })).toBe(5)
   })
 })
+
+describe('折线末点：小实心点 + 光晕（用户 2026-09-29 挑的「乙」）', () => {
+  it('光晕落在最后一个有数的点上；当前月今天之后是 null，落在今天那一点；一个数都没有就不画', async () => {
+    // 变异：endHalo 不跳过末尾的 null（直接取 data.length - 1）→ 第二条落到 null 上，红
+    const { endHalo, HALO_OPACITY, HALO_SIZE } = await import('./chart')
+    const h = endHalo([1, 2, 3], '#c95a4e') as { data: { coord: [number, number] }[]; itemStyle: { color: string; opacity: number }; symbolSize: number; silent: boolean }
+    expect(h.data[0].coord).toEqual([2, 3])
+    expect(h.itemStyle).toEqual({ color: '#c95a4e', opacity: HALO_OPACITY })
+    expect(h.symbolSize).toBe(HALO_SIZE)
+    expect(h.silent).toBe(true)
+    const today = endHalo([5, 8, 13, null, null], '#000') as { data: { coord: [number, number] }[] }
+    expect(today.data[0].coord).toEqual([2, 13])
+    expect(endHalo([null, undefined], '#000')).toBeUndefined()
+    expect(endHalo([], '#000')).toBeUndefined()
+  })
+
+  it('点本身：实心圆、白边、只在最后一个点上有大小', async () => {
+    // 变异：symbol 写回默认（去掉 symbol: 'circle'）→ 又成了和线一样粗的空心圈，红
+    const { endDot, END_DOT_SIZE } = await import('./chart')
+    const d = endDot(4, '#ffffff')
+    expect(d.symbol).toBe('circle')
+    expect(d.itemStyle).toEqual({ borderColor: '#ffffff', borderWidth: 1.5 })
+    expect(d.symbolSize(0, { dataIndex: 3 })).toBe(END_DOT_SIZE)
+    expect(d.symbolSize(0, { dataIndex: 2 })).toBe(0)
+  })
+
+  it('统计页用了光晕的那两条主线真的带上了；画统计页的 Chart.tsx 注册了 MarkPointComponent（漏了 ECharts 不报错、直接不画）', async () => {
+    // 变异：Chart.tsx 去掉 MarkPointComponent → 红；统计页总资产线去掉 markPoint → 红
+    const { readFileSync } = await import('node:fs')
+    const chart = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8')
+    expect(chart).toMatch(/echarts\.use\(\[[^\]]*MarkPointComponent/)
+    const stats = readFileSync(new URL('../pages/Stats.tsx', import.meta.url), 'utf8')
+    expect(stats.match(/markPoint: endHalo\(/g) ?? []).toHaveLength(2)
+    expect(stats).not.toMatch(/endDotOnly\(/)
+  })
+})

@@ -10,7 +10,7 @@
 // MoreInput.txs 是当前模式那本账。白条整块不参与里外页面（facade.ts 对 credit 各挡一道），
 // 所以两种模式下这里的数一样。
 import { balances, balanceSeries, bucketKeys, debtOf, dueNow, splitAccounts } from '../compute'
-import { axisLabels, endDotOnly } from '../chart'
+import { axisLabels, endDot, endHalo } from '../chart'
 import { CREDIT_ALL } from '../filter'
 import { fmtMonthZh, monthOf } from '../date'
 import { fmtYuan } from '../money'
@@ -94,8 +94,9 @@ export function creditChart(inp: MoreInput, axisWidth = CREDIT_AXIS_W): MoreChar
         {
           name: '欠款',
           type: 'line',
-          showSymbol: true,
-          symbolSize: endDotOnly(keys.length, 7),
+          // 末点：小实心点 + 光晕（统计页曲线同一个样子，用户 2026-09-29 挑的「乙」）
+          ...endDot(keys.length, CHART.gap),
+          markPoint: endHalo(debt, CHART.expense),
           lineStyle: { width: 2.5 },
           areaStyle: { opacity: 0.1 },
           // 单位是分；轴和提示框自己换成元

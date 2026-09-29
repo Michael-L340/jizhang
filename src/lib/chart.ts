@@ -151,3 +151,39 @@ export function shortLabels(names: string[]): string[] {
 export function endDotOnly(count: number, size: number): (value: unknown, params: { dataIndex: number }) => number {
   return (_v, p) => (p.dataIndex === count - 1 ? size : 0)
 }
+
+/**
+ * 折线最后一个点的样子（用户 2026-09-29 在效果图上挑的「乙」）：小实心点 + 白边，外面一圈很淡的同色光晕，
+ * 像地图上「你在这儿」。原来那种和线一样粗的空心圈，线条顺顺地走到头突然一个球，用户嫌突兀。
+ * 点本身：展开进 series（symbol / symbolSize / itemStyle）；ring 传卡片底色（CHART.gap）。
+ */
+export const END_DOT_SIZE = 6
+export function endDot(count: number, ring: string): { showSymbol: true; symbol: 'circle'; symbolSize: ReturnType<typeof endDotOnly>; itemStyle: { borderColor: string; borderWidth: number } } {
+  return { showSymbol: true, symbol: 'circle', symbolSize: endDotOnly(count, END_DOT_SIZE), itemStyle: { borderColor: ring, borderWidth: 1.5 } }
+}
+
+/** 光晕的直径（px）和浓淡 */
+export const HALO_SIZE = 18
+export const HALO_OPACITY = 0.18
+
+/**
+ * 光晕：markPoint 画在**最后一个有数的点**上（当前月今天之后是 null，光晕要落在今天那一点，不是月底）。
+ * 一个有数的点都没有 → undefined（不画）。silent：不抢点击，提示框照旧走轴指示线。
+ * 只给「一条主线」的图用（趋势合计、总资产、白条欠款、所选月份那条红线）；几条线叠在一起的图（分类、分账户）
+ * 只要点不要光晕——五圈光晕挤在右边一团，比原来的点还乱。
+ * 用它的图所在的那个 Chart 组件必须注册 MarkPointComponent，否则 ECharts 一声不吭地不画（chart.test.ts 守着）。
+ */
+export function endHalo(data: readonly (number | null | undefined)[], color: string): object | undefined {
+  let i = data.length - 1
+  while (i >= 0 && (data[i] === null || data[i] === undefined)) i--
+  if (i < 0) return undefined
+  return {
+    symbol: 'circle',
+    symbolSize: HALO_SIZE,
+    silent: true,
+    animation: false,
+    label: { show: false },
+    itemStyle: { color, opacity: HALO_OPACITY },
+    data: [{ coord: [i, data[i]] }],
+  }
+}

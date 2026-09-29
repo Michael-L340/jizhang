@@ -2,11 +2,12 @@
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+// MarkPointComponent：统计页曲线末点的那圈光晕（chart.endHalo）要它，漏了 ECharts 不报错、直接不画
+import { GridComponent, LegendComponent, MarkPointComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { categoryAxisOf, itemTapStep, type ArmedTap, type TapItem } from '../lib/tap'
 
-echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, MarkPointComponent, TooltipComponent, CanvasRenderer])
 
 export type ChartOption = echarts.EChartsCoreOption
 export interface ChartClick {

@@ -14,7 +14,7 @@ import { dailyCumulative, firstFlowDate } from '../compute'
 import { dayInMonth, daysInMonth, monthOf, monthRange, shiftMonth } from '../date'
 import { fmtYuan } from '../money'
 import { CHART } from '../palette'
-import { endDotOnly } from '../chart'
+import { endDot, endHalo } from '../chart'
 import { alignDays } from './race'
 import { monthSpan } from './span'
 import type { MoreChart, MoreInput, MoreTile } from './types'
@@ -134,17 +134,17 @@ export function positionChart(inp: MoreInput): MoreChart {
     lineStyle: { width: 1, opacity: 0.35 },
     data: pad(h.full),
   }))
+  const curData = pad(P.cur)
   series.push({
     name: curName,
     type: 'line',
     color: CHART.expense,
-    // 只画末点（统计页曲线同一个做法，用户 2026-09-28 选的「丙」）：线头在哪一眼看得见
-    showSymbol: true,
-    symbol: 'circle',
-    symbolSize: endDotOnly(curLen, 7),
+    // 只画末点（用户 2026-09-28 选的「丙」），样子是 09-29 挑的「乙」：小实心点 + 光晕，落在今天那一号
+    ...endDot(curLen, CHART.gap),
+    markPoint: endHalo(curData, CHART.expense),
     lineStyle: { width: 2.5 },
     z: 3,
-    data: pad(P.cur),
+    data: curData,
   })
 
   return {

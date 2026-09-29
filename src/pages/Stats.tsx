@@ -8,7 +8,7 @@ import { Sheet } from '../components/Sheet'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
-import { axisLabels, endDotOnly, gridTopFor, legendRows, shortLabels } from '../lib/chart'
+import { axisLabels, endDot, endHalo, gridTopFor, legendRows, shortLabels } from '../lib/chart'
 import { outerBook } from '../lib/facade'
 import { rangeBounds } from '../lib/range'
 import { CHILD_NONE } from '../lib/filter'
@@ -180,9 +180,9 @@ export function Stats() {
             name: trendKind === 'expense' ? '支出' : '收入',
             type: 'line',
             smooth: true,
-            // 圆点只画末点（用户 2026-09-28 选的丙），点中的那天靠轴指示线
-            showSymbol: true,
-            symbolSize: endDotOnly(keys.length, 7),
+            // 只画末点（用户 2026-09-28 选的丙），样子是 2026-09-29 挑的乙：小实心点 + 光晕；点中的那天靠轴指示线
+            ...endDot(keys.length, CHART.gap),
+            markPoint: endHalo(trendTotal.map((v) => v / 100), trendKind === 'expense' ? CHART.expense : CHART.income),
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
             label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
@@ -269,8 +269,8 @@ export function Stats() {
         name: c.name,
         type: 'line',
         smooth: true,
-        showSymbol: true,
-        symbolSize: endDotOnly(keys.length, 5),
+        // 几条线叠在一起：只要末点，不要光晕（见 chart.endHalo）
+        ...endDot(keys.length, CHART.gap),
         lineStyle: { width: 2 },
         data: c.data.map((v) => v / 100),
       })),
@@ -316,8 +316,8 @@ export function Stats() {
             name: '总余额',
             type: 'line',
             smooth: true,
-            showSymbol: true,
-            symbolSize: endDotOnly(keys.length, 7),
+            ...endDot(keys.length, CHART.gap),
+            markPoint: endHalo(bal.total.map((v) => v / 100), CHART.balance),
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
             label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
@@ -335,8 +335,7 @@ export function Stats() {
         name: a.name,
         type: 'line',
         smooth: true,
-        showSymbol: true,
-        symbolSize: endDotOnly(keys.length, 5),
+        ...endDot(keys.length, CHART.gap),
         lineStyle: { width: 2 },
         data: bal.byAccount[a.id].map((v) => v / 100),
       })),
