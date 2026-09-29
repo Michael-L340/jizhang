@@ -66,11 +66,13 @@
 
 ## 统计页
 - `balanceSeries` 的**合计只加传进来的那几个账户**，别改回 `totalOf(running)`：`applyTx` 会给清单之外的账户也建键，统计页只传资产账户进来，白条的欠款就会悄悄混进「只算资产」的合计。
-- 图表上**不属于分类**的颜色（趋势线 / 余额线 / 坐标轴）走 `palette.CHART`，页面里不许再出现写死的十六进制——`palette.test.ts` 对 `Home.tsx` 和 `Stats.tsx` 都有守卫，并从 `index.css` 的 `@theme` 现读来对账。余额线单独有个 `--color-balance`（蓝），别改成支出红或收入绿：余额不是一笔钱的方向。
+- 图表上**不属于分类**的颜色（趋势线 / 余额线 / 坐标轴）走 `palette.CHART`，页面里不许再出现写死的十六进制——`palette.test.ts` 对 `Home.tsx`、`Stats.tsx`、`StatsMore.tsx`、`ChartMore.tsx` 都有守卫（`lib/more/*` 各自的测试和 `registry.test.ts` 也查），并从 `index.css` 的 `@theme` 现读来对账。余额线单独有个 `--color-balance`（蓝），别改成支出红或收入绿：余额不是一笔钱的方向。
 - 余额那张卡的标题是**「总资产」**不是「账户余额」，底下小字写死口径「四个资产账户之和，不扣白条欠款」。用户明确说过「余额」会被读成净资产。
 - x 轴标签**年份永远带着**（`25.10`），装不下就逐级降密度（`chart.axisLabels`）。别改回 `interval: keys.length <= 14 ? 0 : …`，那个只数个数不量宽度。图例用 `chart.shortLabels` 缩写，撞名整组回退原名。
 - 图上**点一下看明细、再点一下才跳流水**（`Chart.tsx` 的 `armedRef`），四张图统一。不要用 dblclick：手机浏览器会把双击拿去缩放。
 - 堆叠柱的入场动画是**整根柱子当一个整体自下而上长**：每段的延迟和时长按它在这根柱子里占的高度比例分配，段与段接力，缓动必须 `linear`（任何加减速都会让交接处露出速度突变）。别用 ECharts 默认的——那是五段各长各的，看着是散的（用户 2026-09-08 的原话「有割裂感」）。
+- 折线上的圆点**只画末点**（`chart.endDotOnly`，用户 2026-09-28 选的「丙」），点中的那天靠轴指示线。别改回每个点都画。
+- **进阶分析页 `/stats/more`**（统计页底部入口卡进）：一张图一个纯函数 `lib/more/<key>.ts`（吃 `MoreInput` 吐 `MoreChart`），登记在 `lib/more/registry.ts`，开关和顺序在 `lib/more/layout.ts`（存本机 `jz_more_charts`，新图只往 `MORE_KEYS` 末尾接、默认关着）。月份和时间范围与统计页共用同一对钥匙和 `lib/range.ts` 的 `rangeBounds`。每张图只吃 `otxs`，不看 hidden；提示框里的名字一律过 `lib/more/html.ts` 的 `esc()`；图上跳流水必须带 `cat=`（`filter.filterFromQuery` 收到才重设筛选）；标题不写「本月」。
 - 「趋势」三档：合计 / 分类 / 堆叠。堆叠柱上不标任何数字，金额和占比在提示框里。曾经叠过一条「日均消费」折线走右轴（2026-09-08 做了又撤，无论怎么调量程都在柱子上横切），要找回来看 `git log` 的 b7b540e。
 
 ## 改动流程

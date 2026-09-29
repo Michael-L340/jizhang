@@ -65,12 +65,16 @@ src/
 │   ├── pending.ts            在途写入补丁（refresh 不冲掉刚记的那笔）
 │   ├── hooks.ts / id.ts      小工具
 │   ├── facade.ts             里外页面的纯逻辑
-│   ├── chart.ts              图表布局的纯计算（x 轴降密、图例换行与缩写）
+│   ├── chart.ts              图表布局的纯计算（x 轴降密、图例换行与缩写、末点圆点）
+│   ├── range.ts              统计页 / 进阶分析共用的时间范围换算
+│   ├── gesture.ts            流水行左滑 / 右滑手势的纯逻辑
+│   ├── tap.ts / tabs.ts      图表「点两下」判定、统计标签记住上次停在哪页
+│   ├── more/                 进阶分析页的 20 张图（一张一个纯函数）+ 登记表 + 自定义布局
 │   ├── outbox.ts             断网时的待上传队列
 │   └── *.test.ts             单测，`npm test`；`*.dbtest.ts` 走 `npm run test:db`
-├── pages/                    Login / Home / Ledger / Entry / Stats / Accounts / Settings
+├── pages/                    Login / Home / Ledger / Entry / Stats / StatsMore / Accounts / Settings
 └── components/               TabBar / Keypad / ChipGroup / TxRow / Sheet / Chart /
-                              MonthPicker / DatePicker / RangeSheet / AccountIcon /
+                              MonthPicker / DatePicker / RangeSheet / AccountIcon / TxSwipe / ChartMore /
                               ErrorBoundary / Toast
 supabase/migrations/          000N_*.sql，只新增不改旧文件
 docs/                         数据与迁移 / 备份与恢复 / 测试 / 里外页面 / 决策记录 / logo-sources
