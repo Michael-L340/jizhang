@@ -209,7 +209,9 @@ export function sankeyChart(inp: MoreInput): MoreChart {
           // 不写的话图上印的是「a:boc」「p:life」。'{b}' = 节点的 name（2026-09-28 SSR 画出来才发现）
           label: { fontSize: SANKEY_FONT, color: CHART.label, formatter: '{b}' },
           lineStyle: { color: 'target', opacity: 0.35, curveness: 0.5 },
-          emphasis: { focus: 'adjacency' },
+          // 不要「高亮相连、其余变暗」：手机上手指划过就算悬停，上下滑页面时整张图一闪一闪地变暗（用户 2026-09-29 嫌太敏感）。
+          // 点一下照样弹提示框（进阶页的图一律点一下才弹，见 ChartMore 的 tapOnly）
+          emphasis: { disabled: true },
           data: nodes,
           links,
         },

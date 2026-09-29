@@ -2,12 +2,11 @@
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
-// MarkPointComponent：统计页曲线末点的那圈光晕（chart.endHalo）要它，漏了 ECharts 不报错、直接不画
-import { GridComponent, LegendComponent, MarkPointComponent, TooltipComponent } from 'echarts/components'
+import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { categoryAxisOf, itemTapStep, type ArmedTap, type TapItem } from '../lib/tap'
+import { categoryAxisOf, itemTapStep, tapOnlyTooltip, type ArmedTap, type TapItem } from '../lib/tap'
 
-echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, MarkPointComponent, TooltipComponent, CanvasRenderer])
+echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
 export type ChartOption = echarts.EChartsCoreOption
 export interface ChartClick {
@@ -41,9 +40,14 @@ interface Props {
    * 离得远、点中了别的图形就改看那一个（规则见 lib/tap.ts，和 onAxisClick 一样不限时）。
    */
   onItemTap?: (dataIndex: number, seriesIndex: number) => void
+  /**
+   * 提示框只在「点一下」时弹，手指划过不弹（lib/tap.ts 的 tapOnlyTooltip）。进阶分析页（ChartMore）一律开着：
+   * 那一页一屏好几张图，上下滑的时候手指总会经过某张图，数字一个个蹦出来（用户 2026-09-29 嫌太敏感）。
+   */
+  tapOnly?: boolean
 }
 
-export default function Chart({ option, height = 240, onClick, onAxisClick, onItemTap }: Props) {
+export default function Chart({ option, height = 240, onClick, onAxisClick, onItemTap, tapOnly }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const inst = useRef<echarts.ECharts | null>(null)
   const clickRef = useRef(onClick)
@@ -126,8 +130,8 @@ export default function Chart({ option, height = 240, onClick, onAxisClick, onIt
     dimRef.current = axis.dim
     armedRef.current = -1
     itemArmedRef.current = null
-    inst.current?.setOption(option, true)
-  }, [option])
+    inst.current?.setOption(tapOnly ? tapOnlyTooltip(option) : option, true)
+  }, [option, tapOnly])
 
   return <div ref={ref} style={{ height, width: '100%' }} />
 }

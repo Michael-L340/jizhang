@@ -3,7 +3,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { categoryAxisOf, itemTapStep, TAP_SLOP_PX, type ArmedTap } from './tap'
+import { categoryAxisOf, itemTapStep, TAP_SLOP_PX, tapOnlyTooltip, type ArmedTap } from './tap'
 
 // 375 宽的手机上，日历一格 ≈ 5.4 px 宽、10 px 高。第一下点在 9/12 那格（下标 200）的 (150, 40)
 const d912: ArmedTap = { seriesIndex: 0, dataIndex: 200, x: 150, y: 40 }
@@ -80,5 +80,33 @@ describe('点绘图区按哪根轴取下标（Chart.tsx 的 onAxisClick）', () 
     expect(src).toMatch(/categoryAxisOf\(option\)/)
     expect(src).toMatch(/convertFromPixel\(\{ seriesIndex: 0 \}, pt\) as number\[\]\)\[dimRef\.current\]/)
     expect(src).not.toMatch(/const \[x\] = chart\.convertFromPixel/)
+  })
+})
+
+describe('进阶分析页：提示框点一下才弹，手指划过不弹', () => {
+  it('有 tooltip 的 option 加上 triggerOn: click；数组形式的每个都加；原 option 不动', () => {
+    // 变异：tapOnlyTooltip 原样返回 → 红
+    const o = { tooltip: { trigger: 'item', confine: true }, series: [] }
+    const t = tapOnlyTooltip(o)
+    expect(t.tooltip).toEqual({ trigger: 'item', confine: true, triggerOn: 'click' })
+    expect(o.tooltip).toEqual({ trigger: 'item', confine: true })
+    expect(tapOnlyTooltip({ tooltip: [{ trigger: 'axis' }, { trigger: 'item' }] }).tooltip).toEqual([
+      { trigger: 'axis', triggerOn: 'click' },
+      { trigger: 'item', triggerOn: 'click' },
+    ])
+    const none = { series: [] }
+    expect(tapOnlyTooltip(none)).toBe(none)
+  })
+
+  it('进阶页的 ChartMore 一律开着 tapOnly；Chart.tsx 开着时真的套上；钱的流向不再「划过就变暗」', async () => {
+    // 变异：ChartMore 不传 tapOnly → 红；Chart.tsx 不套 tapOnlyTooltip → 红；桑基改回 emphasis focus adjacency → 红
+    const { readFileSync } = await import('node:fs')
+    const more = readFileSync(new URL('../components/ChartMore.tsx', import.meta.url), 'utf8')
+    expect(more).toMatch(/<Chart \{\.\.\.props\} tapOnly \/>/)
+    const chart = readFileSync(new URL('../components/Chart.tsx', import.meta.url), 'utf8')
+    expect(chart).toMatch(/setOption\(tapOnly \? tapOnlyTooltip\(option\) : option, true\)/)
+    const sankey = readFileSync(new URL('./more/sankey.ts', import.meta.url), 'utf8')
+    expect(sankey).toMatch(/emphasis: \{ disabled: true \}/)
+    expect(sankey).not.toMatch(/focus: 'adjacency'/)
   })
 })

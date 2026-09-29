@@ -14,7 +14,7 @@ import { dailyCumulative, firstFlowDate } from '../compute'
 import { dayInMonth, daysInMonth, monthOf, monthRange, shiftMonth } from '../date'
 import { fmtYuan } from '../money'
 import { CHART } from '../palette'
-import { endDot, endHalo } from '../chart'
+import { endDot } from '../chart'
 import { alignDays } from './race'
 import { monthSpan } from './span'
 import type { MoreChart, MoreInput, MoreTile } from './types'
@@ -139,9 +139,8 @@ export function positionChart(inp: MoreInput): MoreChart {
     name: curName,
     type: 'line',
     color: CHART.expense,
-    // 只画末点（用户 2026-09-28 选的「丙」），样子是 09-29 挑的「乙」：小实心点 + 光晕，落在今天那一号
+    // 只画末点（用户 2026-09-28 选的「丙」），样子是 09-29 挑的「乙」：小实心点 + 白边，落在今天那一号
     ...endDot(curLen, CHART.gap),
-    markPoint: endHalo(curData, CHART.expense),
     lineStyle: { width: 2.5 },
     z: 3,
     data: curData,
