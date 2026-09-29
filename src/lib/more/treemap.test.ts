@@ -13,7 +13,7 @@ import { addDays, monthRange } from '../date'
 import { categoryColor, CHART, childShade, contrast, readableOn } from '../palette'
 import { sampleInput } from './sample'
 import { rangeSpan } from './span'
-import { blockMoney, MONEY_MIN_PX, moneyFits, ROOT_NAME, TREEMAP_TITLE, treemap, treeOf, UNSPLIT_NAME } from './treemap'
+import { blockIcon, blockMoney, BLOCK_ICON_PX, MONEY_MIN_PX, moneyFits, ROOT_NAME, TREEMAP_TITLE, treemap, treeOf, UNSPLIT_NAME } from './treemap'
 import type { MoreChart, MoreInput } from './types'
 
 echarts.use([TreemapChart, TooltipComponent, SVGRenderer])
@@ -331,5 +331,49 @@ describe('支出版图（矩形树图）', () => {
     expect(src).not.toMatch(/\.hidden\b/)
     expect(src).not.toMatch(/from '\.\.\/(store|api|supabase|facade)'/)
     expect(CHART.gap).toBeTruthy()
+  })
+})
+
+describe('支出版图：块上的图标是分类自己的，不是一排一样的「▶」', () => {
+  // 用户 2026-09-29：「支出版图，一级分类的 logo，怎么都是一样的，而且好丑」——ECharts 默认在能点进去的块前面加「▶」，
+  // iPhone 上还画成蓝色方块 emoji。换成每个分类自己的图标（emoji 或 3D 图），和流水行、记账页同一个
+  const ICON_CATS: Category[] = [
+    { ...C('food', '日常餐饮', 1), icon: '🍚' },
+    { ...C('lunch', '午餐', 1, 'food'), icon: 'img:lunch' },
+    { ...C('dinner', '晚餐', 2, 'food'), icon: 'img:gone' },
+    { ...C('fun', '娱乐消费', 4), icon: null },
+  ]
+  const txs = [spend('2026-09-02', 300, 'lunch'), spend('2026-09-03', 200, 'dinner'), spend('2026-09-04', 100, 'fun')]
+  const c = treemap({ ...inputOf(txs, '2026-09-01', '2026-09-20'), cats: ICON_CATS })
+  const series = opt(c).series[0] as unknown as Series & { drillDownIcon: string; label: { rich: Record<string, { width: number; backgroundColor: { image: string } }> } }
+  const fmt = series.label.formatter
+
+  it('一级用 emoji 的：名字前面就是那个 emoji；没设图标的只写名字', () => {
+    // 变异：label 不拼 pre → 「日常餐饮」前面没有 🍚，红
+    expect(fmt({ data: { id: 'p:food' } })).toBe('🍚 日常餐饮\n¥500')
+    expect(fmt({ data: { id: 'p:fun' } })).toBe('娱乐消费\n¥100')
+  })
+
+  it('用 3D 图的：富文本图片格子，图就是「我的图」里那一张；图被撤掉了（登记表里没有）就只写名字', () => {
+    // 变异：不把 rich 交给 label → 图片格子没登记，ECharts 印出「{i1|}」字样，红
+    const lunch = fmt({ data: { id: 's:lunch' } })
+    const key = lunch.match(/^\{(\w+)\|\} 午餐/)?.[1]
+    expect(key).toBeTruthy()
+    expect(series.label.rich[key!].backgroundColor.image).toMatch(/art\/lunch-v1\.png$/)
+    expect(series.label.rich[key!].width).toBe(BLOCK_ICON_PX)
+    expect(fmt({ data: { id: 's:dinner' } })).toMatch(/^晚餐/)
+  })
+
+  it('默认的「▶」关掉了', () => {
+    // 变异：drillDownIcon 改回 '▶' → 红
+    expect(series.drillDownIcon).toBe('')
+    expect(c.note).not.toContain('▶')
+  })
+
+  it('blockIcon 本身：emoji、3D 图、撤掉的图、没设', () => {
+    expect(blockIcon('🎮', 'i0')).toEqual({ prefix: '🎮 ' })
+    expect(blockIcon('img:bag', 'i7').prefix).toBe('{i7|} ')
+    expect(blockIcon('img:nope', 'i1')).toEqual({ prefix: '' })
+    expect(blockIcon(null, 'i2')).toEqual({ prefix: '' })
   })
 })

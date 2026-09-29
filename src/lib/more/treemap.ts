@@ -10,6 +10,7 @@
 // 只算 type === 'expense'：转账（含还白条）、校准、收入一律不进（compute.isFlow 的口径）。
 // 分类的口径和 compute.byCategory 一样：查不到分类的归「未分类」，二级的父类查不到就把它自己当一级。
 import type { Category } from '../../types'
+import { artUrl, imgKey, isImgIcon } from '../art'
 import { UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from '../compute'
 import { fmtYuan } from '../money'
 import { categoryColor, CHART, childShade, readableOn } from '../palette'
@@ -26,7 +27,7 @@ export const ROOT_NAME = '全部支出'
 /** 面包屑那条的高度（px）；图的下沿给它让出这么多再加 6 */
 const CRUMB_H = 20
 
-const NOTE = `标题旁那段时间里的支出，一块的面积就是花了多少。先看大类，点带 ▶ 的那块看二级，点底下的「${ROOT_NAME}」回到大类；直接记在大类上的算「未细分」。转账、还白条、校准不算。`
+const NOTE = `标题旁那段时间里的支出，一块的面积就是花了多少。先看大类，点一个大类看它的二级，点底下的「${ROOT_NAME}」回到大类；直接记在大类上的算「未细分」。转账、还白条、校准不算。`
 
 const RIGHT = 'float:right;margin-left:16px;font-weight:600'
 
@@ -36,6 +37,8 @@ export interface TreeLeaf {
   name: string
   cents: number
   color: string
+  /** 分类自己的图标（emoji 或 `img:<key>`，和 App 别处同一个）；「未细分」「未分类」没有 */
+  icon: string | null
 }
 
 export interface TreeNode extends TreeLeaf {
@@ -52,7 +55,7 @@ const byCents = <T extends { cents: number; sort: number; id: string }>(a: T, b:
  */
 export function treeOf(inp: Pick<MoreInput, 'txs' | 'cats' | 'start' | 'end'>): TreeNode[] {
   const byId = new Map<string, Category>(inp.cats.map((c) => [c.id, c]))
-  type Acc = { id: string; name: string; sort: number; cents: number; subs: Map<string, { id: string; name: string; sort: number; cents: number }> }
+  type Acc = { id: string; name: string; icon: string | null; sort: number; cents: number; subs: Map<string, { id: string; name: string; icon: string | null; sort: number; cents: number }> }
   const roots = new Map<string, Acc>()
   for (const t of inp.txs) {
     if (t.type !== 'expense' || t.date < inp.start || t.date > inp.end) continue
@@ -62,7 +65,7 @@ export function treeOf(inp: Pick<MoreInput, 'txs' | 'cats' | 'start' | 'end'>): 
     let r = roots.get(rid)
     if (!r) {
       // 查不到的「未分类」排在同额的真分类后面
-      r = { id: rid, name: root ? root.name : UNCATEGORIZED_NAME, sort: root ? root.sort : Number.MAX_SAFE_INTEGER, cents: 0, subs: new Map() }
+      r = { id: rid, name: root ? root.name : UNCATEGORIZED_NAME, icon: root?.icon ?? null, sort: root ? root.sort : Number.MAX_SAFE_INTEGER, cents: 0, subs: new Map() }
       roots.set(rid, r)
     }
     r.cents += t.amount
@@ -71,7 +74,7 @@ export function treeOf(inp: Pick<MoreInput, 'txs' | 'cats' | 'start' | 'end'>): 
     const sid = sub ? sub.id : `${rid}:none`
     let s = r.subs.get(sid)
     if (!s) {
-      s = { id: sid, name: sub ? sub.name : UNSPLIT_NAME, sort: sub ? sub.sort : Number.MAX_SAFE_INTEGER, cents: 0 }
+      s = { id: sid, name: sub ? sub.name : UNSPLIT_NAME, icon: sub?.icon ?? null, sort: sub ? sub.sort : Number.MAX_SAFE_INTEGER, cents: 0 }
       r.subs.set(sid, s)
     }
     s.cents += t.amount
@@ -85,13 +88,34 @@ export function treeOf(inp: Pick<MoreInput, 'txs' | 'cats' | 'start' | 'end'>): 
     return {
       id: r.id,
       name: r.name,
+      icon: r.icon,
       cents: r.cents,
       color,
       children: onlyDirect
         ? []
-        : subs.map((s) => ({ id: s.id, name: s.name, cents: s.cents, color: s.id === `${r.id}:none` ? color : childShade(color, s.sort) })),
+        : subs.map((s) => ({ id: s.id, name: s.name, icon: s.icon, cents: s.cents, color: s.id === `${r.id}:none` ? color : childShade(color, s.sort) })),
     }
   })
+}
+
+/** 块上图标的边长（px）：和 11px 的字差不多高 */
+export const BLOCK_ICON_PX = 13
+
+/**
+ * 块上名字前面的图标：分类自己的那个（和流水行、记账页同一个），emoji 直接写进字里，
+ * 3D 图（`img:<key>`）用 ECharts 富文本的图片格子（rich 里登记一格 backgroundColor.image）。
+ * 原来是 ECharts 默认的「▶」，每个大类前面都一样，iPhone 上还被画成一个蓝色方块 emoji
+ * （用户 2026-09-29：「怎么都是一样的，而且好丑」）。
+ * 没设图标、或者 img 指到登记表里没有的图（art.ts 撤掉过）→ 什么都不加，只写名字。
+ */
+export function blockIcon(icon: string | null, richKey: string): { prefix: string; rich?: Record<string, object> } {
+  if (!icon) return { prefix: '' }
+  if (isImgIcon(icon)) {
+    const url = artUrl(imgKey(icon) ?? '')
+    if (!url) return { prefix: '' }
+    return { prefix: `{${richKey}|} `, rich: { [richKey]: { width: BLOCK_ICON_PX, height: BLOCK_ICON_PX, backgroundColor: { image: url } } } }
+  }
+  return { prefix: `${icon} ` }
 }
 
 /** 块上的金额：整数元带千分位（块小，写不下分；精确到分的在提示框里） */
@@ -121,10 +145,18 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
 
   // ECharts 那边只认 id；提示框、块上的字要的全名和精确的分从这里查。
   // money：这一块上写不写金额（见 moneyFits）。大类在第一屏里比，二级在钻进去之后那一屏里比
-  const info = new Map<string, { name: string; cents: number; parent?: TreeNode; money: boolean }>()
+  // pre：块上名字前面的图标（blockIcon）；rich：3D 图要登记的富文本格子，一块一格
+  const info = new Map<string, { name: string; cents: number; parent?: TreeNode; money: boolean; pre: string }>()
+  const rich: Record<string, object> = {}
+  let nth = 0
+  const iconOf = (icon: string | null) => {
+    const b = blockIcon(icon, `i${nth++}`)
+    Object.assign(rich, b.rich)
+    return b.prefix
+  }
   const data = tree.map((n) => {
-    info.set(`p:${n.id}`, { name: n.name, cents: n.cents, money: moneyFits(n.cents / total, chartWidth) })
-    for (const ch of n.children) info.set(`s:${ch.id}`, { name: ch.name, cents: ch.cents, parent: n, money: moneyFits(ch.cents / n.cents, chartWidth) })
+    info.set(`p:${n.id}`, { name: n.name, cents: n.cents, money: moneyFits(n.cents / total, chartWidth), pre: iconOf(n.icon) })
+    for (const ch of n.children) info.set(`s:${ch.id}`, { name: ch.name, cents: ch.cents, parent: n, money: moneyFits(ch.cents / n.cents, chartWidth), pre: iconOf(ch.icon) })
     return {
       id: `p:${n.id}`,
       name: n.name,
@@ -152,12 +184,12 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
   const pct = (part: number, whole: number) => `${((part / whole) * 100).toFixed(1)}%`
   const label = (p: { data?: { id?: string } }) => {
     const x = p.data?.id ? info.get(p.data.id) : undefined
-    return x ? (x.money ? `${x.name}\n${blockMoney(x.cents)}` : x.name) : ''
+    return x ? (x.money ? `${x.pre}${x.name}\n${blockMoney(x.cents)}` : `${x.pre}${x.name}`) : ''
   }
   // 钻进去之后顶上那条只有 22px 高，写成一行
   const upper = (p: { data?: { id?: string } }) => {
     const x = p.data?.id ? info.get(p.data.id) : undefined
-    return x ? `${x.name}  ${blockMoney(x.cents)}` : ''
+    return x ? `${x.pre}${x.name}  ${blockMoney(x.cents)}` : ''
   }
 
   return {
@@ -192,8 +224,9 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
           // 'zoomToNode' 会把点中的叶子块（没二级的大类）放大到占满整张图，又没有面包屑能退回来。
           // 'link' 在叶子上找 data 的 link 字段，这里一个都没写，点叶子就什么都不做
           nodeClick: 'link',
-          // 有二级、能钻进去的块，名字前面加这个记号（note 里说「点带 ▶ 的那块」，写死别让默认值变了对不上）
-          drillDownIcon: '▶',
+          // 不要 ECharts 默认的「▶」：每个大类前面都一样，iPhone 上还被画成蓝色方块 emoji（用户 2026-09-29 嫌丑）。
+          // 名字前面换成分类自己的图标（blockIcon），能不能点进去看 note 里写的「点一个大类看它的二级」
+          drillDownIcon: '',
           // 手机上拖一下就把图平移走了，还和页面滚动抢手势
           roam: false,
           // 面包屑要开着：钻进某个大类之后，ECharts 往回退只有点它这一条路。
@@ -212,6 +245,7 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
           label: {
             show: true,
             formatter: label,
+            rich,
             fontSize: 11,
             lineHeight: 14,
             // 兜底的白字（卡片底色）；每一块实际的字色在 data 里按底色单独给（readableOn）
@@ -225,7 +259,7 @@ export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
             // 第 1 层 = 一级分类。钻进去之后顶上一条写着是哪个大类（没有面包屑，得告诉人现在在哪）
             {
               itemStyle: { borderWidth: 0, gapWidth: 1 },
-              upperLabel: { show: true, height: 22, padding: [0, 6], color: CHART.gap, fontSize: 11, formatter: upper },
+              upperLabel: { show: true, height: 22, padding: [0, 6], color: CHART.gap, fontSize: 11, formatter: upper, rich },
             },
             // 第 2 层 = 二级分类：一圈细白边，挨着的两块同色系也分得开
             { itemStyle: { borderColor: CHART.gap, borderWidth: 1 } },
