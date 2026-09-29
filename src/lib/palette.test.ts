@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { categoryColor, CHART, childColors, childShade, hexToHsl } from './palette'
+import { categoryColor, CHART, childColors, childShade, contrast, hexToHsl, READABLE_MIN, readableOn } from './palette'
 
 /** 两个颜色在 RGB 空间的距离。粗糙但够用：肉眼能分辨大约要 40 以上 */
 function dist(a: string, b: string): number {
@@ -184,5 +184,49 @@ describe('分类颜色只有一个来源', () => {
     expect(CHART.gap).toBe(themeColor('card'))
     // 变异：brandInk 写成 '#8a6027' → 红
     expect(CHART.brandInk).toBe(themeColor('brand-ink'))
+    // 变异：ink 写成 '#33302c' → 红
+    expect(CHART.ink).toBe(themeColor('ink'))
+  })
+})
+
+describe('色块上的字用白字还是深字（readableOn）', () => {
+  // 进阶分析「支出版图」钻进大类之后，二级那几档浅色块上一律白字，对比度只有 1.3–1.8，看不清（审阅 #6）
+  it('对比度的算法对得上 WCAG：黑配白 21，同色 1', () => {
+    expect(contrast('#000000', '#ffffff')).toBeCloseTo(21, 5)
+    expect(contrast('#ffffff', '#000000')).toBeCloseTo(21, 5)
+    expect(contrast('#c7820a', '#c7820a')).toBe(1)
+  })
+
+  it('五个一级支出色上是白字（白字对比度 ≥ 3）', () => {
+    // 变异：readableOn 改成单纯挑对比度高的那个 → 「日常餐饮」的琥珀色（白 3.2 / 深 4.1）成了深字，红
+    // 变异：readableOn 恒返回 CHART.ink → 红
+    for (const name of EXPENSE_ROOTS) {
+      const bg = categoryColor(name)
+      expect(readableOn(bg), name).toBe(CHART.gap)
+      expect(contrast(CHART.gap, bg), name).toBeGreaterThanOrEqual(READABLE_MIN)
+    }
+  })
+
+  it('二级最浅的那档（childShade 的 sort 6，明度 0.78）上是深字，而且深字对比度 ≥ 4.5', () => {
+    // 变异：readableOn 恒返回 CHART.gap（改回一律白字）→ 红
+    // 变异：门槛写反（`< READABLE_MIN ? gap : ink`）→ 红
+    for (const name of EXPENSE_ROOTS) {
+      const bg = childShade(categoryColor(name), 6)
+      expect(readableOn(bg), `${name} 最浅那档 ${bg}`).toBe(CHART.ink)
+      expect(contrast(CHART.ink, bg), `${name} 最浅那档 ${bg}`).toBeGreaterThanOrEqual(4.5)
+      expect(contrast(CHART.ink, bg)).toBeGreaterThan(contrast(CHART.gap, bg))
+    }
+  })
+
+  it('扫一遍所有分类色和它们的六档二级色：选出来的字色对比度 ≥ 3；换成深字时深字一定比白字清楚', () => {
+    // 变异：门槛从 3 提到 5 → 「经常生活开支」的绿（白 4.5 / 深 2.9）被换成深字，比白字还糊，红
+    const roots = [...new Set([...EXPENSE_ROOTS, '工资', '生活费', '奖学金', '理财', '退款', '其他', ...Array.from({ length: 9 }, (_, i) => `新${i}`)].map((n, i) => categoryColor(n, i)))]
+    for (const root of roots) {
+      for (const bg of [root, ...[1, 2, 3, 4, 5, 6].map((s) => childShade(root, s))]) {
+        const fg = readableOn(bg)
+        if (contrast(fg, bg) < READABLE_MIN) expect.fail(`${bg} 上的 ${fg} 对比度只有 ${contrast(fg, bg).toFixed(2)}`)
+        if (fg === CHART.ink && contrast(CHART.ink, bg) <= contrast(CHART.gap, bg)) expect.fail(`${bg} 换成深字反而更糊`)
+      }
+    }
   })
 })

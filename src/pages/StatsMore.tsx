@@ -4,6 +4,7 @@
 // 月份和时间范围不另起炉灶——和统计页读同一对钥匙、调同一个 rangeBounds，两页的「近一年」是同一段。
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
+import { accountColor } from '../components/AccountIcon'
 import type { ChartOption } from '../components/Chart'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
@@ -12,13 +13,13 @@ import { firstFlowDate, monthTotals } from '../lib/compute'
 import { fmtDateZh, monthOf, today } from '../lib/date'
 import { outerBook } from '../lib/facade'
 import { usePersistedState, useRecentState } from '../lib/hooks'
-import { defaultLayout, isShown, LAYOUT_STORAGE_KEY, moveKey, normalizeLayout, shownKeys, toggleKey, type MoreKey, type MoreLayout } from '../lib/more/layout'
+import { defaultLayout, LAYOUT_STORAGE_KEY, moveShown, normalizeLayout, panelGroups, shownKeys, switchKey, type MoreKey, type MoreLayout } from '../lib/more/layout'
 import { buildSafely, MORE_CHARTS, noteWithTap, pointMode, rangeHint } from '../lib/more/registry'
 import type { MoreChart, MoreInput, MoreTile } from '../lib/more/types'
 import { rangeBounds } from '../lib/range'
 import { useActiveAccounts, useStore } from '../lib/store'
 
-// 多注册了桑基、日历、雷达那几个模块的 Chart；统计页用的那个不背这些
+// 多注册了桑基、日历、雷达、矩形树图、散点那几个模块的 Chart；统计页用的那个不背这些
 const Chart = lazy(() => import('../components/ChartMore'))
 /** y 轴那列数字要占掉的宽度，和统计页同一个数 */
 const AXIS_GUTTER = 44
@@ -70,12 +71,15 @@ export function StatsMore() {
   const charts = keys.map((k) => {
     let c = cache.get(k)
     if (!c) {
-      c = buildSafely(k, input, { chartWidth: chartW, axisWidth })
+      // 账户品牌色从 components 传进去（lib 不许往上 import components）：资产结构、白条未来负担按它分色
+      c = buildSafely(k, input, { chartWidth: chartW, axisWidth, colorOf: accountColor })
       cache.set(k, c)
     }
     return c
   })
   const hint = rangeHint(keys)
+  // 「自定义」弹层分两组；页面最底下那行「还有 N 张图没打开」也数的是没显示那组
+  const groups = panelGroups(layout)
 
   // 从统计页入口卡进来（state.fromEntry）：滚动容器还停在统计页最底下，回到顶上。
   // 别的路进来（点底部「统计」回来、系统返回）：回到上次离开时的位置，刚才点的那张卡还在眼前。
@@ -137,42 +141,90 @@ export function StatsMore() {
         charts.map((c) => <MoreCard key={c.key} c={c} onGo={go} />)
       )}
 
+      {/* 第二批十张默认都不显示，右上角「自定义」不起眼，翻到底告诉一声还有几张（N = 0 不显示） */}
+      {groups.off.length > 0 ? (
+        <button type="button" className="w-full py-3 text-center text-[13px] text-muted active:opacity-70" onClick={() => setCustomOpen(true)}>
+          还有 {groups.off.length} 张图没打开 · <span className="text-brand-ink">自定义 ›</span>
+        </button>
+      ) : null}
+
       <RangeSheet open={rangeOpen} value={range} earliest={earliest} onChange={setRange} onClose={() => setRangeOpen(false)} />
 
       <Sheet open={customOpen} onClose={() => setCustomOpen(false)} title="自定义">
-        <div className="text-[12px] text-muted mt-1 mb-1">打开的图按这个顺序从上往下排，箭头调顺序。</div>
+        <div className="text-[12px] text-muted mt-1 mb-1">显示中的图按这个顺序从上往下排，箭头调顺序；新打开的排到最后。</div>
+        <PanelGroup label="显示中" keys={groups.on} on onSwitch={(k) => save(switchKey(layout, k))} onMove={(k, d) => save(moveShown(layout, k, d))} />
+        <PanelGroup label="没显示" keys={groups.off} on={false} onSwitch={(k) => save(switchKey(layout, k))} />
+        <button type="button" className="w-full mt-3 py-2.5 rounded-xl bg-bg text-sm text-muted" onClick={() => save(defaultLayout())}>
+          恢复默认
+        </button>
+      </Sheet>
+    </div>
+  )
+}
+
+/**
+ * 「自定义」弹层里的一组（显示中 / 没显示）：每行标题 + 底下一句话说这张图画什么（registry 的 desc）。
+ * 显示中那组有上下箭头（只在这组里挪，layout.moveShown）；没显示那组只有开关，打开就排到显示中末尾（layout.switchKey）。
+ */
+function PanelGroup({
+  label,
+  keys,
+  on,
+  onSwitch,
+  onMove,
+}: {
+  label: string
+  keys: MoreKey[]
+  on: boolean
+  onSwitch: (k: MoreKey) => void
+  onMove?: (k: MoreKey, dir: -1 | 1) => void
+}) {
+  return (
+    <div className="mt-3">
+      <div className="text-[12px] text-muted pb-1">
+        {label} · {keys.length}
+      </div>
+      {keys.length === 0 ? (
+        <div className="text-[13px] text-muted py-2">{on ? '一张都没开' : '全都打开了'}</div>
+      ) : (
         <div className="flex flex-col">
-          {layout.order.map((k, i) => {
-            const on = isShown(layout, k)
-            const title = MORE_CHARTS[k].title
+          {keys.map((k, i) => {
+            const { title, desc } = MORE_CHARTS[k]
             return (
               <div key={k} className="flex items-center gap-1 py-2 border-b border-line last:border-0">
-                <span className={`flex-1 min-w-0 truncate text-[15px] ${on ? '' : 'text-muted'}`}>{title}</span>
-                <button
-                  type="button"
-                  aria-label={`「${title}」往上挪`}
-                  disabled={i === 0}
-                  className="w-9 h-9 flex items-center justify-center rounded-full text-muted active:bg-bg disabled:opacity-25"
-                  onClick={() => save(moveKey(layout, k, -1))}
-                >
-                  <Arrow dir="up" />
-                </button>
-                <button
-                  type="button"
-                  aria-label={`「${title}」往下挪`}
-                  disabled={i === layout.order.length - 1}
-                  className="w-9 h-9 flex items-center justify-center rounded-full text-muted active:bg-bg disabled:opacity-25"
-                  onClick={() => save(moveKey(layout, k, 1))}
-                >
-                  <Arrow dir="down" />
-                </button>
+                <div className="flex-1 min-w-0">
+                  <div className={`truncate text-[15px] ${on ? '' : 'text-muted'}`}>{title}</div>
+                  <div className="truncate text-[11px] text-muted mt-0.5">{desc}</div>
+                </div>
+                {onMove ? (
+                  <>
+                    <button
+                      type="button"
+                      aria-label={`「${title}」往上挪`}
+                      disabled={i === 0}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-muted active:bg-bg disabled:opacity-25"
+                      onClick={() => onMove(k, -1)}
+                    >
+                      <Arrow dir="up" />
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`「${title}」往下挪`}
+                      disabled={i === keys.length - 1}
+                      className="w-9 h-9 flex items-center justify-center rounded-full text-muted active:bg-bg disabled:opacity-25"
+                      onClick={() => onMove(k, 1)}
+                    >
+                      <Arrow dir="down" />
+                    </button>
+                  </>
+                ) : null}
                 <button
                   type="button"
                   role="switch"
                   aria-checked={on}
                   aria-label={`显示「${title}」`}
                   className={`ml-1 w-11 h-6 rounded-full shrink-0 flex items-center px-0.5 transition-colors ${on ? 'bg-brand justify-end' : 'bg-line justify-start'}`}
-                  onClick={() => save(toggleKey(layout, k))}
+                  onClick={() => onSwitch(k)}
                 >
                   <span className="w-5 h-5 rounded-full bg-card shadow-sm" />
                 </button>
@@ -180,10 +232,7 @@ export function StatsMore() {
             )
           })}
         </div>
-        <button type="button" className="w-full mt-3 py-2.5 rounded-xl bg-bg text-sm text-muted" onClick={() => save(defaultLayout())}>
-          恢复默认
-        </button>
-      </Sheet>
+      )}
     </div>
   )
 }

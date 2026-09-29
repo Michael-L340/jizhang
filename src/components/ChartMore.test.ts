@@ -1,4 +1,4 @@
-// 进阶分析页的十张图，用 ECharts 的 SSR 在 node 里真画一遍。
+// 进阶分析页的每张图（两批共二十张），用 ECharts 的 SSR 在 node 里真画一遍。
 //
 // 守两件肉眼和纯函数测试都看不出来的事：
 //   一、模块注册漏了：ECharts 只在控制台喊一句「xx is used but not imported」，生产环境连这句都没有，
@@ -12,7 +12,7 @@ import './ChartMore' // 副作用：注册 Chart.tsx 那套 + 进阶分析那几
 import { textWidth } from '../lib/chart'
 import { monthOf } from '../lib/date'
 import { calendar, MONTH_LABEL_FONT } from '../lib/more/calendar'
-import { MORE_KEYS } from '../lib/more/layout'
+import { MORE_KEYS, type MoreKey } from '../lib/more/layout'
 import { MORE_CHARTS } from '../lib/more/registry'
 import { sampleInput } from '../lib/more/sample'
 import { LAST_LABEL_W, SANKEY_FONT, sankeyChart } from '../lib/more/sankey'
@@ -47,20 +47,32 @@ const cases: [string, MoreInput][] = [
   ['只看本月', sampleInput({ start: '2026-09-01' })],
 ]
 
-describe('十张图都画得出来：不报「没注册」、不抛错、画出来的不是一张白纸', () => {
+/**
+ * 数据少的时候本来就画不了多少东西，这两张单独放宽「不是白纸」的门槛（白纸实测 233 字节），另外各查一样画出来的东西：
+ *   固定开销：样例账里三个月都雷打不动的只有房租一项，一根条，实测约 1000 字节；
+ *   大额消费：「只看本月」那段只有两笔 500 以上，两个圈，实测约 2500。
+ */
+const MIN_SVG: Partial<Record<MoreKey, number>> = { fixed: 800, bigticket: 1500 }
+
+describe('每张图都画得出来：不报「没注册」、不抛错、画出来的不是一张白纸', () => {
   for (const [name, inp] of cases) {
     for (const k of MORE_KEYS) {
       it(`${name} · ${k}`, () => {
         // 变异：ChartMore.tsx 里去掉 SankeyChart → sankey 报「Series sankey is used but not imported」，红
         // 变异：去掉 VisualMapContinuousComponent → calendar、weekhour 红；去掉 CalendarComponent → calendar 红
         // 变异：去掉 MarkPointComponent → ECharts 一声不吭，只是「今天」那个点没了 → 下面单查那两个字，race 红
+        // 第二批（整合时实际改过、跑过）：
+        // 变异：去掉 TreemapChart → treemap 报没注册，红；去掉 ScatterChart → bigticket 红；去掉 SingleAxisComponent → bigticket 红
         //（去掉 RadarComponent 不会红：RadarChart 装的时候自己会把它装上，见 echarts/lib/chart/radar/install.js）
         const c = MORE_CHARTS[k].build(inp, { chartWidth: W, axisWidth: W - 44 })
         if (!c.option || c.empty) return // 只有数字的卡 / 空状态：没有图可画
         const { svg, errors } = render(c.option, c.height ?? 220)
         expect(errors, errors.join('\n')).toEqual([])
         // 什么都没画的 SVG 只有两百多字节（实测 233）；最简单的一张图也有好几千
-        expect(svg.length).toBeGreaterThan(3000)
+        expect(svg.length).toBeGreaterThan(MIN_SVG[k] ?? 3000)
+        // 放宽了门槛的两张：条和圈真画出来了。变异：bigticket 的 series 去掉 coordinateSystem → 圈一个不画，红
+        if (k === 'fixed') expect(svg).toContain('>房租<')
+        if (k === 'bigticket') expect((svg.match(/ecmeta_series_index="0"/g) ?? []).length).toBe(parseInt(c.tiles![0].value))
         // 图上不许印出内部 id。桑基图不写 label.formatter 时默认标签就是节点 id（「a:boc」「p:life」）
         // 变异：去掉 sankey.ts 的 formatter: '{b}' → 红
         expect(svg.match(/>[aps]:[^<]*</g) ?? []).toEqual([])

@@ -1,0 +1,238 @@
+// 进阶统计 · 支出版图（矩形树图；标题原定「钱去哪了」，和第一批的瀑布图撞名，整合时改）：所选时间段里的支出，一块面积 = 一笔钱有多大。
+//
+// 两层：一级分类 → 二级分类。先只看大类（leafDepth 1），点有二级的那块钻进去看二级。
+// 没有二级的一级（只直接记在大类上）就是一整块，没有第二层、点它不动。
+// 一级下面既有二级、又有直接记在一级上的钱：那部分单列一块「未细分」（和 compute.byCategory 同名），
+// 不能省——ECharts 钻进去之后按子块之和铺满整块，省掉的话直接记在一级上的那部分钱在里面就看不见了，
+// 其余几块还会被按比例放大。
+//
+// 只吃 MoreInput.txs（当前模式那本账），不看 hidden、不碰 store。
+// 只算 type === 'expense'：转账（含还白条）、校准、收入一律不进（compute.isFlow 的口径）。
+// 分类的口径和 compute.byCategory 一样：查不到分类的归「未分类」，二级的父类查不到就把它自己当一级。
+import type { Category } from '../../types'
+import { UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from '../compute'
+import { fmtYuan } from '../money'
+import { categoryColor, CHART, childShade, readableOn } from '../palette'
+import { esc } from './html'
+import { rangeSpan } from './span'
+import type { MoreChart, MoreInput } from './types'
+
+export const TREEMAP_TITLE = '支出版图'
+/** 直接记在一级上、没选二级的那部分钱（有二级的大类里才单列） */
+export const UNSPLIT_NAME = '未细分'
+
+/** 最外面那一层的名字：底下那条「面包屑」的第一格，点它从二级退回大类 */
+export const ROOT_NAME = '全部支出'
+/** 面包屑那条的高度（px）；图的下沿给它让出这么多再加 6 */
+const CRUMB_H = 20
+
+const NOTE = `标题旁那段时间里的支出，一块的面积就是花了多少。先看大类，点带 ▶ 的那块看二级，点底下的「${ROOT_NAME}」回到大类；直接记在大类上的算「未细分」。转账、还白条、校准不算。`
+
+const RIGHT = 'float:right;margin-left:16px;font-weight:600'
+
+export interface TreeLeaf {
+  /** 分类 id；「未细分」是 `<一级 id>:none`，和 byCategory 一样 */
+  id: string
+  name: string
+  cents: number
+  color: string
+}
+
+export interface TreeNode extends TreeLeaf {
+  /** 空数组 = 只有一层（没有二级，或者只直接记在大类上） */
+  children: TreeLeaf[]
+}
+
+const byCents = <T extends { cents: number; sort: number; id: string }>(a: T, b: T) =>
+  b.cents - a.cents || a.sort - b.sort || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
+
+/**
+ * 时间段 [start, end]（含两端）里的支出，按一级 → 二级汇总。一级按金额从大到小，二级也是。
+ * 等式：各一级之和 = 这段时间的支出合计；有二级的一级 = 它的二级（含「未细分」）之和。treemap.test.ts 拿随机账本守着。
+ */
+export function treeOf(inp: Pick<MoreInput, 'txs' | 'cats' | 'start' | 'end'>): TreeNode[] {
+  const byId = new Map<string, Category>(inp.cats.map((c) => [c.id, c]))
+  type Acc = { id: string; name: string; sort: number; cents: number; subs: Map<string, { id: string; name: string; sort: number; cents: number }> }
+  const roots = new Map<string, Acc>()
+  for (const t of inp.txs) {
+    if (t.type !== 'expense' || t.date < inp.start || t.date > inp.end) continue
+    const c = t.category_id ? byId.get(t.category_id) : undefined
+    const root = c ? (c.parent_id ? byId.get(c.parent_id) ?? c : c) : undefined
+    const rid = root ? root.id : UNCATEGORIZED_ID
+    let r = roots.get(rid)
+    if (!r) {
+      // 查不到的「未分类」排在同额的真分类后面
+      r = { id: rid, name: root ? root.name : UNCATEGORIZED_NAME, sort: root ? root.sort : Number.MAX_SAFE_INTEGER, cents: 0, subs: new Map() }
+      roots.set(rid, r)
+    }
+    r.cents += t.amount
+    // 直接记在一级上的（含未分类）进「未细分」；排在同额的真二级后面
+    const sub = c && root && c.id !== root.id ? c : null
+    const sid = sub ? sub.id : `${rid}:none`
+    let s = r.subs.get(sid)
+    if (!s) {
+      s = { id: sid, name: sub ? sub.name : UNSPLIT_NAME, sort: sub ? sub.sort : Number.MAX_SAFE_INTEGER, cents: 0 }
+      r.subs.set(sid, s)
+    }
+    s.cents += t.amount
+  }
+  // 颜色和统计页饼图一个口径：一级 categoryColor(名字, 按金额的名次)；二级 childShade(一级色, 二级的 sort)。
+  // 「未细分」就用一级自己的颜色：它就是「这个大类本身」，和几个二级的深浅都分得开
+  return [...roots.values()].sort(byCents).map((r, i) => {
+    const color = categoryColor(r.name, i)
+    const subs = [...r.subs.values()].sort(byCents)
+    const onlyDirect = subs.length === 1 && subs[0].id === `${r.id}:none`
+    return {
+      id: r.id,
+      name: r.name,
+      cents: r.cents,
+      color,
+      children: onlyDirect
+        ? []
+        : subs.map((s) => ({ id: s.id, name: s.name, cents: s.cents, color: s.id === `${r.id}:none` ? color : childShade(color, s.sort) })),
+    }
+  })
+}
+
+/** 块上的金额：整数元带千分位（块小，写不下分；精确到分的在提示框里） */
+export const blockMoney = (cents: number) => `¥${Math.round(cents / 100).toLocaleString('en-US')}`
+
+/** 纯函数量不到屏幕：没传宽度时按 393 宽的手机算（393 − 页面和卡片的内边距 64） */
+export const TREEMAP_W = 329
+/**
+ * 一块最窄可能多窄：面积 = 占比 × 宽 × 高，高最多是整张图那么高，所以宽 ≥ 占比 × 整张图的宽。
+ * 这么宽都放不下「两个字 + ...」的块，ECharts 截断时会把省略号也扔掉，只剩前两个字——
+ * 「¥3,456」画成「¥3」，看着像三块钱（2026-09-29 SSR 画出来才发现）。这种块只写名字，金额在提示框里。
+ *
+ * 38px = 左右内边距 5 + 5（ECharts 块上字的默认 padding）+ 截断时扣的 1 + 两个 11px 数字
+ * （TreemapView 写死 truncateMinChar = 2，先扣掉两个字宽，剩下的放不下「...」就把省略号扔掉）+「...」+ 块之间的缝，再留几 px（SSR 随机 1500 张图：34 还有漏网的，36 起一张都没有，取 38）。
+ * 原来是 24，漏算了那 10px 内边距：SSR 随机撞出来 30 多 px 宽的块照样印成「¥1」（审阅 #19 补真会红的测试时发现）。
+ */
+export const MONEY_MIN_PX = 38
+export function moneyFits(share: number, chartWidth: number): boolean {
+  return share * chartWidth >= MONEY_MIN_PX
+}
+
+export function treemap(inp: MoreInput, chartWidth = TREEMAP_W): MoreChart {
+  const base = { key: 'treemap', title: TREEMAP_TITLE, span: rangeSpan(inp.start, inp.end, inp.today), note: NOTE }
+  const tree = treeOf(inp)
+  const total = tree.reduce((s, n) => s + n.cents, 0)
+  if (total <= 0) return { ...base, option: null, empty: '这段时间没有支出' }
+
+  // ECharts 那边只认 id；提示框、块上的字要的全名和精确的分从这里查。
+  // money：这一块上写不写金额（见 moneyFits）。大类在第一屏里比，二级在钻进去之后那一屏里比
+  const info = new Map<string, { name: string; cents: number; parent?: TreeNode; money: boolean }>()
+  const data = tree.map((n) => {
+    info.set(`p:${n.id}`, { name: n.name, cents: n.cents, money: moneyFits(n.cents / total, chartWidth) })
+    for (const ch of n.children) info.set(`s:${ch.id}`, { name: ch.name, cents: ch.cents, parent: n, money: moneyFits(ch.cents / n.cents, chartWidth) })
+    return {
+      id: `p:${n.id}`,
+      name: n.name,
+      value: n.cents / 100,
+      // borderColor 也是大类色：钻进去之后，顶上那条写着大类名字的横条、二级之间的缝，露出来的都是它
+      itemStyle: { color: n.color, borderColor: n.color },
+      // 字色按这一块的底色挑（readableOn）：二级那几档浅色上白字只有 1.3–1.8 的对比度，看不清（审阅 #6）。
+      // 顶上那条横条的底也是大类色，跟着大类走
+      label: { color: readableOn(n.color) },
+      upperLabel: { color: readableOn(n.color) },
+      ...(n.children.length
+        ? {
+            children: n.children.map((ch) => ({
+              id: `s:${ch.id}`,
+              name: ch.name,
+              value: ch.cents / 100,
+              itemStyle: { color: ch.color },
+              label: { color: readableOn(ch.color) },
+            })),
+          }
+        : {}),
+    }
+  })
+
+  const pct = (part: number, whole: number) => `${((part / whole) * 100).toFixed(1)}%`
+  const label = (p: { data?: { id?: string } }) => {
+    const x = p.data?.id ? info.get(p.data.id) : undefined
+    return x ? (x.money ? `${x.name}\n${blockMoney(x.cents)}` : x.name) : ''
+  }
+  // 钻进去之后顶上那条只有 22px 高，写成一行
+  const upper = (p: { data?: { id?: string } }) => {
+    const x = p.data?.id ? info.get(p.data.id) : undefined
+    return x ? `${x.name}  ${blockMoney(x.cents)}` : ''
+  }
+
+  return {
+    ...base,
+    height: 260,
+    option: {
+      tooltip: {
+        trigger: 'item',
+        confine: true,
+        formatter: (p: { data?: { id?: string } }) => {
+          const x = p.data?.id ? info.get(p.data.id) : undefined
+          if (!x) return ''
+          const line = (k: string, v: string) => `<span style="opacity:.75">${k}</span><span style="${RIGHT}">${v}</span>`
+          // 提示框是 HTML，分类名是用户写的字：过 esc
+          const rows = [esc(x.parent ? `${x.parent.name} · ${x.name}` : x.name), line('金额', `¥${fmtYuan(x.cents)}`), line('占这段时间支出', pct(x.cents, total))]
+          if (x.parent) rows.push(line(esc(`占${x.parent.name}`), pct(x.cents, x.parent.cents)))
+          return rows.join('<br/>')
+        },
+      },
+      series: [
+        {
+          type: 'treemap',
+          // 虚根的名字：面包屑第一格写的就是它（不写的话 ECharts 印「series0」）
+          name: ROOT_NAME,
+          left: 0,
+          right: 0,
+          top: 0,
+          bottom: CRUMB_H + 6,
+          // 先只看大类，点进去看二级
+          leafDepth: 1,
+          // 'link' 而不是默认的 'zoomToNode'：有二级的块（ECharts 叫 leafRoot）不管这项都会钻进去；
+          // 'zoomToNode' 会把点中的叶子块（没二级的大类）放大到占满整张图，又没有面包屑能退回来。
+          // 'link' 在叶子上找 data 的 link 字段，这里一个都没写，点叶子就什么都不做
+          nodeClick: 'link',
+          // 有二级、能钻进去的块，名字前面加这个记号（note 里说「点带 ▶ 的那块」，写死别让默认值变了对不上）
+          drillDownIcon: '▶',
+          // 手机上拖一下就把图平移走了，还和页面滚动抢手势
+          roam: false,
+          // 面包屑要开着：钻进某个大类之后，ECharts 往回退只有点它这一条路。
+          // 关掉的那一版（2026-09-29 整合前）点进去就回不来——Chart.tsx 只在 option 变了才重设，
+          // 换个月份再换回来都不行（缓存里还是同一份 option）
+          breadcrumb: {
+            show: true,
+            left: 'center',
+            bottom: 0,
+            height: CRUMB_H,
+            emptyItemWidth: 25,
+            itemStyle: { color: CHART.axis, borderColor: CHART.axis, textStyle: { color: CHART.label, fontSize: 11 } },
+            emphasis: { itemStyle: { color: CHART.axis, textStyle: { color: CHART.brandInk } } },
+          },
+          animationDurationUpdate: 400,
+          label: {
+            show: true,
+            formatter: label,
+            fontSize: 11,
+            lineHeight: 14,
+            // 兜底的白字（卡片底色）；每一块实际的字色在 data 里按底色单独给（readableOn）
+            color: CHART.gap,
+            overflow: 'truncate',
+            lineOverflow: 'truncate',
+          },
+          levels: [
+            // 第 0 层是 ECharts 的虚根：大类之间的缝露出卡片底色
+            { itemStyle: { borderColor: CHART.gap, borderWidth: 0, gapWidth: 2 } },
+            // 第 1 层 = 一级分类。钻进去之后顶上一条写着是哪个大类（没有面包屑，得告诉人现在在哪）
+            {
+              itemStyle: { borderWidth: 0, gapWidth: 1 },
+              upperLabel: { show: true, height: 22, padding: [0, 6], color: CHART.gap, fontSize: 11, formatter: upper },
+            },
+            // 第 2 层 = 二级分类：一圈细白边，挨着的两块同色系也分得开
+            { itemStyle: { borderColor: CHART.gap, borderWidth: 1 } },
+          ],
+          data,
+        },
+      ],
+    },
+  }
+}

@@ -157,4 +157,36 @@ export const CHART = {
    * 不用浅的 --color-brand（#e8b77c）：它在白卡片上的对比度只有 1.8:1，1.5px 的虚线几乎看不见。
    */
   brandInk: '#8a6026',
+  /**
+   * 压在浅色块上的字 = --color-ink（正文色）。块上默认写白字（= gap），块太浅时白字看不清就换它，见 readableOn。
+   */
+  ink: '#33302b',
 } as const
+
+/** WCAG 的相对亮度（0 黑 – 1 白） */
+function luminance(hex: string): number {
+  const [r, g, b] = hex2rgb(hex).map((v) => {
+    const c = v / 255
+    return c <= 0.03928 ? c / 12.92 : ((c + 0.055) / 1.055) ** 2.4
+  })
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b
+}
+
+/** WCAG 对比度，1（一样）– 21（黑配白）。正文要 ≥ 4.5，大字和图形 ≥ 3 */
+export function contrast(a: string, b: string): number {
+  const [x, y] = [luminance(a), luminance(b)].sort((p, q) => q - p)
+  return (x + 0.05) / (y + 0.05)
+}
+
+/**
+ * 压在底色 bg 上的字用什么颜色：默认白字（CHART.gap），白字对比度不到 3:1 就换正文深色（CHART.ink）。
+ *
+ * 不是单纯挑对比度高的那个：WCAG 的公式偏爱深字，「日常餐饮」那种琥珀色（白 3.2 / 深 4.1）会被判成深字，
+ * 可在琥珀、青绿这类饱和的中间色上，白字肉眼反而更清楚（WCAG 2 公式公认的偏差），一级分类的块也一直是白字。
+ * 真正看不清的是二级那几档浅色（childColors 明度拉到 0.78，白字只有 1.3–1.8）：白字低于 3 时
+ * 底色亮度已经 > 0.3，深字至少 4.3，换过去一定更清楚（palette.test.ts 拿全部分类色扫过）。
+ */
+export const READABLE_MIN = 3
+export function readableOn(bg: string): string {
+  return contrast(CHART.gap, bg) >= READABLE_MIN ? CHART.gap : CHART.ink
+}

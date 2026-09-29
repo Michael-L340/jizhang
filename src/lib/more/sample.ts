@@ -1,4 +1,4 @@
-// 只给测试用（registry.test.ts、components/ChartMore.test.ts）：一本「像真的」的一年账，十张图都有东西可画。
+// 只给测试用（registry.test.ts、components/ChartMore.test.ts）：一本「像真的」的一年账，大多数图都有东西可画（「备注里常写的」要看备注，这本账没写备注，只出空状态）。
 // App 代码不 import 它，打包时不会带进去。
 //
 // 固定种子的 LCG，红了能复现。今天 2026-09-28，顶上停在 9 月，范围近一年。

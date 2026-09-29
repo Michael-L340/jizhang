@@ -33,3 +33,28 @@ export function itemTapStep(armed: ArmedTap | null, hit: TapItem | null, x: numb
   }
   return hit ? { arm: { ...hit, x, y } } : null
 }
+
+// ---------- 「点绘图区」按哪根轴取下标（Chart.tsx 的 onAxisClick） ----------
+
+type AxisLike = { type?: string; data?: unknown[] }
+const firstAxis = (a: AxisLike | AxisLike[] | undefined): AxisLike | undefined => (Array.isArray(a) ? a[0] : a)
+
+/**
+ * 点绘图区时，按哪根轴换算成第几根柱子 / 第几个点：dim 是 convertFromPixel 返回值里取第几个（0 = x、1 = y），
+ * count 是那根类目轴上有几项（下标夹在 [0, count − 1] 里）。
+ *
+ * 竖着的柱子、折线：x 是类目轴 → 取 x。横着的条形图（环比涨跌榜）：x 是金额轴、y 是类目轴 → 取 y。
+ * 原来一律取 x：横条图上拿到的是「点在哪个金额上」，四舍五入再夹一下永远是 0——
+ * 不管点哪一行，提示框都被拉回最上面那一行（2026-09-29 整合第二批时发现）。
+ *
+ * 认类目轴：x 带 data 就是它（ECharts 的 xAxis 不写 type 默认就是类目轴，统计页的图都这么写）；
+ * 否则 y 明写 type: 'category' 且带 data 才算。两根都不是 → 按 x、0 项（和原来的行为一样）。
+ */
+export function categoryAxisOf(option: unknown): { dim: 0 | 1; count: number } {
+  const o = (option ?? {}) as { xAxis?: AxisLike | AxisLike[]; yAxis?: AxisLike | AxisLike[] }
+  const x = firstAxis(o.xAxis)
+  if (x && Array.isArray(x.data)) return { dim: 0, count: x.data.length }
+  const y = firstAxis(o.yAxis)
+  if (y && y.type === 'category' && Array.isArray(y.data)) return { dim: 1, count: y.data.length }
+  return { dim: 0, count: 0 }
+}

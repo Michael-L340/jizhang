@@ -144,7 +144,7 @@ describe('「外面隐藏」：外页面当这一笔不存在', () => {
     expect(read('../pages/Stats.tsx')).toMatch(/balanceSeries\(otxs, accounts, keys, unit\)/)
   })
 
-  it('进阶分析页：十张图只吃 otxs；页面里没有 hidden、没有「隐」「外页面」这几个字', () => {
+  it('进阶分析页：每张图只吃 otxs；页面里没有 hidden、没有「隐」「外页面」这几个字', () => {
     // 这一页在外页面下照常打开，也没有里页面专属的东西，所以整个源文件（连注释）都不许出现这几个字——
     // 比「只查 JSX 里的字」好守，也不会有人顺手在界面上写个「显示 / 隐藏」开关。
     // 变异：MoreInput 里写成 txs: txs → 红；自定义开关文案写成「隐藏」→ 红；读一下 t.hidden → 红

@@ -4,7 +4,7 @@ import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
-import { itemTapStep, type ArmedTap, type TapItem } from '../lib/tap'
+import { categoryAxisOf, itemTapStep, type ArmedTap, type TapItem } from '../lib/tap'
 
 echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
 
@@ -22,7 +22,8 @@ interface Props {
   /** 点中某个图形（饼图扇区等） */
   onClick?: (p: ChartClick) => void
   /**
-   * 点击绘图区任意位置，回调最接近的 X 轴下标；折线图上比要求点中圆点友好得多。
+   * 点击绘图区任意位置，回调最接近的类目下标；折线图上比要求点中圆点友好得多。
+   * 类目轴在哪边取哪边（lib/tap.ts 的 categoryAxisOf）：竖着的图取 x，横着的条形图取 y。
    *
    * **要点两下**：第一下只弹提示框（并高亮那一列），同一个位置再点一下才回调。
    * 原来点一下就跳走，手机上根本来不及看提示框里的数字——柱状图不标数字之后
@@ -56,6 +57,8 @@ export default function Chart({ option, height = 240, onClick, onAxisClick, onIt
   // 所以 zrender 那边先记下事件、等微任务里再看这一下有没有点中图形
   const itemHitRef = useRef<{ ev: unknown; item: TapItem } | null>(null)
   const countRef = useRef(0)
+  // 类目轴是 x（0）还是 y（1）：convertFromPixel 返回的 [x, y] 里取哪一个
+  const dimRef = useRef<0 | 1>(0)
   // 上一次点中的下标；-1 = 还没点过。option 一换（切档、换区间）就清掉
   const armedRef = useRef(-1)
 
@@ -95,9 +98,9 @@ export default function Chart({ option, height = 240, onClick, onAxisClick, onIt
       if (!fn) return
       const pt: [number, number] = [e.offsetX, e.offsetY]
       if (!chart.containPixel({ gridIndex: 0 }, pt)) return
-      const [x] = chart.convertFromPixel({ seriesIndex: 0 }, pt) as number[]
-      if (!Number.isFinite(x)) return
-      const i = Math.max(0, Math.min(countRef.current - 1, Math.round(x)))
+      const v = (chart.convertFromPixel({ seriesIndex: 0 }, pt) as number[])[dimRef.current]
+      if (!Number.isFinite(v)) return
+      const i = Math.max(0, Math.min(countRef.current - 1, Math.round(v)))
       if (armedRef.current === i) {
         armedRef.current = -1
         fn(i)
@@ -117,9 +120,9 @@ export default function Chart({ option, height = 240, onClick, onAxisClick, onIt
   }, [])
 
   useEffect(() => {
-    const o = option as { xAxis?: { data?: unknown[] } | { data?: unknown[] }[] }
-    const axis = Array.isArray(o.xAxis) ? o.xAxis[0] : o.xAxis
-    countRef.current = axis?.data?.length ?? 0
+    const axis = categoryAxisOf(option)
+    countRef.current = axis.count
+    dimRef.current = axis.dim
     armedRef.current = -1
     itemArmedRef.current = null
     inst.current?.setOption(option, true)
