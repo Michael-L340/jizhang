@@ -1,11 +1,15 @@
 import { useState } from 'react'
 import { Sheet } from './Sheet'
 import { fmtMonthZh, monthOf, today, yearGridStart, YEAR_GRID } from '../lib/date'
+import { ALL_MONTHS } from '../lib/ledger'
 import { fmtYuan } from '../lib/money'
 
 interface Props {
-  value: string // YYYY-MM
+  /** YYYY-MM；开了 allowAll 时还可以是 ALL_MONTHS（全部月份） */
+  value: string
   onChange: (ym: string) => void
+  /** 流水页用：标题可以是「全部流水」，弹层底下多一个「全部月份」 */
+  allowAll?: boolean
   /** 每月收支合计（分），用于在格子里显示金额 */
   totals?: Map<string, { expense: number; income: number }>
 }
@@ -19,13 +23,16 @@ function shortAmount(cents: number): string {
 }
 
 /** 顶部月份切换：左右箭头 + 点标题展开年月选择（格子里带当月支出） */
-export function MonthPicker({ value, onChange, totals }: Props) {
+export function MonthPicker({ value, onChange, totals, allowAll }: Props) {
+  const nowYm = monthOf(today())
+  const all = value === ALL_MONTHS
+  // 看全部的时候，弹层打开先落在本月那一年
+  const base = all ? nowYm : value
   const [open, setOpen] = useState(false)
-  const [year, setYear] = useState(Number(value.slice(0, 4)))
+  const [year, setYear] = useState(Number(base.slice(0, 4)))
   // 弹层里两层：月（默认）→ 点年份标题上到年。用户 2026-09-19 要的「再往上一级翻年」
   const [level, setLevel] = useState<'month' | 'year'>('month')
-  const [yBase, setYBase] = useState(yearGridStart(Number(value.slice(0, 4))))
-  const nowYm = monthOf(today())
+  const [yBase, setYBase] = useState(yearGridStart(Number(base.slice(0, 4))))
   const curYear = Number(nowYm.slice(0, 4))
   const minYear = curYear - 20
 
@@ -42,25 +49,26 @@ export function MonthPicker({ value, onChange, totals }: Props) {
   return (
     <>
       <div className="flex items-center justify-between py-2">
-        <button type="button" className="w-11 h-11 flex items-center justify-center text-muted active:text-ink" onClick={() => shift(-1)} aria-label="上个月">
+        {/* 看全部时没有「上个月 / 下个月」，箭头的位置留着，标题不左右跳 */}
+        <button type="button" className={`w-11 h-11 flex items-center justify-center text-muted active:text-ink ${all ? 'invisible' : ''}`} disabled={all} onClick={() => shift(-1)} aria-label="上个月">
           <Chevron dir="left" />
         </button>
         <button
           type="button"
           className="flex items-center gap-1.5 px-3 py-1.5 rounded-full active:bg-card"
           onClick={() => {
-            setYear(Number(value.slice(0, 4)))
+            setYear(Number(base.slice(0, 4)))
             setLevel('month')
             setOpen(true)
           }}
         >
-          <span className="text-[17px] font-bold">{fmtMonthZh(value)}</span>
+          <span className="text-[17px] font-bold">{all ? '全部流水' : fmtMonthZh(value)}</span>
           <Chevron dir="down" className="text-muted" />
         </button>
         <button
           type="button"
-          className={`w-11 h-11 flex items-center justify-center ${value >= nowYm ? 'text-line' : 'text-muted active:text-ink'}`}
-          disabled={value >= nowYm}
+          className={`w-11 h-11 flex items-center justify-center ${all ? 'invisible' : value >= nowYm ? 'text-line' : 'text-muted active:text-ink'}`}
+          disabled={all || value >= nowYm}
           onClick={() => shift(1)}
           aria-label="下个月"
         >
@@ -162,6 +170,31 @@ export function MonthPicker({ value, onChange, totals }: Props) {
         </div>
         )}
 
+        {allowAll ? (
+          // 流水页：平时看全部，选一个月只是临时看看，所以「全部月份」是主按钮
+          <div className="flex gap-2 mt-4">
+            <button
+              type="button"
+              className="flex-1 py-2.5 rounded-xl bg-bg text-sm"
+              onClick={() => {
+                onChange(nowYm)
+                setOpen(false)
+              }}
+            >
+              只看本月
+            </button>
+            <button
+              type="button"
+              className={`flex-1 py-2.5 rounded-xl text-sm ${all ? 'bg-brand text-on-brand' : 'bg-ink text-white'}`}
+              onClick={() => {
+                onChange(ALL_MONTHS)
+                setOpen(false)
+              }}
+            >
+              全部月份
+            </button>
+          </div>
+        ) : (
         <div className="flex gap-2 mt-4">
           <button type="button" className="flex-1 py-2.5 rounded-xl bg-bg text-sm" onClick={() => setOpen(false)}>
             取消
@@ -177,6 +210,7 @@ export function MonthPicker({ value, onChange, totals }: Props) {
             回到本月
           </button>
         </div>
+        )}
       </Sheet>
     </>
   )

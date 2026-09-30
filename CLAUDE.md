@@ -78,6 +78,9 @@
 - **进阶分析页 `/stats/more`**（统计页底部入口卡进）：一张图一个纯函数 `lib/more/<key>.ts`（吃 `MoreInput` 吐 `MoreChart`），登记在 `lib/more/registry.ts`，开关和顺序在 `lib/more/layout.ts`（存本机 `jz_more_charts`，新图只往 `MORE_KEYS` 末尾接、默认关着）。月份和时间范围与统计页共用同一对钥匙和 `lib/range.ts` 的 `rangeBounds`。每张图只吃 `otxs`，不看 hidden；提示框里的名字一律过 `lib/more/html.ts` 的 `esc()`；图上跳流水必须带 `cat=`（`filter.filterFromQuery` 收到才重设筛选）；标题不写「本月」。
 - 「趋势」三档：合计 / 分类 / 堆叠。堆叠柱上不标任何数字，金额和占比在提示框里。曾经叠过一条「日均消费」折线走右轴（2026-09-08 做了又撤，无论怎么调量程都在柱子上横切），要找回来看 `git log` 的 b7b540e。
 
+## 流水页
+- **默认看全部月份，一直往下翻**（用户 2026-10-01：「常态应该是显示全部的流水，我可以下滑一直翻的。只有需要选定的时候才会看特定的月份」）。`ym` 默认 `ledger.ALL_MONTHS`，再点一下底部「流水」也回到全部；别改回「打开就是本月」。全部模式按月分节（`monthSections`，每节标题带那个月的支出、收入，跟着筛选走），一次先画 `PAGE_DAYS` 天、翻到底再加。跳进来时带 `ym` 的（统计页、进阶分析）进那个月，只带 `date` 的（首页「今日开支」）进全部再定位（`ymFromQuery`）。`ledger.test.ts` 有源码守卫。
+
 ## 改动流程
 1. `npm run dev` 本地看效果（手机同 WiFi 访问终端打印的地址）。
 2. `npm run check`（类型检查）和 `npm test`（单测）必须全绿。**测试红了就是改坏了**，不要用「发到手机上看看」代替它。

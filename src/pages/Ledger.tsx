@@ -9,7 +9,8 @@ import { TxSwipe } from '../components/TxSwipe'
 import { groupByDay, inMonth, monthSummary, monthTotals, splitAccounts } from '../lib/compute'
 import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
-import { fmtDateRel, fmtDateZh, monthOf, today } from '../lib/date'
+import { fmtDateRel, fmtDateZh, fmtMonthZh } from '../lib/date'
+import { ALL_MONTHS, daysToShow, monthSections, PAGE_DAYS, ymFromQuery } from '../lib/ledger'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
 import { outerBook, outerList } from '../lib/facade'
 import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, filterFromQuery, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
@@ -40,12 +41,13 @@ export function Ledger() {
   const showToast = useStore((s) => s.showToast)
 
   const [params, setParams] = useSearchParams()
-  // 月份、搜索词、筛选都是「这次在看什么」：点进一笔改完回来还在，隔几个小时再开就回本月。
-  // 从别的页带参数跳过来时参数优先。
-  const [ym, setYm] = useRecentState('jz_ledger_ym', () => {
-    const d = params.get('date')
-    return d ? monthOf(d) : params.get('ym') || monthOf(today())
-  })
+  // 月份、搜索词、筛选都是「这次在看什么」：点进一笔改完回来还在，隔几个小时再开就回到全部。
+  // 默认看全部、一直往下翻，选了某个月才只看那个月（用户 2026-10-01）。从别的页带参数跳过来时参数优先。
+  const [ym, setYm] = useRecentState('jz_ledger_ym', () => ymFromQuery(params.get('ym'), params.get('date')) ?? ALL_MONTHS)
+  const all = ym === ALL_MONTHS
+  // 全部模式先画多少天，翻到底再加（见 lib/ledger.ts 的 PAGE_DAYS）
+  const [limit, setLimit] = useState(PAGE_DAYS)
+  const moreRef = useRef<HTMLDivElement>(null)
   const [target, setTarget] = useState<string | null>(() => params.get('date'))
   const scrolledFor = useRef<string | null>(null)
   const stickyRef = useRef<HTMLDivElement>(null)
@@ -58,8 +60,9 @@ export function Ledger() {
     // 没带参数就什么都不做：清空参数会让本 effect 再跑一次，
     // 那次不能把刚设好的状态冲掉
     if (!qYm && !qDate && !qCat) return
-    if (qYm || qDate) {
-      setYm(qDate ? monthOf(qDate) : (qYm as string))
+    const jumpYm = ymFromQuery(qYm, qDate)
+    if (jumpYm) {
+      setYm(jumpYm)
       setTarget(qDate)
       scrolledFor.current = null
     }
@@ -89,11 +92,12 @@ export function Ledger() {
   const setChildId = (childId: string) => setFilter({ ...filter, childId })
   const [open, setOpen] = useState(false)
 
-  // 再点一次「流水」回到默认：本月、不筛选、不搜索、滚回顶部。
+  // 再点一次「流水」回到默认：全部月份、不筛选、不搜索、滚回顶部。
   // 这里连月份一起重置——统计页刻意不重置（那是用户挑的趋势区间），
-  // 而流水页的「默认」就是本月流水。
+  // 而流水页的「默认」就是全部流水。
   useTabReset(() => {
-    setYm(monthOf(today()))
+    setYm(ALL_MONTHS)
+    setLimit(PAGE_DAYS)
     setQ('')
     setSearchOpen(false)
     setFilter(NO_FILTER)
@@ -141,11 +145,27 @@ export function Ledger() {
       const c = catMap.get(id)
       return c ? (c.parent_id ?? c.id) : undefined
     }
-    return base.filter((t) => (searching || inMonth(t, ym)) && matchesFilter(t, eff, rootOf, creditIds))
-  }, [vtxs, ym, eff, catMap, searching, q, names, creditIds])
+    return base.filter((t) => (searching || all || inMonth(t, ym)) && matchesFilter(t, eff, rootOf, creditIds))
+  }, [vtxs, ym, all, eff, catMap, searching, q, names, creditIds])
 
   const totalsByMonth = useMemo(() => monthTotals(otxs), [otxs])
   const groups = useMemo(() => groupByDay(list), [list])
+  // 全部模式（搜索也是跨月的）按月分节，每节开头一条月份标题；只看一个月时就一节、不要标题（顶上已经写着了）
+  const sectioned = all || searching
+  const shown = sectioned ? daysToShow(groups, limit, target) : groups.length
+  const sections = useMemo(() => (sectioned ? monthSections(groups.slice(0, shown)) : [{ ym, expense: 0, income: 0, days: groups }]), [sectioned, groups, shown, ym])
+  const hasMore = shown < groups.length
+
+  // 翻到底（底下那条看不见的线露出来）就接着画下一批
+  useEffect(() => {
+    const el = moreRef.current
+    if (!el || !hasMore) return
+    const io = new IntersectionObserver((es) => {
+      if (es.some((e) => e.isIntersecting)) setLimit((n) => n + PAGE_DAYS)
+    }, { rootMargin: '600px 0px' })
+    io.observe(el)
+    return () => io.disconnect()
+  }, [hasMore, shown])
 
   // 吸顶栏的真实高度：写死的数字会随内容变化而失准，滚动就会过头
   useLayoutEffect(() => {
@@ -214,6 +234,7 @@ export function Ledger() {
         ) : null}
         {searching ? null : (
         <MonthPicker
+          allowAll
           value={ym}
           onChange={(v) => {
             setTarget(null)
@@ -242,6 +263,22 @@ export function Ledger() {
               ) : (
                 '没有找到'
               )
+            ) : all ? (
+              // 全部模式：不算「有史以来的支出」（没人要看），只报笔数；开了筛选才把筛出来的收支写上
+              <>
+                {filtered ? `已筛选：${filterText} · ` : ''}
+                共 {hits.count} 笔
+                {filtered && hits.expense ? (
+                  <>
+                    {' · '}支出 <span className="text-expense">{fmtYuan(hits.expense)}</span>
+                  </>
+                ) : null}
+                {filtered && hits.income ? (
+                  <>
+                    {' · '}收入 <span className="text-income">{fmtYuan(hits.income)}</span>
+                  </>
+                ) : null}
+              </>
             ) : (
               <>
             {filtered ? `已筛选：${filterText} · ` : ''}
@@ -284,9 +321,29 @@ export function Ledger() {
       </div>
 
       {groups.length === 0 ? (
-        <div className="text-center text-muted text-sm py-16">这个月没有记录</div>
+        <div className="text-center text-muted text-sm py-16">{all ? (filtered ? '没有符合筛选的记录' : '还没有记录') : '这个月没有记录'}</div>
       ) : (
-        groups.map((g) => (
+        sections.map((sec) => (
+          <div key={sec.ym}>
+            {sectioned ? (
+              <div className="flex items-baseline justify-between px-4 pt-5 -mb-1">
+                <span className="text-[15px] font-bold">{fmtMonthZh(sec.ym)}</span>
+                <span className="num text-xs text-muted">
+                  {sec.expense ? (
+                    <>
+                      支出 <span className="text-expense">{fmtYuan(sec.expense)}</span>
+                    </>
+                  ) : null}
+                  {sec.expense && sec.income ? ' · ' : ''}
+                  {sec.income ? (
+                    <>
+                      收入 <span className="text-income">{fmtYuan(sec.income)}</span>
+                    </>
+                  ) : null}
+                </span>
+              </div>
+            ) : null}
+            {sec.days.map((g) => (
           <div key={g.date} id={`day-${g.date}`} className="mt-3" style={{ scrollMarginTop: 'var(--ledger-sticky-h, 92px)' }}>
             <div className="flex justify-between px-4 pb-1 text-xs text-muted">
               <span>
@@ -307,8 +364,17 @@ export function Ledger() {
               ))}
             </div>
           </div>
+            ))}
+          </div>
         ))
       )}
+      {hasMore ? (
+        <div ref={moreRef} className="text-center text-xs text-muted py-6">
+          往下翻加载更早的
+        </div>
+      ) : sectioned && groups.length ? (
+        <div className="text-center text-xs text-muted pt-6">没有更早的了</div>
+      ) : null}
 
       <Sheet open={open} onClose={() => setOpen(false)} title="筛选">
         <div className="text-xs text-muted mb-2">类型</div>
