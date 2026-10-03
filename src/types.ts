@@ -95,12 +95,27 @@ export interface FacadeAdjust {
   created_at: string // ISO
 }
 
+/**
+ * 0011：电表读数（设置 → 用电记录）。电表显示的是**累计读数**，越走越大。
+ * `centi_kwh` 是整数「0.01 度」：电表上的 3393.4 存成 339340。库里也是整数（bigint），不走小数换算，
+ * 相减不会出 0.0999999 的尾巴。`read_at` 是读数那一刻（补记可以填过去的时间），和 created_at 分开。
+ * 和记账的几张表没有外键关系，也不参与里外页面（两边看到的一样）。
+ */
+export interface MeterReading {
+  id: string
+  read_at: string // ISO
+  centi_kwh: number
+  created_at: string // ISO
+}
+
 export interface Snapshot {
   accounts: Account[]
   categories: Category[]
   transactions: Transaction[]
   /** 0010：外页面校准记录。老备份文件没有这一节，parseImport 会按老偏移量换算出来 */
   facade_adjusts: FacadeAdjust[]
+  /** 0011：电表读数。老备份文件没有这一节，按空的收 */
+  meter_readings: MeterReading[]
 }
 
 export const TX_TYPE_LABEL: Record<TxType, string> = {

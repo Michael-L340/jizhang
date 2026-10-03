@@ -1,6 +1,6 @@
 // ★ 全项目唯一接触 Supabase 的文件。换数据库只改这里。
 // 对外只暴露业务函数；金额在这里完成 分 ↔ numeric 的转换。
-import type { Account, Category, CatKind, FacadeAdjust, Snapshot, Transaction, TxType } from '../types'
+import type { Account, Category, CatKind, FacadeAdjust, MeterReading, Snapshot, Transaction, TxType } from '../types'
 import type { BackupStatus } from './backup'
 import { centsFromDb, centsToDb } from './money'
 import { supabase } from './supabase'
@@ -37,6 +37,21 @@ interface FaRow {
 /** bigint 走 JSON 一般是数字，但别赌：统一收成 number */
 function rowToFa(r: FaRow): FacadeAdjust {
   return { id: r.id, account_id: r.account_id, date: r.date, cents: Number(r.cents), created_at: r.created_at }
+}
+
+/** 0011：电表读数。centi_kwh 在库里就是整数「0.01 度」（bigint），不过任何换算 */
+const MR_COLS = 'id,read_at,centi_kwh,created_at'
+
+interface MrRow {
+  id: string
+  read_at: string
+  centi_kwh: number | string
+  created_at: string
+}
+
+/** 和 rowToFa 一样：bigint 统一收成 number，不然相减就成了字符串拼接 */
+function rowToMr(r: MrRow): MeterReading {
+  return { id: r.id, read_at: r.read_at, centi_kwh: Number(r.centi_kwh), created_at: r.created_at }
 }
 
 function rowToTx(r: TxRow): Transaction {
@@ -118,7 +133,7 @@ export function friendlyError(e: unknown): string {
 /**
  * 拉全量快照。signal 用于超时中止：supabase-js 默认的 fetch 没有超时，
  * iOS 在后台冻结页面时飞在路上的请求可能永远不 settle，不中止的话
- * store 里那把「正在同步」的锁就再也放不开了。三处查询都要挂 signal，
+ * store 里那把「正在同步」的锁就再也放不开了。每一处查询都要挂 signal，
  * 尤其是分页循环里那个——最容易卡住的恰恰是它。
  */
 export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
@@ -155,7 +170,16 @@ export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
     facade_adjusts.push(...(data as FaRow[]).map(rowToFa))
     if (data.length < PAGE) break
   }
-  return { accounts: a.data as Account[], categories: c.data as Category[], transactions, facade_adjusts }
+  // 电表读数一天几条，一年上千条，一定要分页（PostgREST 默认一次最多给 1000 行）。
+  // 按 id 升序：备份脚本也按 id 升序排这一节，App 导出的 JSON 才能和它逐字节一致
+  const meter_readings: MeterReading[] = []
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await withSignal(supabase.from('meter_readings').select(MR_COLS).order('id').range(from, from + PAGE - 1))
+    if (error) throw error
+    meter_readings.push(...(data as MrRow[]).map(rowToMr))
+    if (data.length < PAGE) break
+  }
+  return { accounts: a.data as Account[], categories: c.data as Category[], transactions, facade_adjusts, meter_readings }
 }
 
 // ---------- 流水 ----------
@@ -193,6 +217,19 @@ export async function insertFacadeAdjust(f: FacadeAdjust): Promise<void> {
   if (error) throw error
 }
 
+// ---------- 电表读数（0011） ----------
+
+export async function insertMeterReading(r: MeterReading): Promise<void> {
+  const { error } = await supabase.from('meter_readings').insert(r)
+  if (error) throw error
+}
+
+/** 删一个云端不存在的 id 是空操作、不报错：重复点删除是安全的 */
+export async function deleteMeterReading(id: string): Promise<void> {
+  const { error } = await supabase.from('meter_readings').delete().eq('id', id)
+  if (error) throw error
+}
+
 // ---------- 分类 ----------
 
 export async function addCategory(input: { kind: CatKind; parent_id: string | null; name: string; sort: number }): Promise<Category> {
@@ -219,8 +256,9 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  * 危险：清空当前登录账号的全部数据。只给「整库恢复」用，调用方必须先拿到完整备份。
  *
  * 顺序不能反（以下都由 npm run test:db 在真的 Postgres 上实测过）：
- * - facade_adjusts.account_id 是 on delete restrict，先删账户会被拒绝；它排第一句，
- *   所以 step === 'facade_adjusts' 就是「第一句就失败，云端一行没动」。
+ * - meter_readings（0011）和别的表没有外键，放哪儿都删得掉；它排第一句，
+ *   所以 step === 'meter_readings' 就是「第一句就失败，云端一行没动」。
+ * - facade_adjusts.account_id 是 on delete restrict，必须在删账户之前删。
  * - transactions.account_id / category_id 都是 on delete restrict，先删账户或分类会被拒绝。
  * - categories.parent_id 也是 restrict，只删一级、留着二级同样会被拒绝。
  *
@@ -232,6 +270,8 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  * PostgREST 不允许无条件 delete，每条都带一个「匹配全部」的过滤条件；RLS 保证只删自己的行。
  */
 export async function wipeAll(): Promise<void> {
+  const mr = await supabase.from('meter_readings').delete().not('id', 'is', null)
+  if (mr.error) wipeFailed('meter_readings', mr.error)
   const fa = await supabase.from('facade_adjusts').delete().not('id', 'is', null)
   if (fa.error) wipeFailed('facade_adjusts', fa.error)
   const tx = await supabase.from('transactions').delete().not('id', 'is', null)
@@ -246,11 +286,12 @@ export async function wipeAll(): Promise<void> {
 
 /**
  * wipeAll 抛的错会挂上 step，指出是删到哪一步炸的。
- * 用处只有一个但很要紧：step === 'facade_adjusts' 表示**第一句就失败了，云端一行都没删**，
+ * 用处只有一个但很要紧：step === 'meter_readings' 表示**第一句就失败了，云端一行都没删**，
  * 调用方据此可以老实告诉用户「账本原封不动」，而不是吓人的「可能只剩一半」。
- * 这五个删除不是一个事务，别的 step 都意味着已经删掉了一部分。
+ * 这六个删除不是一个事务，别的 step 都意味着已经删掉了一部分——
+ * 包括 'facade_adjusts'：0011 之前它是第一句，现在它失败时电表读数已经删掉了，要回滚。
  */
-export type WipeStep = 'facade_adjusts' | 'transactions' | 'child_categories' | 'root_categories' | 'accounts'
+export type WipeStep = 'meter_readings' | 'facade_adjusts' | 'transactions' | 'child_categories' | 'root_categories' | 'accounts'
 export interface WipeFailure extends Error {
   step: WipeStep
 }
@@ -273,6 +314,11 @@ export async function importAll(snap: Snapshot): Promise<void> {
   // 外页面校准记录只引用账户，账户进去之后就能写；cents 本来就是整数分，不过换算
   for (let i = 0; i < snap.facade_adjusts.length; i += 500) {
     const { error } = await supabase.from('facade_adjusts').upsert(snap.facade_adjusts.slice(i, i + 500), { onConflict: 'id' })
+    if (error) throw error
+  }
+  // 电表读数和谁都没有外键，放哪儿都行；centi_kwh 本来就是整数，不过换算
+  for (let i = 0; i < snap.meter_readings.length; i += 500) {
+    const { error } = await supabase.from('meter_readings').upsert(snap.meter_readings.slice(i, i + 500), { onConflict: 'id' })
     if (error) throw error
   }
   const parents = snap.categories.filter((c) => !c.parent_id)

@@ -20,6 +20,7 @@ import mig0007 from '../../supabase/migrations/0007_facade_offset.sql?raw'
 import mig0008 from '../../supabase/migrations/0008_defer_after_repay.sql?raw'
 import mig0009 from '../../supabase/migrations/0009_hidden_transaction.sql?raw'
 import mig0010 from '../../supabase/migrations/0010_facade_adjusts.sql?raw'
+import mig0011 from '../../supabase/migrations/0011_meter_readings.sql?raw'
 import migrateSql from '../../scripts/migrate-facade.sql?raw'
 import type { Account, Snapshot, Transaction } from '../types'
 import { migrateFacade } from './facade'
@@ -48,6 +49,7 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0008)
   await db.exec(mig0009)
   await db.exec(mig0010)
+  await db.exec(mig0011)
   return db
 }
 
@@ -60,6 +62,8 @@ interface Snap {
   categories: Row[]
   transactions: Row[]
   facade_adjusts: Row[]
+  /** 0011。可缺：老的调用点只喂四张表，和 importAll 里 `?? []` 一个意思 */
+  meter_readings?: Row[]
 }
 
 /** 对应 csv.ts 的 buildJson：库里存的是「元」，备份文件里是整数「分」 */
@@ -73,10 +77,12 @@ async function exportBackup(db: PGlite): Promise<Snap> {
     })),
     // 0010：cents 在库里就是整数分，不换算。bigint 从驱动出来可能是 BigInt，统一收成 number（api.ts 的 rowToFa 同样）
     facade_adjusts: (await q(db, 'select id,account_id,date::text as date,cents,created_at from facade_adjusts')).map((f) => ({ ...f, cents: Number(f.cents) })),
+    // 0011：centi_kwh 是整数「0.01 度」（bigint），同样收成 number，不换算；按 id 升序和 api.ts、备份脚本一致
+    meter_readings: (await q(db, 'select id,read_at,centi_kwh,created_at from meter_readings order by id')).map((m) => ({ ...m, centi_kwh: Number(m.centi_kwh) })),
   }
 }
 
-/** 对应 api.ts 的 importAll 的前半段：账户 → 外页面校准记录 → 一级分类 → 二级分类 */
+/** 对应 api.ts 的 importAll 的前半段：账户 → 外页面校准记录 → 电表读数 → 一级分类 → 二级分类 */
 async function importRefs(db: PGlite, snap: Snap): Promise<void> {
   for (const a of snap.accounts) {
     await db.query(
@@ -90,6 +96,13 @@ async function importRefs(db: PGlite, snap: Snap): Promise<void> {
       `insert into facade_adjusts (id,account_id,date,cents,created_at) values ($1,$2,$3,$4,$5)
        on conflict (id) do update set account_id=excluded.account_id,date=excluded.date,cents=excluded.cents`,
       [f.id, f.account_id, f.date, f.cents, f.created_at],
+    )
+  }
+  for (const m of snap.meter_readings ?? []) {
+    await db.query(
+      `insert into meter_readings (id,read_at,centi_kwh,created_at) values ($1,$2,$3,$4)
+       on conflict (id) do update set read_at=excluded.read_at,centi_kwh=excluded.centi_kwh`,
+      [m.id, m.read_at, m.centi_kwh, m.created_at],
     )
   }
   const ordered = [...snap.categories.filter((c) => !c.parent_id), ...snap.categories.filter((c) => c.parent_id)]
@@ -125,8 +138,9 @@ async function importFailingAtBatch(db: PGlite, snap: Snap, failAt: number, batc
   }
 }
 
-/** 对应 api.ts 的 wipeAll：外页面校准记录 → 流水 → 二级分类 → 一级分类 → 账户 */
+/** 对应 api.ts 的 wipeAll：电表读数 → 外页面校准记录 → 流水 → 二级分类 → 一级分类 → 账户 */
 async function wipeAll(db: PGlite): Promise<void> {
+  await db.exec('delete from meter_readings where id is not null')
   await db.exec('delete from facade_adjusts where id is not null')
   await db.exec('delete from transactions where id is not null')
   await db.exec('delete from categories where parent_id is not null')
@@ -154,6 +168,9 @@ async function seed(db: PGlite): Promise<void> {
   // 0010：外页面校准记录，一条负的一条正的，cents 直接是整数分
   await db.query('insert into facade_adjusts (account_id,date,cents) values ($1,$2,$3)', [boc, '2026-09-04', -216326])
   await db.query('insert into facade_adjusts (account_id,date,cents) values ($1,$2,$3)', [wx, '2026-09-05', 50000])
+  // 0011：电表读数，一条带 +08:00 的（用户在北京时间记的）、一条 UTC 的
+  await db.query('insert into meter_readings (read_at,centi_kwh) values ($1,$2)', ['2026-10-02 21:40:00+08:00', 338540])
+  await db.query('insert into meter_readings (read_at,centi_kwh) values ($1,$2)', ['2026-10-03T13:40:00Z', 339340])
 }
 
 const byId = (rows: Row[]) => [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))
@@ -189,6 +206,10 @@ describe('整库恢复', () => {
     expect(byId(back.transactions)).toEqual(byId(backup.transactions))
     expect(byId(back.facade_adjusts)).toEqual(byId(backup.facade_adjusts))
     expect(back.facade_adjusts.map((f) => f.cents).sort()).toEqual([-216326, 50000])
+    // 电表读数：读数一个 0.01 度都不差，读数时间是同一个时间点
+    expect(back.meter_readings).toEqual(backup.meter_readings)
+    expect(back.meter_readings!.map((m) => m.centi_kwh).sort()).toEqual([338540, 339340])
+    expect(back.meter_readings!.map((m) => new Date(m.read_at as string).toISOString()).sort()).toEqual(['2026-10-02T13:40:00.000Z', '2026-10-03T13:40:00.000Z'])
   })
 
   it('金额往返零误差：大额小数、1 分、负数校准都不能变', async () => {
@@ -219,6 +240,20 @@ describe('清空的顺序', () => {
     await db.exec('delete from facade_adjusts where id is not null')
     await db.exec('delete from accounts where id is not null')
     expect(await count(db, 'accounts')).toBe(0)
+  })
+
+  it('电表读数和谁都没有外键：留着它照样能删光别的表，所以排第一句纯粹是为了「第一句失败 = 一行没删」', async () => {
+    const db = await freshDb()
+    await seed(db)
+    await db.exec('delete from facade_adjusts where id is not null')
+    await db.exec('delete from transactions where id is not null')
+    await db.exec('delete from categories where parent_id is not null')
+    await db.exec('delete from categories where parent_id is null')
+    await db.exec('delete from accounts where id is not null')
+    expect(await count(db, 'accounts')).toBe(0)
+    expect(await count(db, 'meter_readings')).toBe(2)
+    await wipeAll(db)
+    expect(await count(db, 'meter_readings')).toBe(0)
   })
 
   it('只删一级分类、留着二级，会被外键拒绝', async () => {
@@ -319,6 +354,7 @@ const asSnap = (s: Snapshot): Snap => ({
   categories: s.categories as unknown as Row[],
   transactions: s.transactions as unknown as Row[],
   facade_adjusts: s.facade_adjusts as unknown as Row[],
+  meter_readings: s.meter_readings as unknown as Row[],
 })
 
 /** 完整走一遍 store.ts 的 restoreSnapshot：**先校验**，不过就一个字节都不动云端；过了才 wipe→import */
@@ -333,6 +369,7 @@ interface RawFile {
   categories: unknown[]
   transactions: unknown[]
   facade_adjusts?: unknown[]
+  meter_readings?: unknown[]
 }
 
 const uid = (n: number): string => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`
@@ -396,6 +433,12 @@ function legalBackup(): RawFile {
     facade_adjusts: [
       { id: uid(201), account_id: A.boc, date: '2000-01-01', cents: -1452, created_at: '2000-01-01T00:00:00.000Z' },
       { id: uid(202), account_id: A.wx, date: '2026-09-04', cents: 800000, created_at: '2026-09-04T03:00:00.000Z' },
+    ],
+    // 0011：新电表的 0、一条普通的、一条 JS 能精确表示的最大整数（bigint 装得下，校验的上限就是它）
+    meter_readings: [
+      { id: uid(301), read_at: '2026-10-01T00:00:00.000Z', centi_kwh: 0, created_at: '2026-10-01T00:00:05.000Z' },
+      { id: uid(302), read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 339340, created_at: '2026-10-03T13:40:05.000Z' },
+      { id: uid(303), read_at: '2026-10-03T14:00:00.000Z', centi_kwh: Number.MAX_SAFE_INTEGER, created_at: '2026-10-03T14:00:05.000Z' },
     ],
   }
 }
@@ -503,6 +546,12 @@ const BAD_CASES: BadCase[] = [
   { name: '外页面校准的日期是 2025-02-30', mutate: (f) => ((f.facade_adjusts![0] as Row).date = '2025-02-30'), msg: /外页面校准.*这一天不存在/, dbRejects: true },
   { name: '外页面校准没有账户', mutate: (f) => ((f.facade_adjusts![0] as Row).account_id = null), msg: /外页面校准.*没有账户/, dbRejects: true },
   { name: '两条外页面校准同一个 id', mutate: (f) => f.facade_adjusts!.push({ ...(f.facade_adjusts![0] as Row) }), msg: /外页面校准.*重复/, dbRejects: false },
+  // 0011 电表读数
+  { name: '电表读数是负数（centi_kwh check (>= 0)）', mutate: (f) => ((f.meter_readings![1] as Row).centi_kwh = -1), msg: /电表读数.*读数不对/, dbRejects: true },
+  // 实测（PGlite，2026-10-03）：小数参数写进 bigint 列报 invalid input syntax for type bigint: "3393.4"，不会悄悄取整
+  { name: '电表读数写成「度」（3393.4 而不是 339340）', mutate: (f) => ((f.meter_readings![1] as Row).centi_kwh = 3393.4), msg: /电表读数.*整数/, dbRejects: true },
+  { name: '电表读数时间是 2025-02-30', mutate: (f) => ((f.meter_readings![1] as Row).read_at = '2025-02-30T10:00:00Z'), msg: /电表读数.*读数时间/, dbRejects: true },
+  { name: '两条电表读数同一个 id', mutate: (f) => f.meter_readings!.push({ ...(f.meter_readings![1] as Row) }), msg: /电表读数.*重复/, dbRejects: false },
 ]
 
 describe('落地前校验：凡是通过的都能真的导进去', () => {
@@ -510,12 +559,12 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
   // 四十多个用例各起一个就是三分钟。校验拦下的用例根本不写库，共用完全安全；
   // 硬导那一组每次先 wipeAll 清干净再开始。
   let shared: PGlite
-  let seeded: { a: number; c: number; t: number }
+  let seeded: { a: number; c: number; t: number; m: number }
 
   beforeAll(async () => {
     shared = await freshDb()
     await seed(shared)
-    seeded = { a: await count(shared, 'accounts'), c: await count(shared, 'categories'), t: await count(shared, 'transactions') }
+    seeded = { a: await count(shared, 'accounts'), c: await count(shared, 'categories'), t: await count(shared, 'transactions'), m: await count(shared, 'meter_readings') }
   })
 
   it('一批覆盖边界的合法样本：校验放行，wipe→import 之后一条不少、一分不差', async () => {
@@ -528,12 +577,15 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     expect(await count(db, 'categories')).toBe(8)
     expect(await count(db, 'transactions')).toBe(14)
     expect(await count(db, 'facade_adjusts')).toBe(2)
+    expect(await count(db, 'meter_readings')).toBe(3)
 
     const back = await exportBackup(db)
     expect(byId(back.accounts)).toEqual(byId(snap.accounts as unknown as Row[]))
     expect(byId(back.categories)).toEqual(byId(snap.categories as unknown as Row[]))
     expect(isoTx(back.transactions)).toEqual(isoTx(snap.transactions as unknown as Row[]))
     expect(isoTx(back.facade_adjusts)).toEqual(isoTx(snap.facade_adjusts as unknown as Row[]))
+    const isoMr = (rows: Row[]) => isoTx(rows).map((r) => ({ ...r, read_at: new Date(r.read_at as string).toISOString() }))
+    expect(isoMr(back.meter_readings!)).toEqual(isoMr(snap.meter_readings as unknown as Row[]))
   })
 
   it('金额边界逐个核对：1 分、上限、负数校准、0 元校准都不能变样', async () => {
@@ -559,6 +611,7 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     expect(await count(shared, 'accounts')).toBe(seeded.a)
     expect(await count(shared, 'categories')).toBe(seeded.c)
     expect(await count(shared, 'transactions')).toBe(seeded.t)
+    expect(await count(shared, 'meter_readings')).toBe(seeded.m)
   })
 
   it.each(BAD_CASES.filter((c) => c.dbRejects).map((c) => [c.name, c] as const))('非法样本「%s」硬导进去，Postgres 自己也会拒收', async (_name, c) => {
@@ -589,7 +642,12 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     await seed(db)
     const snap = await exportBackup(db)
     const iso = <T extends Row>(rows: T[]): T[] => rows.map((r) => ({ ...r, created_at: new Date(r.created_at as string).toISOString() }))
-    const asFile: RawFile = { ...snap, transactions: iso(snap.transactions), facade_adjusts: iso(snap.facade_adjusts) }
+    const asFile: RawFile = {
+      ...snap,
+      transactions: iso(snap.transactions),
+      facade_adjusts: iso(snap.facade_adjusts),
+      meter_readings: iso(snap.meter_readings!).map((m) => ({ ...m, read_at: new Date(m.read_at as string).toISOString() })),
+    }
     expect(() => validateImport(asFile)).not.toThrow()
   })
 })

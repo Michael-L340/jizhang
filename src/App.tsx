@@ -7,6 +7,7 @@ import { Toast } from './components/Toast'
 import { useStore } from './lib/store'
 import { Accounts } from './pages/Accounts'
 import { Categories } from './pages/Categories'
+import { Power } from './pages/Power'
 import { Entry } from './pages/Entry'
 import { Home } from './pages/Home'
 import { Ledger } from './pages/Ledger'
@@ -136,6 +137,7 @@ const router = createHashRouter([
           { path: 'accounts', element: page('账户', <Accounts />) },
           { path: 'settings', element: page('设置', <Settings />) },
           { path: 'categories', element: page('分类管理', <Categories />) },
+          { path: 'power', element: page('用电记录', <Power />) },
         ],
       },
       { path: 'add', element: page('记一笔', <Entry />) },

@@ -15,6 +15,7 @@ interface Fixture {
   categories: Raw[]
   transactions: Raw[]
   facade_adjusts?: Raw[]
+  meter_readings?: Raw[]
 }
 
 const uuid = (n: number): string => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`
@@ -116,6 +117,62 @@ describe('外页面校准记录', () => {
 
   it('记录时间不合法 → 拒绝', () => {
     expect(run(fa({ created_at: '刚才' }))).toThrow(/记录时间/)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// meter_readings（0011）—— 电表读数
+// ══════════════════════════════════════════════════════════════
+describe('电表读数', () => {
+  const MR = { id: uuid(41), read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 339340, created_at: '2026-10-03T13:40:05.000Z' }
+  const mr = (over: Raw = {}): Fixture => ({ ...base(), meter_readings: [{ ...MR, ...over }] })
+
+  it('合法的原样返回，centi_kwh 是整数「0.01 度」、不做任何换算', () => {
+    // 变异：readMeterReading 对 centi_kwh 做 ×100 或 /100 → 红；validateImport 不读这一节 → 红
+    expect(validateImport(mr()).meter_readings).toEqual([MR])
+  })
+
+  it('读数为 0 是合法的（新电表），带时区偏移的时间也收', () => {
+    expect(validateImport(mr({ centi_kwh: 0, read_at: '2026-10-03 21:40:00+08:00' })).meter_readings[0].centi_kwh).toBe(0)
+  })
+
+  it('没有这一节（0011 之前的文件）→ 空数组，不报错', () => {
+    expect(validateImport(base()).meter_readings).toEqual([])
+  })
+
+  it('读数是负数 → 拒绝（centi_kwh check (>= 0)）', () => {
+    // 变异：去掉 `< 0` 那半句 → 红
+    expect(run(mr({ centi_kwh: -1 }))).toThrow(/第 1 条电表读数.*读数不对/)
+  })
+
+  it('读数不是整数 → 拒绝：3393.4 度要写成 339340，写成 3393.4 就是差了一百倍', () => {
+    expect(run(mr({ centi_kwh: 3393.4 }))).toThrow(/电表读数.*整数/)
+    expect(run(mr({ centi_kwh: '339340' }))).toThrow(/电表读数.*读数不对/)
+    expect(run(mr({ centi_kwh: null }))).toThrow(/电表读数.*读数不对/)
+    expect(run(mr({ centi_kwh: Number.MAX_SAFE_INTEGER + 1 }))).toThrow(/电表读数.*读数不对/)
+  })
+
+  it('读数时间不合法 → 拒绝', () => {
+    // 变异：不查 read_at → 红
+    expect(run(mr({ read_at: '昨晚' }))).toThrow(/电表读数.*读数时间/)
+    expect(run(mr({ read_at: '2025-02-30T10:00:00Z' }))).toThrow(/读数时间/)
+    expect(run(mr({ read_at: undefined }))).toThrow(/读数时间/)
+  })
+
+  it('记录时间不合法 → 拒绝', () => {
+    expect(run(mr({ created_at: '刚才' }))).toThrow(/电表读数.*记录时间/)
+  })
+
+  it('id 不是 UUID、或重复 → 拒绝', () => {
+    // 变异：checkMeterReadings 不查重 → 第二个断言红
+    expect(run(mr({ id: 'm1' }))).toThrow(/电表读数.*UUID/)
+    const f = mr()
+    f.meter_readings!.push({ ...MR, centi_kwh: 339500 })
+    expect(run(f)).toThrow(/第 2 条电表读数.*重复/)
+  })
+
+  it('多出来的键扔掉：user_id 不能跟着进库，否则换个账号恢复就写进了别人名下', () => {
+    expect(Object.keys(validateImport(mr({ user_id: uuid(99), 备注: 'x' })).meter_readings[0]).sort()).toEqual(['centi_kwh', 'created_at', 'id', 'read_at'])
   })
 })
 

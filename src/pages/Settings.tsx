@@ -6,6 +6,7 @@ import { changePassword, friendlyError } from '../lib/api'
 import { backupHealth, backupLine, CACHE_LIMIT_BYTES, CACHE_WARN_BYTES } from '../lib/backup'
 import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta, shareOrDownload, STALE_EXPORT_WARNING } from '../lib/csv'
 import { fmtIsoZh, nowIso, today } from '../lib/date'
+import { fmtReading, sortReadings } from '../lib/meter'
 import { checkForUpdate, hardReload } from '../lib/sw'
 import { RestoreFailed, useStore } from '../lib/store'
 import type { Snapshot } from '../types'
@@ -63,7 +64,13 @@ export function Settings() {
   /** 这次导出的东西信不信得过：本次会话成功同步过、且最近一次没失败 */
   const trustworthy = exportTrustworthy({ loaded, syncFailed })
   const facade_adjusts = useStore((st) => st.facade_adjusts)
-  const snapshot = useMemo(() => ({ accounts, categories, transactions, facade_adjusts }), [accounts, categories, transactions, facade_adjusts])
+  const meter_readings = useStore((st) => st.meter_readings)
+  // 「生活」那组里用电记录的副标题：电表上次读数
+  const lastMeter = useMemo(() => sortReadings(meter_readings).at(-1), [meter_readings])
+  const snapshot = useMemo(
+    () => ({ accounts, categories, transactions, facade_adjusts, meter_readings }),
+    [accounts, categories, transactions, facade_adjusts, meter_readings],
+  )
   const [busy, setBusy] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   // 用 ref 不用 state：setMode 之后要立刻 click()，ref 是同步的，不用等重渲染
@@ -278,6 +285,10 @@ export function Settings() {
       <Group title="分类与账户">
         <Item icon="🏷️" label="分类管理" hint={`${stat.expenseRoots} 个支出大类 · ${stat.children} 个二级 · ${stat.incomeRoots} 个收入分类`} onClick={() => nav('/categories')} />
         <Item icon="💳" label="账户" hint={`${assetsCount} 个资产 · ${accounts.length - assetsCount} 个白条 · 点进去改名`} onClick={() => setAccOpen(true)} />
+      </Group>
+
+      <Group title="生活">
+        <Item icon="⚡" label="用电记录" hint={lastMeter ? `电表上次 ${fmtReading(lastMeter.centi_kwh)} · ${fmtIsoZh(lastMeter.read_at)}` : '记电表读数，看每天用多少电'} onClick={() => nav('/power')} />
       </Group>
 
       <Group title="备份与恢复">

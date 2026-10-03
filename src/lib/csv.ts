@@ -1,5 +1,5 @@
 // 导出 / 导入。导出优先走系统分享（iOS 主屏 App 里 <a download> 不可靠）。
-import type { Account, Category, FacadeAdjust, Snapshot, Transaction } from '../types'
+import type { Account, Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
 import { migrateFacade } from './facade'
 import { fmtYuan } from './money'
 import { TX_TYPE_LABEL } from '../types'
@@ -59,6 +59,11 @@ export interface ExportFile {
    * CSV 不带它：CSV 是给人看的，多一张「外页面校准」表等于自曝；机器恢复走 JSON。
    */
   facade_adjusts?: FacadeAdjust[]
+  /**
+   * 0011：电表读数。新文件一定有；0011 之前导出的没有，读的时候按空的收。
+   * CSV 不带它：CSV 是流水账，电表读数不是钱。
+   */
+  meter_readings?: MeterReading[]
 }
 
 /** meta 不传就不写同步标记（给测试和老调用方留的口子） */
@@ -71,6 +76,8 @@ export function buildJson(snap: Snapshot, meta?: { synced: boolean; lastSync: st
     categories: snap.categories,
     transactions: snap.transactions,
     facade_adjusts: snap.facade_adjusts,
+    // 键的顺序要紧：备份脚本（私有仓库）的 buildJson 也是紧跟在 facade_adjusts 后面，两边导出的文件才能逐字节对得上
+    meter_readings: snap.meter_readings,
   }
   return JSON.stringify(file, null, 2)
 }
@@ -92,7 +99,15 @@ export function parseImport(text: string): Snapshot {
   // 这一节缺失 = 0010 之前导出的老文件；有但不是数组 = 文件坏了
   const hasFacade = obj.facade_adjusts !== undefined
   if (hasFacade && !Array.isArray(obj.facade_adjusts)) throw new Error('不是本应用导出的 JSON 文件')
-  const snap = validateImport({ accounts: obj.accounts, categories: obj.categories, transactions: obj.transactions, facade_adjusts: hasFacade ? obj.facade_adjusts : [] })
+  // 电表读数同理：缺失 = 0011 之前的老文件，按空的收；有但不是数组 = 文件坏了
+  if (obj.meter_readings !== undefined && !Array.isArray(obj.meter_readings)) throw new Error('不是本应用导出的 JSON 文件')
+  const snap = validateImport({
+    accounts: obj.accounts,
+    categories: obj.categories,
+    transactions: obj.transactions,
+    facade_adjusts: hasFacade ? obj.facade_adjusts : [],
+    meter_readings: obj.meter_readings ?? [],
+  })
   // 老文件按老偏移量换算出外页面校准记录，否则整库恢复完外页面就不修饰了（露馅）。
   // 换算出来的 id 由来源 id 推出，和一次性 SQL 迁移写进云端的是同一批，合并导入不会翻倍。
   if (!hasFacade) snap.facade_adjusts = migrateFacade(snap.accounts, snap.transactions)

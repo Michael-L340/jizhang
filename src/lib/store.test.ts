@@ -4,7 +4,7 @@
 // 缓存写满。它们全是纯数据层的时序问题，把 api.ts 换成可控的假实现就能在这里精确重放，
 // 不需要浏览器，也不需要真的联网。
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import type { Category, FacadeAdjust, Snapshot, Transaction } from '../types'
+import type { Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
 
 // ---------- 假的 api.ts ----------
 // vi.hoisted 保证这个对象在 vi.mock 提升后仍是同一个引用，resetModules 之后也不会换。
@@ -17,6 +17,8 @@ const api = vi.hoisted(() => ({
   updateCategory: vi.fn(),
   updateAccount: vi.fn(),
   insertFacadeAdjust: vi.fn(),
+  insertMeterReading: vi.fn(),
+  deleteMeterReading: vi.fn(),
   importAll: vi.fn(),
   wipeAll: vi.fn(),
   fetchBackupStatus: vi.fn(),
@@ -95,11 +97,15 @@ function cat(id: string, over: Partial<Category> = {}): Category {
 }
 
 function snap(transactions: Transaction[] = [], categories: Category[] = []): Snapshot {
-  return { accounts: [], categories, transactions, facade_adjusts: [] }
+  return { accounts: [], categories, transactions, facade_adjusts: [], meter_readings: [] }
 }
 
 function fa(id: string, cents = -800000): FacadeAdjust {
   return { id, account_id: 'acc1', date: '2026-09-27', cents, created_at: '2026-09-27T02:00:00.000Z' }
+}
+
+function mr(id: string, centi_kwh = 339340): MeterReading {
+  return { id, read_at: '2026-10-03T13:40:00.000Z', centi_kwh, created_at: '2026-10-03T13:40:05.000Z' }
 }
 
 let store: typeof import('./store')
@@ -293,11 +299,11 @@ describe('S2 本机缓存', () => {
     expect(JSON.parse(ls.getItem(CACHE_KEY)!).transactions).toHaveLength(3)
   })
 
-  it('只写四张表和时间戳，不把 auth/toast/syncing 一起写进去', async () => {
+  it('只写数据表和时间戳，不把 auth/toast/syncing 一起写进去', async () => {
     st().showToast('随便一句')
     st().persist()
     await vi.advanceTimersByTimeAsync(600)
-    expect(Object.keys(JSON.parse(ls.getItem(CACHE_KEY)!)).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'outbox', 'transactions'])
+    expect(Object.keys(JSON.parse(ls.getItem(CACHE_KEY)!)).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'meter_readings', 'outbox', 'transactions'])
   })
 
   it('缓存占用按 UTF-16 算：(键长 + 值长) × 2', async () => {
@@ -496,7 +502,7 @@ describe('同步失败留痕', () => {
 //   恢复是唯一会主动删数据的路径，顺序错一步就是删了没导回来。
 // ══════════════════════════════════════════════════════════════
 describe('导入与整库恢复', () => {
-  const snapshot: Snapshot = { accounts: [], categories: [], transactions: [tx('t1')] , facade_adjusts: [] }
+  const snapshot: Snapshot = { accounts: [], categories: [], transactions: [tx('t1')] , facade_adjusts: [], meter_readings: [] }
 
   it('整库恢复必须先清空再导入，最后把界面拉到云端', async () => {
     const order: string[] = []
@@ -516,12 +522,38 @@ describe('导入与整库恢复', () => {
   })
 
   it('清空的第一句就失败：云端一行都没删，不许吓唬人，也没什么可回滚的', async () => {
-    // wipeAll 的五条 DELETE 不是一个事务。api.ts 给错误挂了 step，
-    // step==='facade_adjusts'（0010 起排第一句）表示第一条就没发出去，云端还是原样
+    // wipeAll 的六条 DELETE 不是一个事务。api.ts 给错误挂了 step，
+    // step==='meter_readings'（0011 起排第一句）表示第一条就没发出去，云端还是原样
     store.useStore.setState({ transactions: [tx('old1')] })
-    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'facade_adjusts' }))
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'meter_readings' }))
     await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/一条数据都没删/)
     expect(api.importAll).not.toHaveBeenCalled()
+  })
+
+  it('删外页面校准那句失败：0011 起它是第二句，电表读数已经删掉了，必须回滚、不能说「一条都没删」', async () => {
+    // 变异：store 里的判断留在 step === 'facade_adjusts' → 这里被当成「一条都没删」、不回滚，红
+    store.useStore.setState({ transactions: [tx('old1')], meter_readings: [mr('m1')] })
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'facade_adjusts' }))
+    api.importAll.mockResolvedValueOnce(undefined)
+    api.fetchAll.mockResolvedValueOnce({ ...snap([tx('old1')]), meter_readings: [mr('m1')] })
+    const e = (await st()
+      .restoreSnapshot(snapshot)
+      .catch((x: unknown) => x)) as Error
+    expect(e.message).not.toMatch(/一条数据都没删/)
+    expect(e.message).toMatch(/退回操作前/)
+    expect(api.importAll).toHaveBeenCalledTimes(1)
+    expect(api.importAll.mock.calls[0][0].meter_readings.map((m: MeterReading) => m.id)).toEqual(['m1'])
+  })
+
+  it('只记过电表、一笔账都没有：清空到一半失败也要把读数写回去，「没有丢东西」不能是假话', async () => {
+    // 变异：hadData 不看 meter_readings → 不回滚，读数就真没了，红
+    store.useStore.setState({ meter_readings: [mr('m1'), mr('m2', 339500)] })
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'transactions' }))
+    api.importAll.mockResolvedValueOnce(undefined)
+    api.fetchAll.mockResolvedValueOnce({ ...snap(), meter_readings: [mr('m1'), mr('m2', 339500)] })
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
+    expect(api.importAll).toHaveBeenCalledTimes(1)
+    expect(api.importAll.mock.calls[0][0].meter_readings).toEqual([mr('m1'), mr('m2', 339500)])
   })
 
   it('清空到一半失败：绝不能接着导入新文件，只能拿操作前的快照往回填', async () => {
@@ -534,21 +566,23 @@ describe('导入与整库恢复', () => {
     await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
     expect(api.importAll).toHaveBeenCalledTimes(1)
     expect(api.importAll.mock.calls[0][0].transactions.map((t: Transaction) => t.id)).toEqual(['old1'])
-    // 第二句（删流水）失败：外页面校准记录已经删掉了，同样要回滚
+    // 删流水那句失败：电表读数和外页面校准记录已经删掉了，同样要回滚
     api.importAll.mockResolvedValueOnce(undefined)
     api.fetchAll.mockResolvedValueOnce(snap([tx('old1')]))
     await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
     expect(api.importAll).toHaveBeenCalledTimes(2)
   })
 
-  it('回滚写回去的快照要带上外页面校准记录，不然恢复失败一次它们就没了', async () => {
-    store.useStore.setState({ transactions: [tx('old1')], facade_adjusts: [fa('f1')] })
+  it('回滚写回去的快照要带上外页面校准记录和电表读数，不然恢复失败一次它们就没了', async () => {
+    // 变异：before 里不带 meter_readings → 回滚的那份没有读数，红
+    store.useStore.setState({ transactions: [tx('old1')], facade_adjusts: [fa('f1')], meter_readings: [mr('m1')] })
     api.wipeAll.mockResolvedValueOnce(undefined)
     api.importAll.mockRejectedValueOnce(new Error('网络不通'))
     api.importAll.mockResolvedValueOnce(undefined)
-    api.fetchAll.mockResolvedValueOnce({ ...snap([tx('old1')]), facade_adjusts: [fa('f1')] })
+    api.fetchAll.mockResolvedValueOnce({ ...snap([tx('old1')]), facade_adjusts: [fa('f1')], meter_readings: [mr('m1')] })
     await expect(st().restoreSnapshot(snapshot)).rejects.toThrow(/退回操作前/)
     expect(api.importAll.mock.calls[1][0].facade_adjusts.map((f: FacadeAdjust) => f.id)).toEqual(['f1'])
+    expect(api.importAll.mock.calls[1][0].meter_readings.map((m: MeterReading) => m.id)).toEqual(['m1'])
   })
 
   it('导入中途失败：立刻用操作前的快照回滚，并明确告诉用户没丢东西', async () => {
@@ -983,6 +1017,108 @@ describe('外页面校准记录（0010）', () => {
     store.useStore.setState({ facade_adjusts: [fa('f1')] })
     await st().signOut()
     expect(st().facade_adjusts).toEqual([])
+  })
+})
+
+describe('电表读数（0011）', () => {
+  it('记一条成功：进 state、落缓存、返回 true', async () => {
+    api.insertMeterReading.mockResolvedValueOnce(undefined)
+    expect(await st().addMeterReading(mr('m1'))).toBe(true)
+    expect(st().meter_readings).toEqual([mr('m1')])
+    expect(api.insertMeterReading.mock.calls[0][0]).toEqual(mr('m1'))
+    await vi.advanceTimersByTimeAsync(600)
+    expect(JSON.parse(ls.getItem(CACHE_KEY)!).meter_readings).toEqual([mr('m1')])
+  })
+
+  it('记一条失败（没网也一样）：state 不动、返回 false、告诉用户；没有离线队列', async () => {
+    // 变异：catch 里也 set 进 state → 红
+    api.insertMeterReading.mockRejectedValueOnce(offline())
+    expect(await st().addMeterReading(mr('m1'))).toBe(false)
+    expect(st().meter_readings).toEqual([])
+    expect(st().toast?.msg).toMatch(/记录读数失败/)
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('记的时候已经在飞的同步不会把它冲掉，之后的同步以服务端为准', async () => {
+    // 变异：addMeterReading 不登记 pendingMr → 第一个断言红
+    const d = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(d.promise) // GET 先出门，此刻服务端还没有这条
+    const rp = st().refresh()
+    api.insertMeterReading.mockResolvedValueOnce(undefined)
+    await st().addMeterReading(mr('m1'))
+    d.resolve(snap())
+    await rp
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+
+    api.fetchAll.mockResolvedValueOnce(snap())
+    await st().refresh()
+    expect(st().meter_readings).toEqual([])
+  })
+
+  it('删一条成功：从 state 和缓存里拿掉、返回 true', async () => {
+    store.useStore.setState({ meter_readings: [mr('m1'), mr('m2', 339500)] })
+    api.deleteMeterReading.mockResolvedValueOnce(undefined)
+    expect(await st().removeMeterReading('m1')).toBe(true)
+    expect(api.deleteMeterReading).toHaveBeenCalledWith('m1')
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m2'])
+    await vi.advanceTimersByTimeAsync(600)
+    expect(JSON.parse(ls.getItem(CACHE_KEY)!).meter_readings.map((m: MeterReading) => m.id)).toEqual(['m2'])
+  })
+
+  it('删失败：这条还在、返回 false、告诉用户', async () => {
+    // 变异：先从 state 拿掉、失败也不放回 → 红
+    store.useStore.setState({ meter_readings: [mr('m1')] })
+    api.deleteMeterReading.mockRejectedValueOnce(offline())
+    expect(await st().removeMeterReading('m1')).toBe(false)
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+    expect(st().toast?.msg).toMatch(/删除读数失败/)
+  })
+
+  it('删的时候已经在飞的同步还带着这条：落地后不许复活；之后的同步以服务端为准', async () => {
+    // 变异：removeMeterReading 不登记「已删除」补丁 → 那份更早出门的快照把 m1 带回来，红
+    store.useStore.setState({ meter_readings: [mr('m1'), mr('m2', 339500)] })
+    const d = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(d.promise) // GET 先出门，此刻服务端还有 m1
+    const rp = st().refresh()
+    api.deleteMeterReading.mockResolvedValueOnce(undefined)
+    await st().removeMeterReading('m1')
+    d.resolve({ ...snap(), meter_readings: [mr('m1'), mr('m2', 339500)] })
+    await rp
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m2'])
+
+    // 删完之后才出门的同步说有，那就是真有（比如另一台设备又补记了同一条）——补丁已经退休
+    api.fetchAll.mockResolvedValueOnce({ ...snap(), meter_readings: [mr('m1'), mr('m2', 339500)] })
+    await st().refresh()
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1', 'm2'])
+  })
+
+  it('冷启动：缓存里的读数直接拿来渲染；0011 之前写的缓存没有这一节，读出来是空数组不是 undefined', async () => {
+    // 变异：readCache 不补这一节 → 第二段拿到 undefined，红
+    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], facade_adjusts: [], meter_readings: [mr('m1')], at: '2026-10-03T00:00:00.000Z' }))
+    await st().init()
+    expect(st().meter_readings).toEqual([mr('m1')])
+
+    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
+    vi.resetModules()
+    const again = await import('./store')
+    await again.useStore.getState().init()
+    expect(again.useStore.getState().meter_readings).toEqual([])
+  })
+
+  it('同步拉回来的读数进 state 并落缓存', async () => {
+    api.hasSession.mockResolvedValue(true)
+    api.fetchAll.mockResolvedValueOnce({ ...snap([tx('t1')]), meter_readings: [mr('m9')] })
+    await st().init()
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m9'])
+    await vi.advanceTimersByTimeAsync(600)
+    expect(JSON.parse(ls.getItem(CACHE_KEY)!).meter_readings).toEqual([mr('m9')])
+  })
+
+  it('退出登录要清掉，换个账号登进来不能看到上一个人的电表', async () => {
+    // 变异：signOut 的 set 里漏掉 meter_readings → 红
+    store.useStore.setState({ meter_readings: [mr('m1')] })
+    await st().signOut()
+    expect(st().meter_readings).toEqual([])
   })
 })
 

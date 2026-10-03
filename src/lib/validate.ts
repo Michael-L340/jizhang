@@ -11,10 +11,11 @@
 //   categories    cat_root_uniq、cat_child_uniq、categories_depth_guard、kind check
 //   transactions  tx_shape（0002 版）、tx_category_kind_guard、三个外键、numeric(12,2)、date
 //   facade_adjusts（0010）account_id 外键、date、cents bigint、id 是 uuid 列
+//   meter_readings（0011）read_at timestamptz、centi_kwh bigint check (>= 0)、id 是 uuid 列
 //
 // 报错必须是人话，还要指出第几条、哪个字段、什么问题：真出事那天，用户是一个人
 // 举着手机看着这句话决定下一步怎么办的。只报第一个错，报一串没人看得完。
-import type { Account, CatKind, Category, FacadeAdjust, Snapshot, Transaction, TxType } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, MeterReading, Snapshot, Transaction, TxType } from '../types'
 import { TX_TYPE_LABEL } from '../types'
 
 const KIND_LABEL: Record<CatKind, string> = { expense: '支出', income: '收入' }
@@ -260,6 +261,24 @@ function readFacadeAdjust(v: unknown, i: number): FacadeAdjust {
   return { id: r.id as string, account_id: account_id as string, date: date as string, cents: cents as number, created_at: r.created_at as string }
 }
 
+/**
+ * 0011：电表读数。centi_kwh 是整数「0.01 度」（bigint），文件里也是，不做换算。
+ * 上限按 Number.MAX_SAFE_INTEGER 收：再大 JSON 读进来就已经不是原来那个数了。
+ */
+function readMeterReading(v: unknown, i: number): MeterReading {
+  const fail: Fail = failer(`备份文件第 ${i + 1} 条电表读数`)
+  const r = asRow(v)
+  if (!r) fail('不是一条记录，文件可能已损坏')
+  if (typeof r.id !== 'string') fail('缺少 id，文件可能已损坏')
+  if (!isUuid(r.id)) fail(`的 id「${String(r.id)}」不是合法的 UUID，数据库不接受`)
+  if (!isTimestamp(r.read_at)) fail(`的读数时间不是合法的时间（读到 ${JSON.stringify(r.read_at)}）`)
+  const n: unknown = r.centi_kwh
+  // centi_kwh check (>= 0)：电表读数是累计值，不会是负的
+  if (!Number.isSafeInteger(n) || (n as number) < 0) fail(`的读数不对（读到 ${JSON.stringify(r.centi_kwh)}），只能是不小于 0 的整数「0.01 度」。电表上的 3393.4 要写成 339340`)
+  if (!isTimestamp(r.created_at)) fail(`的记录时间不是合法的时间（读到 ${JSON.stringify(r.created_at)}）`)
+  return { id: r.id as string, read_at: r.read_at as string, centi_kwh: n as number, created_at: r.created_at as string }
+}
+
 // ── 跨行：外键、唯一索引、触发器，这些都要看过整份文件才知道 ──
 
 function checkAccounts(accounts: Account[]): void {
@@ -355,12 +374,22 @@ function checkFacadeAdjusts(rows: FacadeAdjust[], accounts: Account[]): void {
   })
 }
 
+/** 没有外键，只查 id 重复：批量 upsert 一次改不了同一行两遍（21000） */
+function checkMeterReadings(rows: MeterReading[]): void {
+  const ids = new Set<string>()
+  rows.forEach((m, i) => {
+    if (ids.has(m.id)) failer(`备份文件第 ${i + 1} 条电表读数`)(`的 id 和前面某一条重复了（${m.id}）`)
+    ids.add(m.id)
+  })
+}
+
 /**
- * 校验并归一化一份备份文件的四张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
+ * 校验并归一化一份备份文件的五张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
  * 返回的对象只含数据库真有的那几列，字段齐全（缺的按数据库默认值补），可以直接交给 importAll。
  * facade_adjusts 缺失按空处理（0010 之前的文件）；要不要按老偏移量换算，是 csv.ts parseImport 的事。
+ * meter_readings 缺失按空处理（0011 之前的文件），没有什么可换算的。
  */
-export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[]; facade_adjusts?: unknown[] }): Snapshot {
+export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[]; facade_adjusts?: unknown[]; meter_readings?: unknown[] }): Snapshot {
   const accounts = raw.accounts.map(readAccount)
   checkAccounts(accounts)
   const categories = raw.categories.map(readCategory)
@@ -369,5 +398,7 @@ export function validateImport(raw: { accounts: unknown[]; categories: unknown[]
   checkTransactions(transactions, accounts, categories)
   const facade_adjusts = (raw.facade_adjusts ?? []).map(readFacadeAdjust)
   checkFacadeAdjusts(facade_adjusts, accounts)
-  return { accounts, categories, transactions, facade_adjusts }
+  const meter_readings = (raw.meter_readings ?? []).map(readMeterReading)
+  checkMeterReadings(meter_readings)
+  return { accounts, categories, transactions, facade_adjusts, meter_readings }
 }

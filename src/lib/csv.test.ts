@@ -2,7 +2,7 @@
 // 这里每一条都对应一种「文件坏了但看起来正常」的情况。
 import { describe, expect, it } from 'vitest'
 import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta } from './csv'
-import type { Account, Category, FacadeAdjust, Snapshot, Transaction } from '../types'
+import type { Account, Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
 import { FACADE_EPOCH, facadeIdFor } from './facade'
 
 // id 用真的 UUID：数据库三张表的 id 都是 uuid 列，'a1' 这种字符串根本进不去（22P02），
@@ -30,10 +30,13 @@ const tx: Transaction = {
 }
 const F1 = '55555555-5555-4555-8555-555555555555'
 const fadj: FacadeAdjust = { id: F1, account_id: A1, date: '2026-09-27', cents: -800000, created_at: '2026-09-27T02:00:00.000Z' }
-const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [] }
+const M1 = '66666666-6666-4666-8666-666666666666'
+const M2 = '77777777-7777-4777-8777-777777777777'
+const reading: MeterReading = { id: M1, read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 339340, created_at: '2026-10-03T13:40:05.000Z' }
+const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [], meter_readings: [] }
 
 function file(over: Record<string, unknown> = {}): string {
-  return JSON.stringify({ version: 1, exported_at: '2026-09-04T00:00:00.000Z', accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [], ...over })
+  return JSON.stringify({ version: 1, exported_at: '2026-09-04T00:00:00.000Z', accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [], meter_readings: [], ...over })
 }
 
 describe('parseImport', () => {
@@ -71,6 +74,46 @@ describe('parseImport', () => {
     expect(buildJson(withFa)).toContain('"facade_adjusts"')
   })
 
+  // ── 0011 电表读数 ──
+  it('电表读数导出再导入不变（和流水、外页面校准一起整份往返）', () => {
+    // 变异：buildJson 不写 meter_readings → 导入回来是空的，红；parseImport 不把这一节交给 validateImport → 同样红
+    const full: Snapshot = { ...snap, facade_adjusts: [fadj], meter_readings: [reading, { ...reading, id: M2, read_at: '2026-10-03T22:10:00+08:00', centi_kwh: 0 }] }
+    expect(parseImport(buildJson(full))).toEqual(full)
+  })
+
+  it('JSON 里电表读数紧跟在外页面校准后面——备份脚本的 buildJson 也是这个键序，两边的文件要能逐字节对上', () => {
+    // 变异：把 meter_readings 挪到 transactions 前面 → 红
+    const obj = JSON.parse(buildJson({ ...snap, meter_readings: [reading] }, { synced: true, lastSync: null })) as Record<string, unknown>
+    expect(Object.keys(obj)).toEqual(['version', 'exported_at', 'synced', 'last_sync', 'accounts', 'categories', 'transactions', 'facade_adjusts', 'meter_readings'])
+    // centi_kwh 原样是整数，不过任何换算
+    expect(obj.meter_readings).toEqual([reading])
+  })
+
+  it('0011 之前的老文件没有这一节：按空的收，不报错', () => {
+    // 变异：parseImport 把「缺这一节」也当成坏文件 → 红
+    const old = JSON.parse(file()) as Record<string, unknown>
+    delete old.meter_readings
+    expect(parseImport(JSON.stringify(old)).meter_readings).toEqual([])
+  })
+
+  it('这一节存在但不是数组：文件坏了，拒绝', () => {
+    // 变异：去掉 parseImport 里那句 Array.isArray 检查 → 'x' 会被当成没有、或者在 validate 里炸成英文，红
+    expect(() => parseImport(file({ meter_readings: 'x' }))).toThrow(/不是本应用导出/)
+    expect(() => parseImport(file({ meter_readings: null }))).toThrow(/不是本应用导出/)
+    expect(() => parseImport(file({ meter_readings: { 0: reading } }))).toThrow(/不是本应用导出/)
+  })
+
+  it('电表读数里有坏的一条：整份拒绝（整库恢复会先清空，不能让它在半路炸）', () => {
+    expect(() => parseImport(file({ meter_readings: [{ ...reading, centi_kwh: -5 }] }))).toThrow(/第 1 条电表读数/)
+  })
+
+  it('CSV 不带电表读数——CSV 是流水账，读数不是钱', () => {
+    const csv = buildCsv({ ...snap, meter_readings: [reading] })
+    expect(csv).not.toContain(M1)
+    expect(csv).not.toContain('339340')
+    expect(csv.split('\n')).toHaveLength(2) // 表头 + 那一笔流水
+  })
+
   it('CSV 不带外页面校准记录——CSV 是给人看的，多一张表等于自曝', () => {
     const csv = buildCsv({ ...snap, facade_adjusts: [fadj] })
     expect(csv).not.toContain(F1)
@@ -91,7 +134,7 @@ describe('parseImport', () => {
 
   it('有这一节就一律以文件为准，哪怕是空的：0010 之后导出的文件不再换算，合并导入才不会翻倍', () => {
     // 变异：parseImport 按「数组为空」判断老文件 → 这里会算出一条，红
-    const got = parseImport(file({ accounts: [{ ...acc, facade_offset: -216326 }], facade_adjusts: [] }))
+    const got = parseImport(file({ accounts: [{ ...acc, facade_offset: -216326 }], facade_adjusts: [], meter_readings: [] }))
     expect(got.facade_adjusts).toEqual([])
   })
 

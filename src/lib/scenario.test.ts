@@ -75,7 +75,7 @@ beforeEach(async () => {
   for (const v of Object.values(api)) if (typeof v === 'function' && 'mockReset' in v) v.mockReset()
   api.onAuthChange.mockReturnValue(() => {})
   api.hasSession.mockResolvedValue(false)
-  api.fetchAll.mockResolvedValue({ accounts, categories, transactions: [], facade_adjusts: [] } satisfies Snapshot)
+  api.fetchAll.mockResolvedValue({ accounts, categories, transactions: [], facade_adjusts: [], meter_readings: [] } satisfies Snapshot)
   api.insertTx.mockResolvedValue(undefined)
   api.updateTx.mockResolvedValue(undefined)
   api.deleteTx.mockResolvedValue(undefined)
@@ -554,7 +554,7 @@ describe('真人使用：导出、导入、备份格式', () => {
     await st().addTx(cup)
     await st().addTx(pay({ to_account_id: pdd.id, amount: 1900, settles: [cup.id] }))
     await st().addTx(buy({ amount: 60000, installments: 6 }))
-    const snap: Snapshot = { accounts, categories, transactions: st().transactions, facade_adjusts: [] }
+    const snap: Snapshot = { accounts, categories, transactions: st().transactions, facade_adjusts: [], meter_readings: [] }
 
     const back = parseImport(buildJson(snap, { synced: true, lastSync: null }))
     expect(back.accounts).toEqual(accounts) // repay_day 要原样回来
@@ -570,7 +570,7 @@ describe('真人使用：导出、导入、备份格式', () => {
     await st().addTx(cup)
     await st().addTx(pay({ to_account_id: pdd.id, amount: 1900, settles: [cup.id] }))
     await st().addTx(buy({ amount: 60000, installments: 6 }))
-    const csv = buildCsv({ accounts, categories, transactions: st().transactions, facade_adjusts: [] })
+    const csv = buildCsv({ accounts, categories, transactions: st().transactions, facade_adjusts: [], meter_readings: [] })
     const head = csv.split('\n')[0]
     expect(head).toContain('分期')
     expect(head).toContain('结清')

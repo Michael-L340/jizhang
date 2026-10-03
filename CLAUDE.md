@@ -49,8 +49,8 @@
 - 只新增 `supabase/migrations/000N_*.sql`，**不改旧文件**。
 - **迁移只加可空列，永远不删列、不改名、不改类型**。改了类型不报错但静默算错（元→分那次实测差 100 倍）。真要废弃一列就让它留在库里不管，在 `types.ts` 里加注释（`Account.kind` 就是这么处理的）。
 - **加一列要同时改四处**，其中一处在私有仓库 `Michael-L340/jizhang-backup`：`api.ts` 的列常量与映射、`csv.ts` + `validate.ts`、`restore.dbtest.ts`、`backup.mjs` 的 `SELECT_*` **和** `toAccount`/`toTransaction`/`toFacadeAdjust`。外加 `store.ts` 的 `readCache` 要把新列补成 `null`。漏改的后果全是静默的。**云端迁移和推 `backup.mjs` 要挨着做。**
-- **加一张表**（0010 的 `facade_adjusts` 是先例）除了上面四处，还要：`wipeAll` 按外键方向排删除顺序、`importAll` 按外键方向排写入顺序、`Snapshot` / 缓存 / `signOut` / 在途补丁都带上它、`backup.mjs` 的抓取顺序（被引用的表后抓）。回退旧版本时旧代码看不见新表——所以「假数据」（外页面校准记录）宁可单独一张表，也不往 `transactions` 加一列：加列的话旧代码会把它当真流水算进里页面，静默算错。
-- `api.ts` 必须用显式列名常量（`ACC_COLS` / `CAT_COLS` / `TX_COLS` / `FA_COLS`），**谁改成 `select *`，「加可空列可以安全回退」这条保证就没了**。
+- **加一张表**（0010 的 `facade_adjusts`、0011 的 `meter_readings` 是先例）除了上面四处，还要：`wipeAll` 按外键方向排删除顺序、`importAll` 按外键方向排写入顺序、`Snapshot` / 缓存 / `signOut` / 在途补丁都带上它、`backup.mjs` 的抓取顺序（被引用的表后抓）。回退旧版本时旧代码看不见新表——所以「假数据」（外页面校准记录）宁可单独一张表，也不往 `transactions` 加一列：加列的话旧代码会把它当真流水算进里页面，静默算错。
+- `api.ts` 必须用显式列名常量（`ACC_COLS` / `CAT_COLS` / `TX_COLS` / `FA_COLS` / `MR_COLS`），**谁改成 `select *`，「加可空列可以安全回退」这条保证就没了**。
 - 详情（回退的五种后果、四处清单、实测记录）见 `docs/数据与迁移.md`。
 
 ## 里外页面
@@ -80,6 +80,11 @@
 
 ## 流水页
 - **默认看全部月份，一直往下翻**（用户 2026-10-01：「常态应该是显示全部的流水，我可以下滑一直翻的。只有需要选定的时候才会看特定的月份」）。`ym` 默认 `ledger.ALL_MONTHS`，再点一下底部「流水」也回到全部；别改回「打开就是本月」。全部模式按月分节（`monthSections`，每节标题带那个月的支出、收入，跟着筛选走），一次先画 `PAGE_DAYS` 天、翻到底再加。跳进来时带 `ym` 的（统计页、进阶分析）进那个月，只带 `date` 的（首页「今日开支」）进全部再定位（`ymFromQuery`）。`ledger.test.ts` 有源码守卫。
+
+## 用电记录（设置 → 生活 → 用电记录，2026-10-03）
+- 电表是**累计读数**（越走越大，用户确认）。读数存整数「0.01 度」（`meter_readings.centi_kwh`，0011），换算只在 `lib/meter.ts` 的 `parseReading` / `fmtReading`。
+- 两次读数之间用掉的电**按时间平均摊**到这段里的每一刻（`usedBetween`），跨午夜按钟点切给两天；读数倒退的那段（输错、换表）不算用电，不许算出负的。日均只算被读数盖满的整天；本月预计 = 已用 + 日均 × 最后一次读数到月底。等式「每天之和 = 首尾之差」`meter.test.ts` 拿随机读数守着。
+- 电价存本机（`jz_power_price`），只用来估钱；交电费照旧在记账里记支出，两边不连。和里外页面无关，两边看到的一样。
 
 ## 改动流程
 1. `npm run dev` 本地看效果（手机同 WiFi 访问终端打印的地址）。

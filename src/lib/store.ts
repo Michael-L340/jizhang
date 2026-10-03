@@ -1,7 +1,7 @@
 // 全局状态。页面只从这里读数据、只调这里的动作；这里是唯一调用 api.ts 的地方。
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { Account, CatKind, Category, FacadeAdjust, Snapshot, Transaction } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
 import * as api from './api'
 import { cacheBytes, type BackupStatus } from './backup'
 import { nowIso } from './date'
@@ -32,6 +32,8 @@ function readCache(): Cache | null {
       transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null, hidden: t.hidden ?? null })),
       // 0010 之前写的缓存没有这一节。补成空数组就行：下一次同步会拉到云端的
       facade_adjusts: Array.isArray(c.facade_adjusts) ? c.facade_adjusts : [],
+      // 0011 之前写的缓存没有电表读数，同上
+      meter_readings: Array.isArray(c.meter_readings) ? c.meter_readings : [],
     }
   } catch {
     return null
@@ -39,12 +41,20 @@ function readCache(): Cache | null {
 }
 
 /**
- * 写缓存。只写四张表，不要把整个 store 展开进来（否则 auth/syncing/toast 也会被写）。
+ * 写缓存。只写数据表（Snapshot 那几张），不要把整个 store 展开进来（否则 auth/syncing/toast 也会被写）。
  * 返回占用的字节数（口径见 backup.ts 的 cacheBytes：UTF-16，键也算）。
  * 抛错交给调用方处理，不再静默吞掉。
  */
 function writeCache(s: Snapshot, outbox: Outbox): number {
-  const c: Cache = { accounts: s.accounts, categories: s.categories, transactions: s.transactions, facade_adjusts: s.facade_adjusts, at: nowIso(), outbox: packOutbox(outbox) }
+  const c: Cache = {
+    accounts: s.accounts,
+    categories: s.categories,
+    transactions: s.transactions,
+    facade_adjusts: s.facade_adjusts,
+    meter_readings: s.meter_readings,
+    at: nowIso(),
+    outbox: packOutbox(outbox),
+  }
   const json = JSON.stringify(c)
   localStorage.setItem(CACHE_KEY, json)
   return cacheBytes([[CACHE_KEY, json]])
@@ -84,7 +94,7 @@ export interface State extends Snapshot {
   /**
    * 里外页面。outer = 平时用的外页面（余额被偏移量修饰过），inner = 只有本人知道的里页面（真实余额）。
    * **绝不写进缓存**：冷启动必须永远是 outer，否则这个开关就没有意义了。
-   * persist() 只写四张表，所以这条不用额外处理——但以后有人想「顺手把整个 store 存下来」时，
+   * persist() 只写数据表，所以这条不用额外处理——但以后有人想「顺手把整个 store 存下来」时，
    * 这就是不能那么干的理由。
    */
   mode: Mode
@@ -117,6 +127,16 @@ export interface State extends Snapshot {
    * 校准是难得一做的事，失败了让弹层留在原地比「界面先变了再弹回去」清楚。没有离线队列。
    */
   addFacadeAdjust: (f: FacadeAdjust) => Promise<boolean>
+  /**
+   * 记一条电表读数（0011）。和 addFacadeAdjust 一个路数：先写云端再进 state，不做乐观更新，没有离线队列。
+   * 失败弹 toast、返回 false，页面据此把输入框留在原地让人再点一次。
+   */
+  addMeterReading: (r: MeterReading) => Promise<boolean>
+  /**
+   * 删一条电表读数。同样先删云端再从 state 拿掉；成功后登记一个「已删除」的在途补丁，
+   * 否则一次比删除更早出门的同步落地时，会把这条又带回来。
+   */
+  removeMeterReading: (id: string) => Promise<boolean>
   /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
   /**
@@ -148,6 +168,7 @@ let hiddenAt: number | null = null
 const pendingTx: Pending<Transaction> = new Map()
 const pendingCat: Pending<Category> = new Map()
 const pendingFa: Pending<FacadeAdjust> = new Map()
+const pendingMr: Pending<MeterReading> = new Map()
 
 // ── 待上传队列 ────────────────────────────────────────────────
 // 上面那两张补丁表管的是「请求飞在路上」，60 秒就过期；这一张管的是「请求根本没发出去」，
@@ -167,6 +188,7 @@ let fetchSeq = 0
 const settledTx = new Map<string, number>()
 const settledCat = new Map<string, number>()
 const settledFa = new Map<string, number>()
+const settledMr = new Map<string, number>()
 
 // 备份状态这一路也编号，理由同类但简单得多：只有「最后一次问的答案」算数。
 // 设置页每次挂载都发一次，来回切页就有两次在飞；退出登录也算改朝换代。
@@ -191,6 +213,11 @@ function retirePatches(my: number): void {
     if (g >= my) continue
     pendingFa.delete(id)
     settledFa.delete(id)
+  }
+  for (const [id, g] of settledMr) {
+    if (g >= my) continue
+    pendingMr.delete(id)
+    settledMr.delete(id)
   }
 }
 
@@ -286,6 +313,7 @@ export const useStore = create<State>((set, get) => ({
   categories: [],
   transactions: [],
   facade_adjusts: [],
+  meter_readings: [],
   auth: 'loading',
   loaded: false,
   syncing: false,
@@ -307,7 +335,15 @@ export const useStore = create<State>((set, get) => ({
     if (cache) {
       // 队列要在拉云端之前装回来，否则第一次 refresh 会把上次没传上去的那几笔冲掉
       for (const [id, v] of unpackOutbox(cache.outbox)) outboxTx.set(id, v)
-      set({ accounts: cache.accounts, categories: cache.categories, transactions: cache.transactions, facade_adjusts: cache.facade_adjusts, lastSync: cache.at, outboxCount: outboxTx.size })
+      set({
+        accounts: cache.accounts,
+        categories: cache.categories,
+        transactions: cache.transactions,
+        facade_adjusts: cache.facade_adjusts,
+        meter_readings: cache.meter_readings,
+        lastSync: cache.at,
+        outboxCount: outboxTx.size,
+      })
       try {
         set({ cacheBytes: cacheBytes([[CACHE_KEY, localStorage.getItem(CACHE_KEY) ?? '']]) })
       } catch {
@@ -359,6 +395,7 @@ export const useStore = create<State>((set, get) => ({
         // 队列在最上面，因为那是用户改完、云端至今不知道的最新状态。
         transactions: applyPending(applyPending(snap.transactions, pendingTx), outboxTx),
         facade_adjusts: applyPending(snap.facade_adjusts, pendingFa),
+        meter_readings: applyPending(snap.meter_readings, pendingMr),
       }
       cancelRetry()
       retryAt = 0
@@ -430,9 +467,9 @@ export const useStore = create<State>((set, get) => ({
     if (persistTimer) clearTimeout(persistTimer)
     persistTimer = setTimeout(() => {
       persistTimer = null
-      const { accounts, categories, transactions, facade_adjusts } = get()
+      const { accounts, categories, transactions, facade_adjusts, meter_readings } = get()
       try {
-        set({ cacheBytes: writeCache({ accounts, categories, transactions, facade_adjusts }, outboxTx), cacheDegraded: false })
+        set({ cacheBytes: writeCache({ accounts, categories, transactions, facade_adjusts, meter_readings }, outboxTx), cacheDegraded: false })
       } catch {
         // 配额满或被禁用。云端数据不受影响，但离线看到的会是旧的，必须让用户知道
         if (!get().cacheDegraded) {
@@ -470,9 +507,11 @@ export const useStore = create<State>((set, get) => ({
     pendingTx.clear()
     pendingCat.clear()
     pendingFa.clear()
+    pendingMr.clear()
     settledTx.clear()
     settledCat.clear()
     settledFa.clear()
+    settledMr.clear()
     // 换个人登录进来必须是外页面
     hiddenAt = null
     set({ mode: 'outer' })
@@ -492,7 +531,7 @@ export const useStore = create<State>((set, get) => ({
     // 退出登录之后别有个定时器还挂在那儿。
     cancelRetry()
     retryAt = 0
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
   },
 
   async addTx(t) {
@@ -674,6 +713,36 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
+  async addMeterReading(r) {
+    try {
+      await api.insertMeterReading(r)
+      // 登记为在途：紧接着的一次 refresh 可能还拉不到它，会把它冲掉（和 addFacadeAdjust 一样）
+      pendingMr.set(r.id, r)
+      settle(settledMr, pendingMr, r.id)
+      set((s) => ({ meter_readings: [...s.meter_readings, r] }))
+      get().persist()
+      return true
+    } catch (e) {
+      get().showToast(`记录读数失败：${api.friendlyError(e)}`)
+      return false
+    }
+  },
+
+  async removeMeterReading(id) {
+    try {
+      await api.deleteMeterReading(id)
+      // 反方向的同一件事：删之前就出门的那次同步还带着这条，落地时不能让它复活
+      pendingMr.set(id, DELETED)
+      settle(settledMr, pendingMr, id)
+      set((s) => ({ meter_readings: s.meter_readings.filter((x) => x.id !== id) }))
+      get().persist()
+      return true
+    } catch (e) {
+      get().showToast(`删除读数失败：${api.friendlyError(e)}`)
+      return false
+    }
+  },
+
   async importSnapshot(snap) {
     try {
       await api.importAll(snap)
@@ -688,15 +757,23 @@ export const useStore = create<State>((set, get) => ({
     // 回滚底稿。wipeAll 一执行，云端就没有第二份了，所以先把「操作前的样子」留在内存里。
     // 它只是本机现在显示的样子：本次会话没同步成功过的话，它可能比云端少几条——
     // 页面在确认框里已经就这一点提醒过用户（Settings.tsx 的 exportTrustworthy 那段）。
-    const before: Snapshot = { accounts: get().accounts, categories: get().categories, transactions: get().transactions, facade_adjusts: get().facade_adjusts }
-    const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0
+    const before: Snapshot = {
+      accounts: get().accounts,
+      categories: get().categories,
+      transactions: get().transactions,
+      facade_adjusts: get().facade_adjusts,
+      meter_readings: get().meter_readings,
+    }
+    // 电表读数也算：只记过电表、没记过账的话，失败时同样要写回去，否则「已经退回操作前的样子」是假话
+    const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0 || before.meter_readings.length > 0
     try {
       await api.wipeAll()
       await api.importAll(snap)
     } catch (e) {
       const why = api.friendlyError(e)
-      // wipeAll 的第一句（删外页面校准记录）就失败 = 云端还没被动过，没什么可回滚的，也别吓唬人
-      if ((e as Partial<api.WipeFailure>).step === 'facade_adjusts') {
+      // wipeAll 的第一句（0011 起是删电表读数）就失败 = 云端还没被动过，没什么可回滚的，也别吓唬人。
+      // 'facade_adjusts' 已经不是第一句了：它失败时电表读数已经删掉，必须走下面的回滚
+      if ((e as Partial<api.WipeFailure>).step === 'meter_readings') {
         throw new RestoreFailed(`恢复失败：${why}。云端一条数据都没删，账本还是原来的样子，联网之后可以再试一次。`)
       }
       // 到这里云端已经被清空（或清了一半），必须立刻把底稿写回去。
