@@ -159,6 +159,21 @@ export function Power() {
 
           <div className="card p-4 mt-3">
             <div className="flex items-baseline justify-between mb-1">
+              <span className="font-semibold">什么时候最费电</span>
+              <span className="text-[11px] text-muted">最近 3 天 · 每小时几度</span>
+            </div>
+            {steps.length ? (
+              <Suspense fallback={<div style={{ height: 170 }} />}>
+                <Chart option={rateOption(steps, since, Math.max(now.getTime(), last ? Date.parse(last.read_at) : 0))} height={170} />
+              </Suspense>
+            ) : (
+              <div className="text-sm text-muted py-8 text-center">最近 3 天记了两次以上才画得出来</div>
+            )}
+            <div className="text-[11px] text-muted leading-relaxed mt-1">每一段 = 两次读数之间平均每小时用几度。一天记得越多，这条线越细；高的那几段一般是空调、热水器开着的时候。</div>
+          </div>
+
+          <div className="card p-4 mt-3">
+            <div className="flex items-baseline justify-between mb-1">
               <span className="font-semibold">一天里几点最费电</span>
               <span className="text-[11px] text-muted">最近 30 天 · 平均每小时几度</span>
             </div>
@@ -173,21 +188,6 @@ export function Power() {
               {topHours.length ? `最费电的钟点：${topHours.map((h) => `${h} 点`).join('、')}（深色那几根）。` : hasSlots ? '各钟点差不多高（两次读数隔得久就会这样），一天多记几次才看得出。' : ''}
               两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。一天记得越勤越准。
             </div>
-          </div>
-
-          <div className="card p-4 mt-3">
-            <div className="flex items-baseline justify-between mb-1">
-              <span className="font-semibold">什么时候最费电</span>
-              <span className="text-[11px] text-muted">最近 3 天 · 每小时几度</span>
-            </div>
-            {steps.length ? (
-              <Suspense fallback={<div style={{ height: 170 }} />}>
-                <Chart option={rateOption(steps, since, Math.max(now.getTime(), last ? Date.parse(last.read_at) : 0))} height={170} />
-              </Suspense>
-            ) : (
-              <div className="text-sm text-muted py-8 text-center">最近 3 天记了两次以上才画得出来</div>
-            )}
-            <div className="text-[11px] text-muted leading-relaxed mt-1">每一段 = 两次读数之间平均每小时用几度。一天记得越多，这条线越细；高的那几段一般是空调、热水器开着的时候。</div>
           </div>
 
           <div className="card px-4 pt-3 pb-1 mt-3">
