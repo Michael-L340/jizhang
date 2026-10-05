@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
+import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, summarize } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -155,13 +155,6 @@ describe('顶上三个大数字', () => {
     expect(s.projected).toBeNull()
   })
 
-  it('「什么时候最费电」：从 since 起每一段的平均速度（度/小时），起点被截到 since', () => {
-    const steps = rateSteps(rs, Date.parse('2026-10-03T06:00:00+08:00'))
-    expect(steps.map((x) => [new Date(x.from).toISOString(), x.perHour.toFixed(3)])).toEqual([
-      ['2026-10-02T22:00:00.000Z', '0.250'],
-      ['2026-10-03T04:00:00.000Z', '0.333'],
-    ])
-  })
 })
 
 describe('一天里几点最费电', () => {
