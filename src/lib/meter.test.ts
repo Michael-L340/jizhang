@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtSpan, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
+import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -161,5 +161,56 @@ describe('顶上三个大数字', () => {
       ['2026-10-02T22:00:00.000Z', '0.250'],
       ['2026-10-03T04:00:00.000Z', '0.333'],
     ])
+  })
+})
+
+describe('一天里几点最费电', () => {
+  it('每天 0 点、12 点各看一次，上午 3 度、下午晚上 5 度 → 0–11 点每小时 0.25 度，12–23 点每小时约 0.42 度', () => {
+    // 变异：按读数那一刻的钟点整段记账（不按时间平均分）→ 只有 0 点、12 点两根，红
+    const rs: MeterReading[] = []
+    let v = 3000
+    for (let d = 1; d <= 5; d++) {
+      rs.push(R(`2026-10-0${d} 00:00`, v.toFixed(1)), R(`2026-10-0${d} 12:00`, (v + 3).toFixed(1)))
+      v += 8
+    }
+    rs.push(R('2026-10-06 00:00', v.toFixed(1)))
+    const slots = hourProfile(rs, Date.parse('2026-09-01T00:00:00+08:00'), Date.parse('2026-10-07T00:00:00+08:00'))
+    expect(slots.map((x) => (x.perHour! / 100).toFixed(2))).toEqual([...Array(12).fill('0.25'), ...Array(12).fill('0.42')])
+    expect(slots.every((x) => Math.abs(x.days - 5) < 1e-9)).toBe(true)
+  })
+
+  it('22:00 到第二天 7:30 只记了两次 → 这 9.5 个钟点一样高（直接平均）；没盖到的钟点是空的', () => {
+    const slots = hourProfile([R('2026-10-02 22:00', '3000.0'), R('2026-10-03 07:30', '3009.5')], 0, Date.parse('2026-10-04T00:00:00+08:00'))
+    expect(slots[22].perHour).toBeCloseTo(100)
+    expect(slots[3].perHour).toBeCloseTo(100)
+    expect(slots[7].perHour).toBeCloseTo(100)
+    expect(slots[7].days).toBeCloseTo(0.5)
+    expect(slots[12].perHour).toBeNull()
+  })
+
+  it('不变量（随机读数）：Σ 每个钟点（每小时几度 × 盖到的小时数）= 这段时间里用掉的电', () => {
+    let s = 20261005
+    const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32)
+    for (let k = 0; k < 200; k++) {
+      let v = 300000
+      let t = Date.parse('2026-09-01T00:00:00+08:00') + rnd() * 86400_000
+      const rs: MeterReading[] = []
+      for (let i = 0; i < 2 + Math.floor(rnd() * 30); i++) {
+        t += rnd() * 20 * 3600_000
+        v += Math.floor(rnd() * 900)
+        rs.push({ id: `h${k}-${i}`, read_at: new Date(t).toISOString(), centi_kwh: v, created_at: new Date(t).toISOString() })
+      }
+      const from = Date.parse('2026-09-03T05:17:00+08:00')
+      const to = Date.parse('2026-09-20T00:00:00+08:00')
+      const total = hourProfile(rs, from, to).reduce((n, x) => n + (x.perHour ?? 0) * x.days, 0)
+      const ivs = intervals(rs)
+      let want = 0
+      for (const iv of ivs) {
+        const a = Date.parse(iv.from.read_at), b = Date.parse(iv.to.read_at)
+        const lo = Math.max(a, from), hi = Math.min(b, to)
+        if (hi > lo) want += (iv.used * (hi - lo)) / (b - a)
+      }
+      if (Math.abs(total - want) > 1e-6) expect.fail(`第 ${k} 份：钟点合计 ${total} ≠ 用掉的 ${want}`)
+    }
   })
 })

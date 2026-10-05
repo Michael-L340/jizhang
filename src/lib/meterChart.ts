@@ -1,5 +1,5 @@
 // 用电记录页的两张图（ECharts option）。纯函数，颜色只走 palette.CHART。
-import { fmtKwh, type DayUsage } from './meter'
+import { fmtKwh, type DayUsage, type HourSlot } from './meter'
 import { CHART } from './palette'
 
 const AXIS = { axisLine: { lineStyle: { color: CHART.axis } }, axisTick: { show: false }, axisLabel: { color: CHART.label, fontSize: 10 } }
@@ -122,6 +122,49 @@ export function rateOption(steps: { from: number; to: number; perHour: number }[
         lineStyle: { color: CHART.balance, width: 2 },
         itemStyle: { color: CHART.balance },
         areaStyle: { color: CHART.balance, opacity: 0.12 },
+      },
+    ],
+  }
+}
+
+/**
+ * 一天里几点最费电：24 根柱子，0 点到 23 点各一根，高度 = 这个钟点平均每小时几度（hourProfile）。
+ * 最高的三根用深色，其余浅一点，一眼看出常用电的时段；没被读数盖到的钟点空着。
+ */
+export function hourOption(slots: HourSlot[]) {
+  const top = new Set(
+    slots
+      .filter((x) => x.perHour !== null && x.perHour > 0)
+      .sort((a, b) => b.perHour! - a.perHour!)
+      .slice(0, 3)
+      .map((x) => x.hour),
+  )
+  return {
+    animationDuration: 500,
+    grid: { left: 4, right: 8, top: 22, bottom: 0, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      axisPointer: { type: 'shadow' },
+      formatter: (ps: { dataIndex: number }[]) => {
+        const x = slots[ps[0]?.dataIndex ?? 0]
+        if (!x) return ''
+        const head = `${x.hour}:00–${x.hour + 1}:00`
+        if (x.perHour === null) return `${head}<br/>还没有读数盖到这个钟点`
+        return `${head}<br/><b>平均每小时 ${(x.perHour / 100).toFixed(2)} 度</b><br/><span style="opacity:.7">按 ${x.days.toFixed(1)} 天的读数平均</span>`
+      },
+    },
+    xAxis: { type: 'category', data: slots.map((x) => String(x.hour)), ...AXIS, axisLabel: { ...AXIS.axisLabel, interval: (i: number) => i % 3 === 0 } },
+    yAxis: { type: 'value', name: '度/时', nameTextStyle: { color: CHART.label, fontSize: 10, align: 'right' }, axisLabel: { color: CHART.label, fontSize: 10 }, splitLine: SPLIT },
+    series: [
+      {
+        name: '平均每小时用电',
+        type: 'bar',
+        barMaxWidth: 10,
+        data: slots.map((x) => ({
+          value: x.perHour === null ? null : Math.round(x.perHour) / 100,
+          itemStyle: { color: CHART.balance, opacity: top.has(x.hour) ? 1 : 0.45, borderRadius: [3, 3, 0, 0] },
+        })),
       },
     ],
   }

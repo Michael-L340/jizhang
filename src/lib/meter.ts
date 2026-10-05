@@ -186,6 +186,42 @@ export function fmtSpan(fromIso: string, toIso: string): string {
   return a === b ? `${a} ${fmtIsoTimeZh(fromIso)}–${fmtIsoTimeZh(toIso)}` : `${a} ${fmtIsoTimeZh(fromIso)} – ${b} ${fmtIsoTimeZh(toIso)}`
 }
 
+export interface HourSlot {
+  /** 北京时间几点（0–23），这一格是 hour:00–hour+1:00 */
+  hour: number
+  /** 这个钟点平均每小时用几度（0.01 度）；这段时间里一次都没被读数盖到就是 null */
+  perHour: number | null
+  /** 这段时间里有几天盖到了这个钟点（可以是小数：只盖到半小时算 0.5） */
+  days: number
+}
+
+/**
+ * 一天里几点最费电：[from, to) 这段时间里，每两次读数之间用的电**按时间平均**分到每个钟点（用户 2026-10-05：「直接平均就好了」），
+ * 再按钟点（0–23 点）加起来、除以这个钟点被盖到的时长，得到「这个钟点平均每小时用几度」。
+ * 记得越勤越准：一段长达十几个小时的，平均下来那十几个钟点一样高。
+ * 等式：Σ(perHour × days) = 这段时间里用掉的电，meter.test.ts 拿随机读数守着。
+ */
+export function hourProfile(rs: MeterReading[], from: number, to: number): HourSlot[] {
+  const ivs = intervals(rs)
+  const used = new Array<number>(24).fill(0)
+  const covered = new Array<number>(24).fill(0)
+  for (const iv of ivs) {
+    const s = Math.max(from, Date.parse(iv.from.read_at))
+    const e = Math.min(to, Date.parse(iv.to.read_at))
+    if (e <= s) continue
+    const rate = iv.used / (Date.parse(iv.to.read_at) - Date.parse(iv.from.read_at))
+    // 按北京时间的整点切开
+    for (let t = s; t < e; ) {
+      const next = Math.min(e, (Math.floor((t + BJ_OFFSET_MS) / HOUR_MS) + 1) * HOUR_MS - BJ_OFFSET_MS)
+      const h = new Date(t + BJ_OFFSET_MS).getUTCHours()
+      used[h] += rate * (next - t)
+      covered[h] += next - t
+      t = next
+    }
+  }
+  return used.map((u, hour) => ({ hour, perHour: covered[hour] > 0 ? u / (covered[hour] / HOUR_MS) : null, days: covered[hour] / HOUR_MS }))
+}
+
 /** 电价（元/度）存本机，没填就是 null（只显示度数） */
 export const PRICE_KEY = 'jz_power_price'
 

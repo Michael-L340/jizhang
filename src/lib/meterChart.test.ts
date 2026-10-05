@@ -7,8 +7,8 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
-import { dailyUsage, parseReading, rateSteps, summarize } from './meter'
-import { dailyOption, rateOption } from './meterChart'
+import { dailyUsage, hourProfile, parseReading, rateSteps, summarize } from './meter'
+import { dailyOption, hourOption, rateOption } from './meterChart'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, SVGRenderer])
 
@@ -62,6 +62,18 @@ describe('用电记录的图', () => {
     const svg = render(rateOption(rateSteps(RS, since), since, NOW.getTime()))
     expect(svg).toContain('<svg')
     for (const d of ['10.1', '10.2', '10.3']) expect(svg).toContain(`>${d}<`)
+  })
+
+  it('一天里几点最费电：24 根柱子画得出来，最高的三根深色、其余浅色，没盖到的钟点空着', () => {
+    // 变异：所有柱子一个深浅 → 红
+    const slots = hourProfile(RS, NOW.getTime() - 30 * 86400_000, NOW.getTime())
+    const o = hourOption(slots) as { series: { data: { value: number | null; itemStyle: { opacity: number } }[] }[] }
+    const d = o.series[0].data
+    expect(d).toHaveLength(24)
+    expect(d.filter((x) => x.itemStyle.opacity === 1)).toHaveLength(3)
+    const max = Math.max(...d.map((x) => x.value ?? 0))
+    expect(d.find((x) => x.value === max)!.itemStyle.opacity).toBe(1)
+    expect(render(o)).toContain('<svg')
   })
 
   it('源码不写死颜色（用电页、图）', () => {

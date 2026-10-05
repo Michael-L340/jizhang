@@ -12,6 +12,7 @@ import {
   fmtKwh,
   fmtReading,
   fmtSpan,
+  hourProfile,
   intervals,
   parsePrice,
   parseReading,
@@ -21,7 +22,7 @@ import {
   sortReadings,
   summarize,
 } from '../lib/meter'
-import { dailyOption, rateOption } from '../lib/meterChart'
+import { dailyOption, hourOption, rateOption } from '../lib/meterChart'
 import { fmtYuan } from '../lib/money'
 import { useStore } from '../lib/store'
 import type { MeterReading } from '../types'
@@ -46,7 +47,7 @@ const fromLocalInput = (v: string) => Date.parse(`${v}:00+08:00`)
 
 /**
  * 设置 → 用电记录（2026-10-03）：看一眼电表、输入累计读数，一天几次都行；
- * 页面把读数换算成「今天用了几度、每天多少、什么时候最费电、这个月大概多少钱」。算法全在 lib/meter.ts。
+ * 页面把读数换算成「今天用了几度、每天多少、一天里几点最费电、这个月大概多少钱」。算法全在 lib/meter.ts。
  * 和里外页面无关，两边看到的一样。
  */
 export function Power() {
@@ -69,6 +70,12 @@ export function Power() {
   const days = useMemo(() => dailyUsage(readings, beijingDayOf(now.getTime() - 29 * DAY_MS), todayYmd), [readings, now, todayYmd])
   const since = now.getTime() - 3 * DAY_MS
   const steps = useMemo(() => rateSteps(readings, since), [readings, since])
+  // 一天里几点最费电：最近 30 天
+  const slots = useMemo(() => hourProfile(readings, now.getTime() - 30 * DAY_MS, now.getTime()), [readings, now])
+  const topHours = useMemo(
+    () => slots.filter((x) => x.perHour !== null && x.perHour > 0).sort((a, b) => b.perHour! - a.perHour!).slice(0, 3).map((x) => x.hour).sort((a, b) => a - b),
+    [slots],
+  )
   const ivs = useMemo(() => intervals(readings), [readings])
   // 列表里每条读数旁边写「比上一次多几度」：按到达这条的那一段查
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
@@ -153,8 +160,26 @@ export function Power() {
 
           <div className="card p-4 mt-3">
             <div className="flex items-baseline justify-between mb-1">
-              <span className="font-semibold">什么时候最费电</span>
-              <span className="text-[11px] text-muted">最近 3 天 · 每小时几度</span>
+              <span className="font-semibold">一天里几点最费电</span>
+              <span className="text-[11px] text-muted">最近 30 天 · 平均每小时几度</span>
+            </div>
+            {steps.length || ivs.length ? (
+              <Suspense fallback={<div style={{ height: 170 }} />}>
+                <Chart option={hourOption(slots)} height={170} />
+              </Suspense>
+            ) : (
+              <div className="text-sm text-muted py-8 text-center">记两次以上才画得出来</div>
+            )}
+            <div className="text-[11px] text-muted leading-relaxed mt-1">
+              {topHours.length ? `最费电的钟点：${topHours.map((h) => `${h} 点`).join('、')}（深色那几根）。` : ''}
+              两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。一天记得越勤越准。
+            </div>
+          </div>
+
+          <div className="card p-4 mt-3">
+            <div className="flex items-baseline justify-between mb-1">
+              <span className="font-semibold">最近 3 天的用电速度</span>
+              <span className="text-[11px] text-muted">每小时几度</span>
             </div>
             {steps.length ? (
               <Suspense fallback={<div style={{ height: 170 }} />}>
