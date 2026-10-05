@@ -177,8 +177,8 @@ export function Power() {
 
           <div className="card p-4 mt-3">
             <div className="flex items-baseline justify-between mb-1">
-              <span className="font-semibold">最近 3 天的用电速度</span>
-              <span className="text-[11px] text-muted">每小时几度</span>
+              <span className="font-semibold">什么时候最费电</span>
+              <span className="text-[11px] text-muted">最近 3 天 · 每小时几度</span>
             </div>
             {steps.length ? (
               <Suspense fallback={<div style={{ height: 170 }} />}>
