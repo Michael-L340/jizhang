@@ -117,5 +117,15 @@ bug 修复类固定四段，`git log` 扫一眼就知道该回退到哪一条：
 ```
 功能类保持要点列表即可。
 
+## 同一个 Supabase 项目里还住着交易日志（2026-10-05 起）
+- 交易日志（仓库 `Michael-L340/trade-journal`，网址 `/trade-journal/`）和记账共用这个 Supabase 项目，**也共用同一个登录账号**。它的对象一律带 tj 前缀：表 `tj_journal`、`tj_journal_history`，函数 `tj_me`、`tj_journal_guard`、`tj_storage_bytes`、`tj_storage_usage`，Storage 私有桶 `tj-shots` 和 `storage.objects` 上的 `tj_shots_select`、`tj_shots_insert` 两条策略。建表脚本是交易日志仓库的 `supabase/tj_0001_init.sql`，不在本仓库的 migrations 里。
+- 记账的代码、迁移、`backup.mjs` 一律不碰 tj 对象。`wipeAll`、`importAll`、Snapshot、整库恢复都不涉及交易日志；删账号会连带交易日志一起受影响，别删。
+- 账号的 `user_metadata.tj_backup` 是交易日志备份写的状态，记账别覆盖整个 user_metadata。
+- Allow new users to sign up 和 Allow anonymous sign-ins 是两个应用共用的项目设置，必须保持关闭。
+- 1 GB 文件存储和 5 GB 流量按组织合计。交易日志的截图在全项目 Storage 合计到 900 MB 时被服务端拒收；记账要开始用 Storage 之前，先看交易日志设置页的用量。
+- 两个站同源（michael-l340.github.io）。交易日志用 localStorage 的 `tj-auth` 和 `tj_` 开头的键、IndexedDB 的 `tj-journal` 库。记账不许调用 `localStorage.clear()`，不许删不是自己的 IndexedDB 库。
+- 交易日志的每日备份在私有仓库 `Michael-L340/trade-journal-backup`（北京时间 02:17，和记账 01:37 错开）。
+- 换 Supabase 项目、删旧项目之前，按 `docs/备份与恢复.md`「换到新 Supabase 项目」把交易日志一起搬走。
+
 ## 密钥
 `.env.local` 存 Supabase URL 和 anon key（模板见 `env.example`），不入库。anon key 是公开级别的；service_role key 和 `sbp_` 管理令牌永远不写进任何文件，走剪贴板、用完让用户删。
