@@ -64,8 +64,8 @@ describe('用电记录的图', () => {
     for (const d of ['10.1', '10.2', '10.3']) expect(svg).toContain(`>${d}<`)
   })
 
-  it('一天里几点最费电：24 根柱子画得出来，最高的三根深色、其余浅色，没盖到的钟点空着', () => {
-    // 变异：所有柱子一个深浅 → 红
+  it('一天里几点最费电：24 根柱子画得出来，明显最高的几根深色、其余浅色', () => {
+    // 变异：所有柱子一个深浅 → 红（这本示例账晚上明显高，peakHours 挑得出三根）
     const slots = hourProfile(RS, NOW.getTime() - 30 * 86400_000, NOW.getTime())
     const o = hourOption(slots) as { series: { data: { value: number | null; itemStyle: { opacity: number } }[] }[] }
     const d = o.series[0].data

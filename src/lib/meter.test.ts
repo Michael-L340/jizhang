@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
+import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -212,5 +212,15 @@ describe('一天里几点最费电', () => {
       }
       if (Math.abs(total - want) > 1e-6) expect.fail(`第 ${k} 份：钟点合计 ${total} ≠ 用掉的 ${want}`)
     }
+  })
+
+  it('最费电的钟点：晚上明显高 → 挑出来；只记早晚两次、各钟点差不多高 → 一个都不挑（不硬标三根）', () => {
+    // 变异：不看中位数，永远挑最高三根 → 第二种情况挑出三个，红
+    const slot = (hour: number, perHour: number | null) => ({ hour, perHour, days: 30 })
+    const evening = Array.from({ length: 24 }, (_, h) => slot(h, h >= 20 && h <= 22 ? 90 : h === 23 ? 50 : 30))
+    expect(peakHours(evening)).toEqual([20, 21, 22])
+    const flat = Array.from({ length: 24 }, (_, h) => slot(h, 35 + (h % 3)))
+    expect(peakHours(flat)).toEqual([])
+    expect(peakHours(Array.from({ length: 24 }, (_, h) => slot(h, null)))).toEqual([])
   })
 })

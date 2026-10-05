@@ -222,6 +222,25 @@ export function hourProfile(rs: MeterReading[], from: number, to: number): HourS
   return used.map((u, hour) => ({ hour, perHour: covered[hour] > 0 ? u / (covered[hour] / HOUR_MS) : null, days: covered[hour] / HOUR_MS }))
 }
 
+/** 「明显更高」的门槛：比中位数高这么多才算最费电的钟点 */
+export const PEAK_RATIO = 1.2
+
+/**
+ * 最费电的钟点（最多 3 个，按钟点排好）：只挑**明显**比一般钟点高的（≥ 中位数 × PEAK_RATIO）。
+ * 只在早晚各记一次时 24 个钟点差不多一样高，硬挑三个出来标深色是误导，那种情况返回空。
+ */
+export function peakHours(slots: HourSlot[]): number[] {
+  const vals = slots.filter((x) => x.perHour !== null).map((x) => x.perHour!).sort((a, b) => a - b)
+  if (!vals.length) return []
+  const mid = vals.length % 2 ? vals[(vals.length - 1) / 2] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2
+  return slots
+    .filter((x) => x.perHour !== null && x.perHour > 0 && x.perHour >= mid * PEAK_RATIO)
+    .sort((a, b) => b.perHour! - a.perHour!)
+    .slice(0, 3)
+    .map((x) => x.hour)
+    .sort((a, b) => a - b)
+}
+
 /** 电价（元/度）存本机，没填就是 null（只显示度数） */
 export const PRICE_KEY = 'jz_power_price'
 

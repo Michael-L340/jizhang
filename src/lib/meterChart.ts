@@ -1,5 +1,5 @@
 // 用电记录页的两张图（ECharts option）。纯函数，颜色只走 palette.CHART。
-import { fmtKwh, type DayUsage, type HourSlot } from './meter'
+import { fmtKwh, peakHours, type DayUsage, type HourSlot } from './meter'
 import { CHART } from './palette'
 
 const AXIS = { axisLine: { lineStyle: { color: CHART.axis } }, axisTick: { show: false }, axisLabel: { color: CHART.label, fontSize: 10 } }
@@ -129,16 +129,10 @@ export function rateOption(steps: { from: number; to: number; perHour: number }[
 
 /**
  * 一天里几点最费电：24 根柱子，0 点到 23 点各一根，高度 = 这个钟点平均每小时几度（hourProfile）。
- * 最高的三根用深色，其余浅一点，一眼看出常用电的时段；没被读数盖到的钟点空着。
+ * 明显最高的几根（peakHours，最多三根）用深色，其余浅一点；都差不多高时一根都不标。没被读数盖到的钟点空着。
  */
 export function hourOption(slots: HourSlot[]) {
-  const top = new Set(
-    slots
-      .filter((x) => x.perHour !== null && x.perHour > 0)
-      .sort((a, b) => b.perHour! - a.perHour!)
-      .slice(0, 3)
-      .map((x) => x.hour),
-  )
+  const top = new Set(peakHours(slots))
   return {
     animationDuration: 500,
     grid: { left: 4, right: 8, top: 22, bottom: 0, containLabel: true },

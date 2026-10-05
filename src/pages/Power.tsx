@@ -13,6 +13,7 @@ import {
   fmtReading,
   fmtSpan,
   hourProfile,
+  peakHours,
   intervals,
   parsePrice,
   parseReading,
@@ -72,10 +73,8 @@ export function Power() {
   const steps = useMemo(() => rateSteps(readings, since), [readings, since])
   // 一天里几点最费电：最近 30 天
   const slots = useMemo(() => hourProfile(readings, now.getTime() - 30 * DAY_MS, now.getTime()), [readings, now])
-  const topHours = useMemo(
-    () => slots.filter((x) => x.perHour !== null && x.perHour > 0).sort((a, b) => b.perHour! - a.perHour!).slice(0, 3).map((x) => x.hour).sort((a, b) => a - b),
-    [slots],
-  )
+  const topHours = useMemo(() => peakHours(slots), [slots])
+  const hasSlots = slots.some((x) => x.perHour !== null)
   const ivs = useMemo(() => intervals(readings), [readings])
   // 列表里每条读数旁边写「比上一次多几度」：按到达这条的那一段查
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
@@ -171,7 +170,7 @@ export function Power() {
               <div className="text-sm text-muted py-8 text-center">记两次以上才画得出来</div>
             )}
             <div className="text-[11px] text-muted leading-relaxed mt-1">
-              {topHours.length ? `最费电的钟点：${topHours.map((h) => `${h} 点`).join('、')}（深色那几根）。` : ''}
+              {topHours.length ? `最费电的钟点：${topHours.map((h) => `${h} 点`).join('、')}（深色那几根）。` : hasSlots ? '各钟点差不多高（两次读数隔得久就会这样），一天多记几次才看得出。' : ''}
               两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。一天记得越勤越准。
             </div>
           </div>
@@ -203,16 +202,14 @@ export function Power() {
                   {iv ? (
                     <>
                       <span className="min-w-0">
-                        <span className="block num text-[14px]">{fmtSpan(iv.from.read_at, iv.to.read_at)}</span>
+                        <span className="block num text-[14px] whitespace-nowrap">{fmtSpan(iv.from.read_at, iv.to.read_at)}</span>
                         <span className="block text-[11.5px] text-muted num">
-                          读数 {fmtReading(iv.from.centi_kwh)} → {fmtReading(iv.to.centi_kwh)}
+                          读数 {fmtReading(iv.from.centi_kwh)} → {fmtReading(iv.to.centi_kwh)} · {fmtDuration(iv.hours)}
                         </span>
                       </span>
                       <span className="text-right shrink-0">
                         <span className="block num text-[15px]" style={{ color: 'var(--color-balance)' }}>+{fmtKwh(iv.used)} 度</span>
-                        <span className="block text-[11.5px] text-muted num">
-                          {fmtDuration(iv.hours)} · 每小时 {(iv.perHour / 100).toFixed(2)} 度
-                        </span>
+                        <span className="block text-[11.5px] text-muted num">每小时 {(iv.perHour / 100).toFixed(2)} 度</span>
                       </span>
                     </>
                   ) : (
