@@ -19,10 +19,11 @@ import {
   parseReading,
   preview,
   PRICE_KEY,
+  rateSteps,
   sortReadings,
   summarize,
 } from '../lib/meter'
-import { dailyOption, hourOption } from '../lib/meterChart'
+import { dailyOption, hourOption, rateOption } from '../lib/meterChart'
 import { fmtYuan } from '../lib/money'
 import { useStore } from '../lib/store'
 import type { MeterReading } from '../types'
@@ -68,6 +69,8 @@ export function Power() {
   const sum = useMemo(() => summarize(readings, now), [readings, now])
   const todayYmd = beijingDayOf(now.getTime())
   const days = useMemo(() => dailyUsage(readings, beijingDayOf(now.getTime() - 29 * DAY_MS), todayYmd), [readings, now, todayYmd])
+  const since = now.getTime() - 3 * DAY_MS
+  const steps = useMemo(() => rateSteps(readings, since), [readings, since])
   // 一天里几点最费电：最近 30 天
   const slots = useMemo(() => hourProfile(readings, now.getTime() - 30 * DAY_MS, now.getTime()), [readings, now])
   const topHours = useMemo(() => peakHours(slots), [slots])
@@ -159,7 +162,7 @@ export function Power() {
               <span className="font-semibold">一天里几点最费电</span>
               <span className="text-[11px] text-muted">最近 30 天 · 平均每小时几度</span>
             </div>
-            {ivs.length ? (
+            {steps.length || ivs.length ? (
               <Suspense fallback={<div style={{ height: 170 }} />}>
                 <Chart option={hourOption(slots)} height={170} />
               </Suspense>
@@ -170,6 +173,21 @@ export function Power() {
               {topHours.length ? `最费电的钟点：${topHours.map((h) => `${h} 点`).join('、')}（深色那几根）。` : hasSlots ? '各钟点差不多高（两次读数隔得久就会这样），一天多记几次才看得出。' : ''}
               两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。一天记得越勤越准。
             </div>
+          </div>
+
+          <div className="card p-4 mt-3">
+            <div className="flex items-baseline justify-between mb-1">
+              <span className="font-semibold">最近 3 天的用电速度</span>
+              <span className="text-[11px] text-muted">每小时几度</span>
+            </div>
+            {steps.length ? (
+              <Suspense fallback={<div style={{ height: 170 }} />}>
+                <Chart option={rateOption(steps, since, Math.max(now.getTime(), last ? Date.parse(last.read_at) : 0))} height={170} />
+              </Suspense>
+            ) : (
+              <div className="text-sm text-muted py-8 text-center">最近 3 天记了两次以上才画得出来</div>
+            )}
+            <div className="text-[11px] text-muted leading-relaxed mt-1">每一段 = 两次读数之间平均每小时用几度。一天记得越多，这条线越细；高的那几段一般是空调、热水器开着的时候。</div>
           </div>
 
           <div className="card px-4 pt-3 pb-1 mt-3">

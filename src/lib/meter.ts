@@ -256,4 +256,11 @@ export function costCents(centi: number, price: number): number {
   return Math.round(centi * price)
 }
 
+/** 「什么时候最费电」那张图：从 since 起每一段读数的平均速度（度/小时），画成台阶 */
+export function rateSteps(rs: MeterReading[], since: number): { from: number; to: number; perHour: number }[] {
+  return intervals(rs)
+    .filter((iv) => Date.parse(iv.to.read_at) > since)
+    .map((iv) => ({ from: Math.max(since, Date.parse(iv.from.read_at)), to: Date.parse(iv.to.read_at), perHour: iv.perHour / 100 }))
+}
+
 export { dayOf as beijingDayOf, dayStart as beijingDayStart, DAY_MS, HOUR_MS }

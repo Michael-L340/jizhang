@@ -7,8 +7,8 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
-import { dailyUsage, hourProfile, parseReading, summarize } from './meter'
-import { dailyOption, hourOption } from './meterChart'
+import { dailyUsage, hourProfile, parseReading, rateSteps, summarize } from './meter'
+import { dailyOption, hourOption, rateOption } from './meterChart'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, SVGRenderer])
 
@@ -55,6 +55,13 @@ describe('用电记录的图', () => {
     expect(bars.at(-1)!.value).toBeGreaterThan(0)
     expect(o.series.map((s) => s.name)).toEqual(['用电', '近7天日均'])
     expect(render(o)).toContain('<svg')
+  })
+
+  it('什么时候最费电：最近 3 天的台阶画得出来（时间轴、每天零点一条刻度）', () => {
+    const since = NOW.getTime() - 3 * 86400_000
+    const svg = render(rateOption(rateSteps(RS, since), since, NOW.getTime()))
+    expect(svg).toContain('<svg')
+    for (const d of ['10.1', '10.2', '10.3']) expect(svg).toContain(`>${d}<`)
   })
 
   it('一天里几点最费电：24 根柱子画得出来，明显最高的几根深色、其余浅色', () => {

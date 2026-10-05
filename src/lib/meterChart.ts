@@ -61,6 +61,72 @@ export function dailyOption(days: DayUsage[], avg7: number | null) {
   }
 }
 
+/** 北京时间「10/3 21:40」 */
+const bjTime = (ms: number) => {
+  const d = new Date(ms + 8 * 3600_000)
+  return `${d.getUTCMonth() + 1}/${d.getUTCDate()} ${String(d.getUTCHours()).padStart(2, '0')}:${String(d.getUTCMinutes()).padStart(2, '0')}`
+}
+
+/**
+ * 什么时候最费电：每一段读数的平均速度画成台阶（这段时间里每小时几度）。
+ * 两段之间断开（中间有一段读数倒退被跳过了）就断开画，不连成一条斜线。
+ */
+export function rateOption(steps: { from: number; to: number; perHour: number }[], since: number, until: number) {
+  const pts: ([number, number] | [number, null])[] = []
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i]
+    if (i > 0 && steps[i - 1].to !== s.from) pts.push([s.from, null])
+    pts.push([s.from, s.perHour], [s.to, s.perHour])
+  }
+  const dayMarks: number[] = []
+  // 每天零点（北京时间）一条竖的分隔线：用 x 轴的刻度来画
+  for (let t = Math.ceil((since + 8 * 3600_000) / 86400_000) * 86400_000 - 8 * 3600_000; t <= until; t += 86400_000) dayMarks.push(t)
+  return {
+    animationDuration: 500,
+    grid: { left: 4, right: 10, top: 22, bottom: 0, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      formatter: (ps: { value: [number, number | null] }[]) => {
+        const t = ps[0]?.value?.[0]
+        if (t === undefined) return ''
+        const s = steps.find((x) => x.from <= t && t <= x.to)
+        if (!s) return `${bjTime(t)}<br/>这段没有读数`
+        return `${bjTime(s.from)} – ${bjTime(s.to)}<br/><b>每小时 ${s.perHour.toFixed(2)} 度</b><br/><span style="opacity:.7">这段一共 ${((s.perHour * (s.to - s.from)) / 3600_000).toFixed(1)} 度</span>`
+      },
+    },
+    xAxis: {
+      type: 'time',
+      min: since,
+      max: until,
+      ...AXIS,
+      splitLine: { show: true, ...SPLIT },
+      axisLabel: {
+        ...AXIS.axisLabel,
+        customValues: dayMarks,
+        formatter: (v: number) => {
+          const d = new Date(v + 8 * 3600_000)
+          return `${d.getUTCMonth() + 1}.${d.getUTCDate()}`
+        },
+      },
+      axisTick: { show: false, customValues: dayMarks },
+    },
+    yAxis: { type: 'value', name: '度/时', nameTextStyle: { color: CHART.label, fontSize: 10, align: 'right' }, axisLabel: { color: CHART.label, fontSize: 10 }, splitLine: SPLIT },
+    series: [
+      {
+        name: '每小时用电',
+        type: 'line',
+        data: pts,
+        showSymbol: false,
+        connectNulls: false,
+        lineStyle: { color: CHART.balance, width: 2 },
+        itemStyle: { color: CHART.balance },
+        areaStyle: { color: CHART.balance, opacity: 0.12 },
+      },
+    ],
+  }
+}
+
 /**
  * 一天里几点最费电：24 根柱子，0 点到 23 点各一根，高度 = 这个钟点平均每小时几度（hourProfile）。
  * 明显最高的几根（peakHours，最多三根）用深色，其余浅一点；都差不多高时一根都不标。没被读数盖到的钟点空着。
