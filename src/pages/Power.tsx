@@ -11,6 +11,7 @@ import {
   fmtDuration,
   fmtKwh,
   fmtReading,
+  fmtSpan,
   intervals,
   parsePrice,
   parseReading,
@@ -166,27 +167,38 @@ export function Power() {
           </div>
 
           <div className="card px-4 pt-3 pb-1 mt-3">
-            <div className="font-semibold mb-1">最近的读数</div>
+            <div className="flex items-baseline justify-between mb-1">
+              <span className="font-semibold">最近的读数</span>
+              <span className="text-[11px] text-muted">一行 = 上一次到这一次</span>
+            </div>
             {(showAll ? newestFirst : newestFirst.slice(0, LIST_FIRST)).map((r) => {
               const iv = ivTo.get(r.id)
               return (
-                <button key={r.id} type="button" className="w-full flex justify-between items-center py-2.5 border-t border-line first-of-type:border-0 text-left" onClick={() => setPicked(r)}>
-                  <span>
-                    <span className="block num text-[15px]">{fmtReading(r.centi_kwh)}</span>
-                    <span className="block text-[11.5px] text-muted num">{fmtIsoZh(r.read_at)}</span>
-                  </span>
-                  <span className="text-right">
-                    {iv ? (
-                      <>
-                        <span className="block num text-[15px]" style={{ color: "var(--color-balance)" }}>+{fmtKwh(iv.used)} 度</span>
+                <button key={r.id} type="button" className="w-full flex justify-between items-center gap-2 py-2.5 border-t border-line first-of-type:border-0 text-left" onClick={() => setPicked(r)}>
+                  {iv ? (
+                    <>
+                      <span className="min-w-0">
+                        <span className="block num text-[14px]">{fmtSpan(iv.from.read_at, iv.to.read_at)}</span>
                         <span className="block text-[11.5px] text-muted num">
-                          过了 {fmtDuration(iv.hours)} · 每小时 {(iv.perHour / 100).toFixed(2)} 度
+                          读数 {fmtReading(iv.from.centi_kwh)} → {fmtReading(iv.to.centi_kwh)}
                         </span>
-                      </>
-                    ) : (
-                      <span className="block text-[11.5px] text-muted">{r === sorted[0] ? '第一次记录' : '比上一次还小，没算'}</span>
-                    )}
-                  </span>
+                      </span>
+                      <span className="text-right shrink-0">
+                        <span className="block num text-[15px]" style={{ color: 'var(--color-balance)' }}>+{fmtKwh(iv.used)} 度</span>
+                        <span className="block text-[11.5px] text-muted num">
+                          {fmtDuration(iv.hours)} · 每小时 {(iv.perHour / 100).toFixed(2)} 度
+                        </span>
+                      </span>
+                    </>
+                  ) : (
+                    <>
+                      <span>
+                        <span className="block num text-[14px]">{fmtIsoZh(r.read_at)}</span>
+                        <span className="block text-[11.5px] text-muted num">读数 {fmtReading(r.centi_kwh)}</span>
+                      </span>
+                      <span className="text-[11.5px] text-muted">{r === sorted[0] ? '第一次记录' : '比上一次还小，没算'}</span>
+                    </>
+                  )}
                 </button>
               )
             })}

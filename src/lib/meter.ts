@@ -5,6 +5,7 @@
 // 按时间平均摊到这段时间里的每一刻：读数不用在零点记，一段跨了午夜就按钟点切开分给两天。
 // 后一次比前一次还小（输错了、换了表）的那一段不算用电：宁可少算一段，也不能算出负的或一下子几千度。
 import type { MeterReading } from '../types'
+import { fmtIsoTimeZh } from './date'
 
 const HOUR_MS = 3600_000
 const DAY_MS = 24 * HOUR_MS
@@ -169,6 +170,20 @@ export function fmtDuration(hours: number): string {
   const m = min % 60
   if (d) return h ? `${d} 天 ${h} 小时` : `${d} 天`
   return m ? `${h} 小时 ${m} 分` : `${h} 小时`
+}
+
+/**
+ * 两次读数之间是哪一段（北京时间）：同一天「10/3 12:10–21:40」，跨天「10/2 22:50 – 10/3 07:40」。
+ * 列表里一行就是一段（用户 2026-10-05：「应该展示区间，比如 7.20-15.20」）。
+ */
+export function fmtSpan(fromIso: string, toIso: string): string {
+  const day = (iso: string) => {
+    const d = dayOf(Date.parse(iso))
+    return `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
+  }
+  const a = day(fromIso)
+  const b = day(toIso)
+  return a === b ? `${a} ${fmtIsoTimeZh(fromIso)}–${fmtIsoTimeZh(toIso)}` : `${a} ${fmtIsoTimeZh(fromIso)} – ${b} ${fmtIsoTimeZh(toIso)}`
 }
 
 /** 电价（元/度）存本机，没填就是 null（只显示度数） */

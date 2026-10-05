@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
+import { costCents, dailyUsage, fmtDuration, fmtSpan, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -34,6 +34,12 @@ describe('读数的输入和显示', () => {
     expect(fmtDuration(3 + 35 / 60)).toBe('3 小时 35 分')
     expect(fmtDuration(2)).toBe('2 小时')
     expect(fmtDuration(49)).toBe('2 天 1 小时')
+  })
+
+  it('列表里一行是一段：同一天「10/3 07:20–15:20」，跨天两头都写日期', () => {
+    // 变异：跨天也只写一个日期 → 「10/2 22:50–07:40」看不出过了夜，红
+    expect(fmtSpan(R('2026-10-03 07:20', '1').read_at, R('2026-10-03 15:20', '2').read_at)).toBe('10/3 07:20–15:20')
+    expect(fmtSpan(R('2026-10-02 22:50', '1').read_at, R('2026-10-03 07:40', '2').read_at)).toBe('10/2 22:50 – 10/3 07:40')
   })
 
   it('电价：空着 = 不填；正数最多四位小数；乱写的不收', () => {
