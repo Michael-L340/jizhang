@@ -98,7 +98,8 @@ describe('进阶分析页的提示框：二十张图都和统计页一样', () =
       expect(o.tooltip.triggerOn, k).toBeUndefined()
       if (k === 'sankey') expect(o.series?.[0].emphasis, k).toEqual({ disabled: true })
     }
-  })
+  // 二十张图各建一遍，全套一起跑、机器忙的时候会超过默认的 5 秒（2026-10-05 撞到过一次），放宽到 30 秒
+  }, 30000)
 
   it('进阶页的图容器不再整页强制「点一下才弹」', async () => {
     // 变异：ChartMore 又包一层把 triggerOn 改成 click → 红
