@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, peakWeekdays, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize, thriftWeekday, weekdayLead, weekdayMean, weekdayOf, weekdayProfile, WEEKDAY_WEEKS, type WeekdaySlot } from './meter'
+import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, peakWeekdays, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize, weekdayLead, weekdayOf, weekdayProfile, WEEKDAY_WEEKS, type WeekdaySlot } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -283,15 +283,6 @@ describe('一周里哪天最费电', () => {
     expect(peakWeekdays(mk([800, 820, 790, 810, 800, 830, 805]))).toEqual([])
     expect(peakWeekdays(mk([1300, 800, 800, 800, 800, 1200, 1100]))).toEqual([1, 6])
     expect(peakWeekdays(mk([null, null, null, null, null, 800, null]))).toEqual([])
-  })
-
-  it('最省电的那一天：明显比一般低的最低那天；七天差不多 → 不挑；七天平均', () => {
-    // 变异：门槛写成 < 中位数 → 第二组挑出 790，红
-    expect(thriftWeekday(mk([800, 800, 800, 800, 800, 1200, 600]))).toBe(7)
-    expect(thriftWeekday(mk([800, 820, 790, 810, 800, 830, 805]))).toBeNull()
-    expect(thriftWeekday(mk([null, null, null, null, null, 800, null]))).toBeNull()
-    expect(weekdayMean(mk([800, 800, 800, 800, 800, 1200, 800]))).toBeCloseTo(6000 / 7, 9)
-    expect(weekdayMean(mk([null, null, null, null, null, null, null]))).toBeNull()
   })
 
   it('「比其他天多几成」：周六 12 度、其余 8 度 → 多 50%；其余天都没数 → 不说', () => {

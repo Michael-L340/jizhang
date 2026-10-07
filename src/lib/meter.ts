@@ -297,21 +297,6 @@ export function peakWeekdays(slots: WeekdaySlot[]): number[] {
     .sort((a, b) => a - b)
 }
 
-/** 最省电的那一天（1 = 周一 … 7 = 周日）：明显比一般低（≤ 中位数 ÷ PEAK_RATIO）的最低那天；七天差不多就 null */
-export function thriftWeekday(slots: WeekdaySlot[]): number | null {
-  const have = slots.filter((x) => x.perDay !== null).map((x) => x.perDay!).sort((a, b) => a - b)
-  if (!have.length) return null
-  const mid = have.length % 2 ? have[(have.length - 1) / 2] : (have[have.length / 2 - 1] + have[have.length / 2]) / 2
-  const low = slots.filter((x) => x.perDay !== null && x.perDay <= mid / PEAK_RATIO).sort((a, b) => a.perDay! - b.perDay!)[0]
-  return low ? low.dow : null
-}
-
-/** 有数的那几天平均每天几度（0.01 度），画成参照虚线；一天都没有就 null */
-export function weekdayMean(slots: WeekdaySlot[]): number | null {
-  const have = slots.filter((x) => x.perDay !== null)
-  return have.length ? have.reduce((n, x) => n + x.perDay!, 0) / have.length : null
-}
-
 /** 深色那几天比其余有数的天平均多几成（0.24 = 多 24%）；其余天一个有数的都没有、或平均是 0，就 null */
 export function weekdayLead(slots: WeekdaySlot[], peaks: number[]): number | null {
   const top = slots.filter((x) => peaks.includes(x.dow) && x.perDay !== null)

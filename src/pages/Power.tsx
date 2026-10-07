@@ -15,7 +15,6 @@ import {
   hourProfile,
   peakHours,
   peakWeekdays,
-  thriftWeekday,
   intervals,
   parsePrice,
   parseReading,
@@ -26,7 +25,6 @@ import {
   summarize,
   WEEKDAY_NAMES,
   weekdayLead,
-  weekdayMean,
   weekdayProfile,
 } from '../lib/meter'
 import { dailyOption, hourOption, rateOption, weekdayOption } from '../lib/meterChart'
@@ -88,8 +86,6 @@ export function Power() {
   const wdFull = wdays.every((x) => x.perDay !== null)
   const wdLead = weekdayLead(wdays, topDays)
   const wdTopAvg = topDays.length ? wdays.filter((x) => topDays.includes(x.dow)).reduce((n, x) => n + (x.perDay ?? 0), 0) / topDays.length : null
-  const wdThrift = thriftWeekday(wdays)
-  const wdMean = weekdayMean(wdays)
   const ivs = useMemo(() => intervals(readings), [readings])
   // 列表里每条读数旁边写「比上一次多几度」：按到达这条的那一段查
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
@@ -186,12 +182,10 @@ export function Power() {
             )}
             <div className="text-[11px] text-muted leading-relaxed mt-1">
               {topDays.length && wdTopAvg !== null
-                ? `🔥 ${topDays.map((d) => WEEKDAY_NAMES[d - 1]).join('、')}最费电：平均每天 ${fmtKwh(wdTopAvg)} 度${wdLead === null ? '' : `，比其他天多 ${Math.round(wdLead * 100)}%`}。`
+                ? `${topDays.map((d) => WEEKDAY_NAMES[d - 1]).join('、')}最费电（深色那${topDays.length > 1 ? '几' : ''}根）：平均每天 ${fmtKwh(wdTopAvg)} 度${wdLead === null ? '' : `，比其他天多 ${Math.round(wdLead * 100)}%`}。`
                 : wdFull
                   ? '一周七天差不多，没有哪天特别费电。'
                   : ''}
-              {wdThrift !== null ? `🌿 ${WEEKDAY_NAMES[wdThrift - 1]}最省电：${fmtKwh(wdays[wdThrift - 1].perDay ?? 0)} 度。` : ''}
-              {wdMean !== null ? `七天平均 ${fmtKwh(wdMean)} 度（虚线）。` : ''}
               {!wdFull && wdAny ? '还没记满一周（每个星期几至少要有一个记满的整天），先看个大概。' : ''}
               只算被读数盖满的整天（今天这种还没记完的不算），同一个星期几合起来平均。
             </div>

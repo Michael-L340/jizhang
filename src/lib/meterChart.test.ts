@@ -8,7 +8,6 @@ import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
 import { dailyUsage, hourProfile, parseReading, rateSteps, summarize, weekdayProfile } from './meter'
-import { CHART } from './palette'
 import { dailyOption, hourOption, rateOption, weekdayOption } from './meterChart'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, SVGRenderer])
@@ -94,52 +93,26 @@ describe('一周里哪天最费电', () => {
     v += i % 7 === 5 ? 1200 : 800
   }
 
-  type Bar = { value: number | null; itemStyle: { color: { colorStops: { color: string }[] }; shadowBlur?: number }; label: { show: boolean; formatter: string; rich: { v: { backgroundColor: string } } } }
-  type Opt = {
-    xAxis: { data: string[]; axisLabel: { formatter: (v: string) => string } }
-    series: { animationDelay: (i: number) => number; markLine?: { data: { yAxis: number }[] }; data: Bar[] }[]
-  }
+  type Opt = { xAxis: { data: string[] }; series: { data: { value: number | null; itemStyle: { opacity: number } }[] }[] }
 
-  it('7 根柱子周一到周日都标出来，周六那根焦糖色带 🔥、其余蓝色渐变；每根顶上写度数；周六日标签焦糖色；一根根错开弹起来；平均虚线 8.57；画得出来', () => {
-    // 变异：所有柱子一个颜色 / 🔥 不写 / 不错开 → 各自红；周几标签不全（interval 没设 0）→ 画出来缺「周二」，红
+  it('7 根柱子周一到周日都标出来，周六那根深色、其余浅色（和「几点最费电」一个画法，不带 emoji / 渐变）；画得出来', () => {
+    // 变异：所有柱子一个深浅 → 红；周几标签不全（interval 没设 0）→ 画出来缺「周二」，红
     const o = weekdayOption(weekdayProfile(RW, '2026-10-08')) as Opt
     expect(o.xAxis.data).toEqual(['周一', '周二', '周三', '周四', '周五', '周六', '周日'])
-    expect(o.xAxis.axisLabel.formatter('周六')).toContain('{wk|周六}')
-    expect(o.xAxis.axisLabel.formatter('周三')).toBe('周三')
     const d = o.series[0].data
     expect(d).toHaveLength(7)
     expect(d.map((x) => x.value)).toEqual([8, 8, 8, 8, 8, 12, 8])
-    expect(d.map((x) => x.itemStyle.color.colorStops[0].color)).toEqual([CHART.balance, CHART.balance, CHART.balance, CHART.balance, CHART.balance, CHART.brandInk, CHART.balance])
-    expect(d[5].itemStyle.shadowBlur).toBeGreaterThan(0)
-    expect(d[0].itemStyle.shadowBlur).toBeUndefined()
-    expect(d[5].label.formatter).toContain('🔥')
-    expect(d[5].label.formatter).toContain('12.0')
-    expect(d[0].label.formatter).toBe('{v|8.0}')
-    expect(o.series[0].animationDelay(6)).toBeGreaterThan(o.series[0].animationDelay(0))
-    expect(o.series[0].markLine!.data[0].yAxis).toBe(8.57)
-    expect(d[0].label.rich.v.backgroundColor).toBe(CHART.gap)
+    expect(d.map((x) => x.itemStyle.opacity)).toEqual([0.45, 0.45, 0.45, 0.45, 0.45, 1, 0.45])
     const svg = render(o)
     expect(svg).toContain('<svg')
     for (const w of ['周一', '周二', '周三', '周四', '周五', '周六', '周日']) expect(svg).toContain(`>${w}<`)
-    expect(svg).toContain('🔥')
-    expect(svg).toContain('linearGradient')
-  })
-
-  it('最省电的那根带 🌿；七天差不多时 🔥🌿 都不出现', () => {
-    // 变异：🌿 不写 → 红
-    const low = RW.map((r, i) => ({ ...r, centi_kwh: r.centi_kwh - (i >= 3 ? 400 * Math.floor((i + 4) / 7) : 0) }))
-    const o = weekdayOption(weekdayProfile(low, '2026-10-08')) as Opt
-    const leaf = o.series[0].data.find((x) => x.label.formatter.includes('🌿'))
-    expect(leaf).toBeDefined()
-    const flat = weekdayOption(weekdayProfile(RW.map((r, i) => ({ ...r, centi_kwh: 100000 + i * 800 })), '2026-10-08')) as Opt
-    expect(flat.series[0].data.some((x) => /🔥|🌿/.test(x.label.formatter))).toBe(false)
+    expect(svg).not.toMatch(/🔥|🌿|linearGradient/)
   })
 
   it('一个记满的整天都没有的星期几空着（不是 0）', () => {
     // 变异：没数画 0 → 红
     const o = weekdayOption(weekdayProfile(RW.slice(0, 3), '2026-10-08')) as Opt
     expect(o.series[0].data.map((x) => x.value)).toEqual([8, 8, null, null, null, null, null])
-    expect(o.series[0].data.map((x) => x.label.show)).toEqual([true, true, false, false, false, false, false])
     expect(render(o)).toContain('<svg')
   })
 
