@@ -13,6 +13,7 @@ import { fmtYuan } from '../money'
 import { CHART } from '../palette'
 import { monthSpan } from './span'
 import type { MoreChart, MoreInput } from './types'
+import { esc } from './html'
 
 const KEY = 'radar'
 const TITLE = '支出大类对比'
@@ -59,7 +60,7 @@ export function radarChart(inp: MoreInput): MoreChart {
         trigger: 'item',
         confine: true,
         formatter: (p: { name: string; value: number[] }) =>
-          [p.name, ...fullNames.map((n, i) => `${n}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value[i] ?? 0)}</span>`)].join('<br/>'),
+          [esc(p.name), ...fullNames.map((n, i) => `${esc(n)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value[i] ?? 0)}</span>`)].join('<br/>'),
       },
       radar: {
         indicator: axes.map((_, i) => ({ name: short[i], max, min: 0 })),

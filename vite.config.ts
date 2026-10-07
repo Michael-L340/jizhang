@@ -52,6 +52,8 @@ export default defineConfig({
   ],
   server: {
     host: true,
+    // --host 让同一 Wi-Fi 的设备都能访问开发服务器：原图和密钥文件不许被当静态文件拿走
+    fs: { deny: ['素材/**', '.env', '.env.*'] },
     // 项目在 /mnt/c 下，WSL 无法收到文件变更通知，必须轮询
     watch: { usePolling: true, interval: 300 },
   },

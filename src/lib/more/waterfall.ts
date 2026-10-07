@@ -9,6 +9,7 @@ import { fmtYuan } from '../money'
 import { categoryColor, CHART } from '../palette'
 import { monthSpan } from './span'
 import type { MoreChart, MoreInput } from './types'
+import { esc } from './html'
 
 const yuan = (v: number) => `¥${fmtYuan(Math.round(v * 100))}`
 const axisMoney = (v: number) => (Math.abs(v) >= 10000 ? `${+(v / 10000).toFixed(1)}万` : String(v))
@@ -122,7 +123,7 @@ export function waterfall(inp: MoreInput, axisWidth = WATERFALL_AXIS_W): MoreCha
           if (!ps.length) return ''
           const s = steps[ps[0].dataIndex]
           if (!s) return ''
-          const head = `${s.name}<span style="${RIGHT}">${s.id === 'net' && s.amount < 0 ? '-' : ''}${yuan(Math.abs(s.amount) / 100)}</span>`
+          const head = `${esc(s.name)}<span style="${RIGHT}">${s.id === 'net' && s.amount < 0 ? '-' : ''}${yuan(Math.abs(s.amount) / 100)}</span>`
           const rows = [head]
           if (s.id !== 'income' && s.id !== 'net') {
             if (expense > 0) rows.push(`<span style="opacity:.75">占支出</span><span style="${RIGHT}">${Math.round((s.amount / expense) * 100)}%</span>`)

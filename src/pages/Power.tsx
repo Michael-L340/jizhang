@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState } from 'react'
+import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { Sheet } from '../components/Sheet'
 import { fmtIsoZh, nowIso } from '../lib/date'
@@ -9,6 +9,7 @@ import {
   dailyUsage,
   DAY_MS,
   fmtDuration,
+  fmtHours,
   fmtKwh,
   fmtReading,
   fmtSpan,
@@ -21,7 +22,9 @@ import {
   preview,
   PRICE_KEY,
   rateSteps,
+  readingIssues,
   sortReadings,
+  spreadOf,
   summarize,
   WEEKDAY_NAMES,
   weekdayLead,
@@ -36,6 +39,8 @@ const Chart = lazy(() => import('../components/Chart'))
 
 /** 最近读数列表先列几条，「看全部」再展开 */
 const LIST_FIRST = 8
+/** 列表里没连上的读数那一行写什么（lib/meter.ts 的 readingIssues） */
+const ISSUE_TEXT = { first: '第一次记录', same_time: '同一时刻有两条，按后记的算', outlier: '和前后读数对不上，没算', backward: '比上一次还小，没算' } as const
 
 function readPrice(): number | null {
   try {
@@ -87,6 +92,14 @@ export function Power() {
   const wdLead = weekdayLead(wdays, topDays)
   const wdTopAvg = topDays.length ? wdays.filter((x) => topDays.includes(x.dow)).reduce((n, x) => n + (x.perDay ?? 0), 0) / topDays.length : null
   const ivs = useMemo(() => intervals(readings), [readings])
+  // 列表里每条读数那一行写什么：第一条 / 同一时刻被顶掉 / 和前后对不上 / 比上一次还小
+  const issues = useMemo(() => readingIssues(readings), [readings])
+  const hourSpread = spreadOf(slots.map((x) => x.perHour))
+  const wdSpread = spreadOf(wdays.map((x) => x.perDay))
+  const wdMinDays = Math.min(...wdays.filter((x) => x.perDay !== null).map((x) => x.days))
+  // 半年窗口里有没有隔了两天以上的读数：那几天是平均摊开的，柱子会被抹平
+  const wdLongGap = ivs.some((iv) => iv.hours > 48 && Date.parse(iv.to.read_at) > now.getTime() - 26 * 7 * DAY_MS)
+  const daysAny = days.some((d) => d.coveredHours > 0)
   // 列表里每条读数旁边写「比上一次多几度」：按到达这条的那一段查
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
   const newestFirst = useMemo(() => [...sorted].reverse(), [sorted])
@@ -135,7 +148,7 @@ export function Power() {
                 <span className="text-sm font-normal text-muted"> 度</span>
               </div>
               <div className="text-xs text-muted">
-                {sum.avg7 === null ? '记满一整天之后，这里会写日均' : `近 7 天日均 ${fmtKwh(sum.avg7)} 度`}
+                {sum.avg7 === null ? '记满一整天之后，这里会写日均' : `近 {sum.avgDays} 天日均 ${fmtKwh(sum.avg7)} 度`}
                 {money(sum.today)}
               </div>
             </div>
@@ -153,7 +166,11 @@ export function Power() {
                 {sum.projected === null ? '—' : fmtKwh(sum.projected)}
                 {sum.projected === null ? null : <span className="text-xs font-normal text-muted"> 度</span>}
               </div>
-              <div className="text-xs text-muted num">{sum.projected !== null && price ? `≈ ¥${fmtYuan(costCents(sum.projected, price))}` : sum.projected === null ? '要先有日均' : ' '}</div>
+              <div className="text-xs text-muted num">
+                {sum.projected === null
+                  ? '要先有日均'
+                  : [sum.monthFrom ? `从 ${Number(sum.monthFrom.slice(5, 7))}/${Number(sum.monthFrom.slice(8, 10))} 起算` : '', price ? `≈ ¥${fmtYuan(costCents(sum.projected, price))}` : ''].filter(Boolean).join(' · ') || ' '}
+              </div>
             </div>
           </div>
 
@@ -162,9 +179,13 @@ export function Power() {
               <span className="font-semibold">每天用了多少度</span>
               <span className="text-[11px] text-muted">最近 30 天</span>
             </div>
-            <Suspense fallback={<div style={{ height: 180 }} />}>
-              <Chart option={dailyOption(days, sum.avg7)} height={180} />
-            </Suspense>
+            {daysAny ? (
+              <Suspense fallback={<div style={{ height: 180 }} />}>
+                <Chart option={dailyOption(days, sum.avg7)} height={180} />
+              </Suspense>
+            ) : (
+              <div className="text-sm text-muted py-8 text-center">最近 30 天没有读数</div>
+            )}
             <div className="text-[11px] text-muted leading-relaxed mt-1">读数不用在零点记：两次读数之间用的电，按时间平均分到每一天。浅色的柱子是那天还没算全（比如今天）。</div>
           </div>
 
@@ -184,9 +205,12 @@ export function Power() {
               {topDays.length && wdTopAvg !== null
                 ? `${topDays.map((d) => WEEKDAY_NAMES[d - 1]).join('、')}最费电（深色那${topDays.length > 1 ? '几' : ''}根）：平均每天 ${fmtKwh(wdTopAvg)} 度${wdLead === null ? '' : `，比其他天多 ${Math.round(wdLead * 100)}%`}。`
                 : wdFull
-                  ? '一周七天差不多，没有哪天特别费电。'
+                  ? wdSpread !== null && wdSpread > 1.2
+                    ? '高低有差别，但没有哪天特别突出。'
+                    : '一周七天差不多，没有哪天特别费电。'
                   : ''}
-              {!wdFull && wdAny ? '还没记满一周（每个星期几至少要有一个记满的整天），先看个大概。' : ''}
+              {!wdFull && wdAny ? '还没记满一周（每个星期几至少要有一个记满的整天），先看个大概。' : wdAny && wdMinDays < 3 ? `每个星期几才 ${wdMinDays} 天，先看个大概。` : ''}
+              {wdLongGap ? '有的读数隔了两天以上，那几天是平均摊开的。' : ''}
               只算被读数盖满的整天（今天这种还没记完的不算），同一个星期几合起来平均。
             </div>
           </div>
@@ -211,15 +235,21 @@ export function Power() {
               <span className="font-semibold">一天里几点最费电</span>
               <span className="text-[11px] text-muted">最近 30 天 · 平均每小时几度</span>
             </div>
-            {steps.length || ivs.length ? (
+            {hasSlots ? (
               <Suspense fallback={<div style={{ height: 170 }} />}>
                 <Chart option={hourOption(slots)} height={170} />
               </Suspense>
             ) : (
-              <div className="text-sm text-muted py-8 text-center">记两次以上才画得出来</div>
+              <div className="text-sm text-muted py-8 text-center">{ivs.length ? '最近 30 天没有读数' : '记两次以上才画得出来'}</div>
             )}
             <div className="text-[11px] text-muted leading-relaxed mt-1">
-              {topHours.length ? `最费电的钟点：${topHours.map((h) => `${h} 点`).join('、')}（深色那几根）。` : hasSlots ? '各钟点差不多高（两次读数隔得久就会这样），一天多记几次才看得出。' : ''}
+              {topHours.length
+                ? `最费电的钟点：${fmtHours(topHours)}（深色那${topHours.length > 1 ? '几' : ''}根）。`
+                : hasSlots
+                  ? hourSpread !== null && hourSpread > 1.2
+                    ? '高低有差别，但没有哪几个钟点特别突出。'
+                    : '各钟点差不多高（两次读数隔得久就会这样），一天多记几次才看得出。'
+                  : ''}
               两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。一天记得越勤越准。
             </div>
           </div>
@@ -252,7 +282,7 @@ export function Power() {
                         <span className="block num text-[14px]">{fmtIsoZh(r.read_at)}</span>
                         <span className="block text-[11.5px] text-muted num">读数 {fmtReading(r.centi_kwh)}</span>
                       </span>
-                      <span className="text-[11.5px] text-muted">{r === sorted[0] ? '第一次记录' : '比上一次还小，没算'}</span>
+                      <span className="text-[11.5px] text-muted">{ISSUE_TEXT[issues.get(r.id) ?? 'backward']}</span>
                     </>
                   )}
                 </button>
@@ -279,8 +309,8 @@ export function Power() {
         <EntrySheet
           readings={readings}
           onClose={() => setEntryOpen(false)}
-          onSave={async (centi, at) => {
-            const ok = await addMeterReading({ id: newId(), read_at: new Date(at).toISOString(), centi_kwh: centi, created_at: nowIso() })
+          onSave={async (id, centi, at) => {
+            const ok = await addMeterReading({ id, read_at: new Date(at).toISOString(), centi_kwh: centi, created_at: nowIso() })
             if (ok) setEntryOpen(false)
           }}
         />
@@ -302,6 +332,7 @@ export function Power() {
                 type="button"
                 className="flex-1 chip text-center text-expense"
                 onClick={async () => {
+                  if (!window.confirm('删除这条读数？')) return
                   const ok = await removeMeterReading(picked.id)
                   if (ok) setPicked(null)
                 }}
@@ -316,15 +347,27 @@ export function Power() {
   )
 }
 
-function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; onClose: () => void; onSave: (centi: number, at: number) => Promise<void> }) {
+function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; onClose: () => void; onSave: (id: string, centi: number, at: number) => Promise<void> }) {
   const [text, setText] = useState('')
   const [at, setAt] = useState(() => Date.now())
   const [editTime, setEditTime] = useState(false)
   const [busy, setBusy] = useState(false)
+  // id 在弹层打开时就定下：保存报「失败」但请求其实已经落库时，再点一次是同一条，不会多出一条重复读数
+  const [id] = useState(newId)
   const centi = parseReading(text)
   const p = centi === null ? null : preview(readings, centi, new Date(at))
   const future = at > Date.now() + 60_000
   const ok = centi !== null && !future && !busy
+  // 八成输错了的三种情况：和后一条对不上、比上次多得离谱、这一分钟已有一条。照样能存，但按钮改名提醒
+  const doubt = !p
+    ? ''
+    : p.aboveNext
+      ? `比后面那条（${fmtReading(p.aboveNext.centi_kwh)}，${fmtIsoZh(p.aboveNext.read_at)}）还大，八成输错了。`
+      : p.tooMuch
+        ? '一小时十几度不太可能，是不是漏了小数点？'
+        : p.sameTime
+          ? '这个时间已经有一条读数了，存了会顶掉它。'
+          : ''
 
   return (
     <Sheet open onClose={onClose} title="记一次电表读数">
@@ -341,7 +384,17 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
       </div>
       <div className="text-center text-sm text-muted mt-2">
         {editTime ? (
-          <input type="datetime-local" className="bg-bg rounded-lg px-2 py-1 text-ink" value={toLocalInput(at)} max={toLocalInput(Date.now())} onChange={(e) => e.target.value && setAt(fromLocalInput(e.target.value))} />
+          <input
+            type="datetime-local"
+            className="bg-bg rounded-lg px-2 py-1 text-ink"
+            value={toLocalInput(at)}
+            max={toLocalInput(Date.now())}
+            onChange={(e) => {
+              // 桌面浏览器能敲出五六位的年份，解析出 NaN 再去格式化会整页报错
+              const v = e.target.value ? fromLocalInput(e.target.value) : NaN
+              if (Number.isFinite(v)) setAt(v)
+            }}
+          />
         ) : (
           <>
             时间 <span className="text-ink">现在 {fmtIsoZh(new Date(at).toISOString())}</span>
@@ -372,6 +425,12 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
               上次 {fmtReading(p.prev.centi_kwh)}（{fmtIsoZh(p.prev.read_at)}），过了 {fmtDuration(p.hours)}
               {p.perHour !== null ? `，每小时 ${(p.perHour / 100).toFixed(2)} 度` : ''}
             </span>
+            {doubt ? (
+              <>
+                <br />
+                <span className="text-expense">{doubt}</span>
+              </>
+            ) : null}
           </>
         )}
       </div>
@@ -383,13 +442,14 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
           if (centi === null) return
           setBusy(true)
           try {
-            await onSave(centi, at)
+            // 没点「补记改时间」就按点保存这一刻算，不是弹层打开那一刻（开着放了半小时再存，时间会差半小时）
+            await onSave(id, centi, editTime ? at : Date.now())
           } finally {
             setBusy(false)
           }
         }}
       >
-        {busy ? '保存中…' : '保存'}
+        {busy ? '保存中…' : doubt ? '照样保存' : '保存'}
       </button>
     </Sheet>
   )
@@ -397,6 +457,10 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
 
 function PriceSheet({ open, price, onClose, onSave }: { open: boolean; price: number | null; onClose: () => void; onSave: (v: number | null) => void }) {
   const [text, setText] = useState(price ? String(price) : '')
+  // 每次打开都从现在的电价开始：上次没保存就关掉的输入不能留到这次，不然一点保存就把电价改掉
+  useEffect(() => {
+    if (open) setText(price ? String(price) : '')
+  }, [open, price])
   const v = parsePrice(text)
   return (
     <Sheet open={open} onClose={onClose} title="电价">

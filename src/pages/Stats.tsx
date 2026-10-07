@@ -15,6 +15,7 @@ import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, CHART, childColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
+import { esc } from '../lib/more/html'
 
 const Chart = lazy(() => import('../components/Chart'))
 const yuan = (v: number) => `¥${fmtYuan(Math.round(v * 100))}`
@@ -153,7 +154,7 @@ export function Stats() {
           const head = full(ps[0].dataIndex)
           const rows = ps
             .filter((p) => p.value > 0)
-            .map((p) => `${p.marker}${p.seriesName}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)
+            .map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)
           return [head, ...(rows.length ? rows : ['无支出'])].join('<br/>') + TAP
         },
       },
@@ -231,7 +232,7 @@ export function Stats() {
             const sum = bars.reduce((t, p) => t + p.value, 0)
             const rows = bars.map(
               (p) =>
-                `${p.marker}${p.seriesName}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span><span style="float:right;margin-left:16px;opacity:.6">${Math.round((p.value / sum) * 100)}%</span>`,
+                `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span><span style="float:right;margin-left:16px;opacity:.6">${Math.round((p.value / sum) * 100)}%</span>`,
             )
             const total = `<span style="opacity:.75">合计</span><span style="float:right;margin-left:16px;font-weight:600">${yuan(sum)}</span>`
             return [full(ps[0].dataIndex), ...rows, '<div style="border-top:1px solid rgba(255,255,255,.22);margin:5px 0"></div>', total].join('<br/>') + TAP
@@ -291,7 +292,7 @@ export function Stats() {
         formatter: (ps: { dataIndex: number; marker: string; seriesName: string; value: number }[]) =>
           !ps.length
             ? ''
-            : [full(ps[0].dataIndex), ...ps.map((p) => `${p.marker}${p.seriesName}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)].join('<br/>') + TAP,
+            : [full(ps[0].dataIndex), ...ps.map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)].join('<br/>') + TAP,
       },
       grid: { left: 4, right: 14, top: 16, bottom: 0, containLabel: true },
       xAxis: {

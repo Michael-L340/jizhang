@@ -102,6 +102,9 @@ export function isDuplicateName(e: unknown): boolean {
  */
 export function isPermanentError(e: unknown): boolean {
   const code = (e as { code?: string })?.code
+  // 42501 = 权限不够。登录过期后 supabase-js 拿 anon key 发请求，RLS 一挡就是它——这是「没登上」不是「数据被拒」，
+  // 当成永久失败的话，待传队列会把离线记的账整条删掉（2026-10-08 审出来的）
+  if (code === '42501') return false
   if (typeof code === 'string' && /^(22|23|42)/.test(code)) return true
   const msg = (e as { message?: string })?.message ?? String(e)
   return /violates (check|foreign key|not-null|unique) constraint|duplicate key|does not exist|invalid input syntax/i.test(msg)
@@ -136,7 +139,18 @@ export function friendlyError(e: unknown): string {
  * store 里那把「正在同步」的锁就再也放不开了。每一处查询都要挂 signal，
  * 尤其是分页循环里那个——最容易卡住的恰恰是它。
  */
+/**
+ * 先确认手上有登录态再发请求。supabase-js 在 session 没了（刷新失败、过期）时**不报错**，
+ * 而是拿 anon key 把请求发出去：读回来「零行、无错误」，删除被 RLS 过滤成 0 行也当成功，
+ * 待传队列的插入则吃到 42501。这里把它变成一个明确的错误，走「登录已过期」那条路（会重试、不会删队列）。
+ */
+async function assertSession(): Promise<void> {
+  const { data } = await supabase.auth.getSession()
+  if (!data.session) throw new Error('Auth session missing!')
+}
+
 export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
+  await assertSession()
   const withSignal = <T extends { abortSignal: (s: AbortSignal) => T }>(q: T): T => (signal ? q.abortSignal(signal) : q)
   const [a, c] = await Promise.all([
     withSignal(supabase.from('accounts').select(ACC_COLS).order('sort')),
@@ -163,33 +177,40 @@ export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
     if (data.length < PAGE) break
   }
   // 外页面校准记录一般就几条，但分页写法照抄流水那段：将来多了也不会静默截断
+  // 按 id 翻页（上一页最后一个 id 之后再取一页），不用 offset：两页之间有增删时 offset 会重一条或漏一条
   const facade_adjusts: FacadeAdjust[] = []
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await withSignal(supabase.from('facade_adjusts').select(FA_COLS).order('id').range(from, from + PAGE - 1))
+  for (let after = ''; ; ) {
+    const { data, error } = await withSignal(supabase.from('facade_adjusts').select(FA_COLS).gt('id', after).order('id').limit(PAGE))
     if (error) throw error
     facade_adjusts.push(...(data as FaRow[]).map(rowToFa))
     if (data.length < PAGE) break
+    after = (data[data.length - 1] as FaRow).id
   }
   // 电表读数一天几条，一年上千条，一定要分页（PostgREST 默认一次最多给 1000 行）。
   // 按 id 升序：备份脚本也按 id 升序排这一节，App 导出的 JSON 才能和它逐字节一致
   const meter_readings: MeterReading[] = []
-  for (let from = 0; ; from += PAGE) {
-    const { data, error } = await withSignal(supabase.from('meter_readings').select(MR_COLS).order('id').range(from, from + PAGE - 1))
+  for (let after = ''; ; ) {
+    const { data, error } = await withSignal(supabase.from('meter_readings').select(MR_COLS).gt('id', after).order('id').limit(PAGE))
     if (error) throw error
     meter_readings.push(...(data as MrRow[]).map(rowToMr))
     if (data.length < PAGE) break
+    after = (data[data.length - 1] as MrRow).id
   }
+  // 拉的过程中登录态掉了的话，后半截是拿 anon key 拉的、是空的：整份都不能要
+  await assertSession()
   return { accounts: a.data as Account[], categories: c.data as Category[], transactions, facade_adjusts, meter_readings }
 }
 
 // ---------- 流水 ----------
 
 export async function insertTx(t: Transaction): Promise<void> {
+  await assertSession()
   const { error } = await supabase.from('transactions').insert(txToRow(t))
   if (error) throw error
 }
 
 export async function updateTx(t: Transaction): Promise<void> {
+  await assertSession()
   const { id, created_at: _c, ...rest } = txToRow(t)
   const { error } = await supabase.from('transactions').update(rest).eq('id', id)
   if (error) throw error
@@ -201,11 +222,13 @@ export async function updateTx(t: Transaction): Promise<void> {
  * upsert 两种情况都对，重复执行也安全。
  */
 export async function upsertTx(t: Transaction): Promise<void> {
+  await assertSession()
   const { error } = await supabase.from('transactions').upsert(txToRow(t), { onConflict: 'id' })
   if (error) throw error
 }
 
 export async function deleteTx(id: string): Promise<void> {
+  await assertSession()
   const { error } = await supabase.from('transactions').delete().eq('id', id)
   if (error) throw error
 }
@@ -213,19 +236,32 @@ export async function deleteTx(id: string): Promise<void> {
 // ---------- 外页面校准记录 ----------
 
 export async function insertFacadeAdjust(f: FacadeAdjust): Promise<void> {
+  await assertSession()
   const { error } = await supabase.from('facade_adjusts').insert(f)
   if (error) throw error
 }
 
 // ---------- 电表读数（0011） ----------
 
+/** 整批写电表读数（按 id 覆盖）：导入、恢复失败时写回，都走这里 */
+export async function upsertMeterReadings(rows: MeterReading[]): Promise<void> {
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from('meter_readings').upsert(rows.slice(i, i + 500), { onConflict: 'id' })
+    if (error) throw error
+  }
+}
+
 export async function insertMeterReading(r: MeterReading): Promise<void> {
-  const { error } = await supabase.from('meter_readings').insert(r)
+  await assertSession()
+  // 按 id 覆盖而不是插入：保存报「失败」但其实已经落库时，再点一次保存是同一条，不会变成两条
+  const { error } = await supabase.from('meter_readings').upsert(r, { onConflict: 'id' })
   if (error) throw error
 }
 
 /** 删一个云端不存在的 id 是空操作、不报错：重复点删除是安全的 */
 export async function deleteMeterReading(id: string): Promise<void> {
+  // 没登录态时 DELETE 会被 RLS 过滤成 0 行、不报错，App 当成功，下次同步这条又冒回来
+  await assertSession()
   const { error } = await supabase.from('meter_readings').delete().eq('id', id)
   if (error) throw error
 }
@@ -270,6 +306,7 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  * PostgREST 不允许无条件 delete，每条都带一个「匹配全部」的过滤条件；RLS 保证只删自己的行。
  */
 export async function wipeAll(): Promise<void> {
+  await assertSession()
   const mr = await supabase.from('meter_readings').delete().not('id', 'is', null)
   if (mr.error) wipeFailed('meter_readings', mr.error)
   const fa = await supabase.from('facade_adjusts').delete().not('id', 'is', null)
@@ -309,6 +346,7 @@ function wipeFailed(step: WipeStep, cause: unknown): never {
  * 金额在 txToRow 里过 centsToDb，整数「分」→ numeric 字符串，这是全项目唯一的转换点。
  */
 export async function importAll(snap: Snapshot): Promise<void> {
+  await assertSession()
   const acc = await supabase.from('accounts').upsert(snap.accounts, { onConflict: 'id' })
   if (acc.error) throw acc.error
   // 外页面校准记录只引用账户，账户进去之后就能写；cents 本来就是整数分，不过换算
@@ -317,10 +355,7 @@ export async function importAll(snap: Snapshot): Promise<void> {
     if (error) throw error
   }
   // 电表读数和谁都没有外键，放哪儿都行；centi_kwh 本来就是整数，不过换算
-  for (let i = 0; i < snap.meter_readings.length; i += 500) {
-    const { error } = await supabase.from('meter_readings').upsert(snap.meter_readings.slice(i, i + 500), { onConflict: 'id' })
-    if (error) throw error
-  }
+  await upsertMeterReadings(snap.meter_readings)
   const parents = snap.categories.filter((c) => !c.parent_id)
   const children = snap.categories.filter((c) => c.parent_id)
   const p = await supabase.from('categories').upsert(parents, { onConflict: 'id' })
@@ -350,7 +385,17 @@ export async function changePassword(newPassword: string): Promise<void> {
 }
 
 export async function signOut(): Promise<void> {
-  await supabase.auth.signOut()
+  // scope: 'local' 只退这台设备这个 App：默认的 global 会把同一个账号的其他设备、同一个项目里的交易日志一起踢下线
+  const { error } = await supabase.auth.signOut({ scope: 'local' })
+  if (error) {
+    // 断网（或 token 已过期）时服务端那一步会失败，supabase-js 不清本机的会话，联网后就自动登回去了——
+    // 用户明明点了退出。本机的会话钥匙直接删掉，退出就是退出
+    try {
+      for (const k of Object.keys(localStorage)) if (/^sb-.*-auth-token/.test(k)) localStorage.removeItem(k)
+    } catch {
+      /* 存储被禁用 */
+    }
+  }
 }
 
 /**

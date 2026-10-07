@@ -6,8 +6,10 @@ import { TX_TYPE_LABEL } from '../types'
 import { validateImport } from './validate'
 
 function esc(v: string | null | undefined): string {
-  const s = v ?? ''
-  return /[",\n]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
+  let s = v ?? ''
+  // 以 = + - @ 开头的备注在 Excel 里会被当公式执行（「=HYPERLINK(...)」能把人骗去点链接）：前面垫一个单引号，Excel 就当文字
+  if (/^[=+\-@\t\r]/.test(s)) s = `'${s}`
+  return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
 }
 
 export function buildCsv(snap: Snapshot): string {

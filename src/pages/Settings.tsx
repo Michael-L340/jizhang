@@ -11,6 +11,7 @@ import { checkForUpdate, hardReload } from '../lib/sw'
 import { RestoreFailed, useStore } from '../lib/store'
 import type { Snapshot } from '../types'
 import { effectiveSwipe, readSwipe, SWIPE_LABEL, swipeOptions, writeSwipe, type SwipeConfig } from '../lib/gesture'
+import { outerList } from '../lib/facade'
 
 /**
  * 可点的状态格右上角的小转圈箭头。
@@ -71,6 +72,8 @@ export function Settings() {
     () => ({ accounts, categories, transactions, facade_adjusts, meter_readings }),
     [accounts, categories, transactions, facade_adjusts, meter_readings],
   )
+  // 外页面导出的 CSV 只有外页面那本账（藏掉的、校准行都不在）：导出不能成为绕过外页面的口子
+  const csvSnapshot = useMemo(() => ({ ...snapshot, transactions: outerList(transactions, accounts, mode) }), [snapshot, transactions, accounts, mode])
   const [busy, setBusy] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
   // 用 ref 不用 state：setMode 之后要立刻 click()，ref 是同步的，不用等重渲染
@@ -124,7 +127,7 @@ export function Settings() {
     if (!exportAllowed()) return
     setBusy('csv')
     try {
-      const r = await shareOrDownload(backupFilename('csv', today(), trustworthy), buildCsv(snapshot), 'text/csv')
+      const r = await shareOrDownload(backupFilename('csv', today(), trustworthy), buildCsv(csvSnapshot), 'text/csv')
       showToast(r === 'shared' ? '已打开分享' : '已下载 CSV')
     } finally {
       setBusy('')
@@ -171,14 +174,20 @@ export function Settings() {
         // 两种「这次恢复不太踏实」都要当面说清楚，用户仍可以坚持
         const meta = readExportMeta(text)
         const warn: string[] = []
+        // 0011 之前的老备份里根本没有电表读数这一节：整库恢复会先删光云端的读数、再一条都写不回来。
+        // 文件比功能早不是用户的错，现在的读数原样保留（写进要恢复的快照里）
+        if (!/"meter_readings"\s*:/.test(text) && meter_readings.length) {
+          snap = { ...snap, meter_readings }
+          warn.push(`这个备份文件比「用电记录」早，里面没有电表读数；现在的 ${meter_readings.length} 条读数会原样保留。`)
+        }
         if (meta.synced === false) warn.push('注意：这个备份文件导出时本机还没同步过云端，它自己标了「未同步」，里面的账可能不全。')
         if (!trustworthy) warn.push('注意：这次打开 App 后还没成功同步过。万一恢复中途失败，自动退回用的是本机现在这份数据，可能比云端少几条。')
         // 待传队列不会被恢复清掉——那几笔是用户真记过的账，丢了没处找。
         // 但恢复完它们会补传上去，结果是「备份 + 这几笔」，得先说清楚，不能让人以为恢复完就是备份原样。
         if (outboxCount > 0) warn.push(`注意：还有 ${outboxCount} 笔没上传到云端。恢复完成后它们会自动补上去，所以最终结果是「这个备份文件 + 这 ${outboxCount} 笔」，不是备份文件原样。`)
         const ok = window.confirm(
-          `整库恢复会先删掉云端现在的 ${accounts.length} 个账户、${categories.length} 个分类、${transactions.length} 条流水，` +
-            `再按这个文件重建成 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水。\n\n` +
+          `整库恢复会先删掉云端现在的 ${accounts.length} 个账户、${categories.length} 个分类、${transactions.length} 条流水、${meter_readings.length} 条电表读数，` +
+            `再按这个文件重建成 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水、${snap.meter_readings.length} 条电表读数。\n\n` +
             (warn.length ? `${warn.join('\n\n')}\n\n` : '') +
             '文件已经逐条查过，能导进去。中途万一断网会自动退回操作前的样子。\n\n请先确认这个备份文件还在手机或电脑里。继续？',
         )
@@ -294,7 +303,8 @@ export function Settings() {
       <Group title="备份与恢复">
         {trustworthy ? null : <div className="text-xs text-expense leading-relaxed py-2 border-b border-line">这次打开 App 后还没成功同步过，现在导出的是本机缓存，可能不是最新的。建议先点上面的「同步」。</div>}
         <Item icon="📤" label="导出 CSV" hint="Excel 可打开" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
-        <Item icon="🗂️" label="导出 JSON 备份" hint={trustworthy ? '完整备份，可用于恢复' : '会标记为「未同步」'} action={busy === 'json' ? '…' : '导出'} onClick={exportJson} />
+        {/* JSON 备份是完整账本，只在里页面给；外页面不给这一项（不是改成外页面那本账：半份备份拿去「整库恢复」会丢账） */}
+        {mode === 'inner' ? <Item icon="🗂️" label="导出 JSON 备份" hint={trustworthy ? '完整备份，可用于恢复' : '会标记为「未同步」'} action={busy === 'json' ? '…' : '导出'} onClick={exportJson} /> : null}
         <Item icon="📥" label="合并导入" hint="找回误删的几笔，不删现有数据" action={busy === 'import' ? '…' : '选文件'} onClick={() => pickFile('merge')} />
         <Item icon="♻️" label="整库恢复" hint="先清空，再按备份文件重建" action={busy === 'import' ? '…' : '选文件'} danger onClick={() => pickFile('restore')} />
         {importErr ? <div className="text-xs text-expense leading-relaxed py-2">{importErr}</div> : null}

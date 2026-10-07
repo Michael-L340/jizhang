@@ -57,7 +57,11 @@ function isRealDate(s: string): boolean {
 /** created_at 是 timestamptz not null，写进去的必须是数据库认得的时间 */
 function isTimestamp(v: unknown): v is string {
   if (typeof v !== 'string') return false
-  if (!/^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-]\d{2}:?\d{2}?)?$/.test(v)) return false
+  // 必须带时区（Z 或 ±HH:MM，小时不超过 14）：不带的话 JS 按手机时区解释、数据库按 UTC 解释，会差 8 小时；
+  // ±16:00 以上 JS 能解析但 Postgres 拒收，整库恢复会在中途失败
+  const m = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(:\d{2}(\.\d+)?)?(Z|[+-](\d{2}):(\d{2}))$/.exec(v)
+  if (!m) return false
+  if (m[4] !== undefined && (Number(m[4]) > 14 || Number(m[5]) > 59)) return false
   return isRealDate(v.slice(0, 10)) && !Number.isNaN(Date.parse(v))
 }
 

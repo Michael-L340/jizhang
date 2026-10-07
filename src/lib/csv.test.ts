@@ -253,3 +253,17 @@ describe('导出可不可信', () => {
     expect(readExportMeta('这不是 JSON')).toEqual({ synced: null, lastSync: null })
   })
 })
+
+describe('CSV 里的公式注入（2026-10-08 审出来的）', () => {
+  it('备注以 = + - @ 开头的，前面垫一个单引号，Excel 就当文字不当公式；带回车的加引号', () => {
+    // 变异：去掉垫引号那行 → 红
+    const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [{ ...tx, note: '=HYPERLINK("http://x")' }, { ...tx, id: T2, note: '+86 打车' }, { ...tx, id: '66666666-6666-4666-8666-666666666666', note: '第一行\r第二行' }], facade_adjusts: [], meter_readings: [] }
+    const csv = buildCsv(snap)
+    expect(csv).toContain(',"\'=HYPERLINK(""http://x"")"')
+    expect(csv).toContain(",'+86 打车,")
+    expect(csv).toContain('"第一行\r第二行"')
+    // 金额列不受影响：负数校准照旧是数字
+    const adj: Transaction = { ...tx, id: T2, type: 'adjust', amount: -1250, category_id: null, note: null }
+    expect(buildCsv({ ...snap, transactions: [adj] })).toMatch(/,-12\.50,/)
+  })
+})

@@ -35,13 +35,15 @@ export async function hardReload(): Promise<void> {
   if (!reachable) throw new Error('连不上服务器，联网后再试')
 
   try {
+    // 只动自己这个 App 的：同一个域名下还住着交易日志，它的 Service Worker 和缓存不能被我们的「强制刷新」顺手清掉
+    const mine = new URL(import.meta.env.BASE_URL, location.origin).href
     if ('serviceWorker' in navigator) {
       const regs = await navigator.serviceWorker.getRegistrations()
-      await Promise.all(regs.map((r) => r.unregister()))
+      await Promise.all(regs.filter((r) => r.scope.startsWith(mine)).map((r) => r.unregister()))
     }
     if ('caches' in window) {
       const keys = await caches.keys()
-      await Promise.all(keys.map((k) => caches.delete(k)))
+      await Promise.all(keys.filter((k) => k.includes(mine) || k.includes(import.meta.env.BASE_URL)).map((k) => caches.delete(k)))
     }
   } finally {
     location.reload()

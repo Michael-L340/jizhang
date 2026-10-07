@@ -13,6 +13,7 @@ import { fmtYuan } from '../money'
 import { categoryColor, CHART, childShade } from '../palette'
 import { rangeSpan } from './span'
 import type { MoreChart, MoreInput } from './types'
+import { esc } from './html'
 
 /** 二级最多单列几个；多出来的按金额从小往上合并成一个「其余」 */
 export const SANKEY_MAX_SUBS = 12
@@ -180,8 +181,8 @@ export function sankeyChart(inp: MoreInput): MoreChart {
     confine: true,
     formatter: (p: { dataType?: string; data: { id?: string; source?: string; target?: string; value: number } }) => {
       const v = p.data.value
-      if (p.dataType === 'edge') return `${full.get(p.data.source!)} → ${full.get(p.data.target!)}<br/><b>${yuan(v)}</b>　占 ${pct(v)}`
-      return `${full.get(p.data.id!)}<br/><b>${yuan(v)}</b>　占 ${pct(v)}`
+      if (p.dataType === 'edge') return `${esc(full.get(p.data.source!) ?? '')} → ${esc(full.get(p.data.target!) ?? '')}<br/><b>${yuan(v)}</b>　占 ${pct(v)}`
+      return `${esc(full.get(p.data.id!) ?? '')}<br/><b>${yuan(v)}</b>　占 ${pct(v)}`
     },
   }
 

@@ -719,7 +719,8 @@ export const useStore = create<State>((set, get) => ({
       // 登记为在途：紧接着的一次 refresh 可能还拉不到它，会把它冲掉（和 addFacadeAdjust 一样）
       pendingMr.set(r.id, r)
       settle(settledMr, pendingMr, r.id)
-      set((s) => ({ meter_readings: [...s.meter_readings, r] }))
+      // 同一条可能已经被同步带回来了（插入还没返回时跑了一次 refresh），按 id 去重，别让列表里出现两份
+      set((s) => ({ meter_readings: [...s.meter_readings.filter((x) => x.id !== r.id), r] }))
       get().persist()
       return true
     } catch (e) {
@@ -774,6 +775,15 @@ export const useStore = create<State>((set, get) => ({
       // wipeAll 的第一句（0011 起是删电表读数）就失败 = 云端还没被动过，没什么可回滚的，也别吓唬人。
       // 'facade_adjusts' 已经不是第一句了：它失败时电表读数已经删掉，必须走下面的回滚
       if ((e as Partial<api.WipeFailure>).step === 'meter_readings') {
+        // 「第一句就失败」多半是真没删成；但响应在路上丢了的话，那句 DELETE 其实执行了。
+        // 电表读数写回去是安全的（按 id 覆盖），顺手做一遍，这句话才敢说「还是原来的样子」
+        if (before.meter_readings.length) {
+          try {
+            await api.upsertMeterReadings(before.meter_readings)
+          } catch {
+            /* 没网：本来就没删成 */
+          }
+        }
         throw new RestoreFailed(`恢复失败：${why}。云端一条数据都没删，账本还是原来的样子，联网之后可以再试一次。`)
       }
       // 到这里云端已经被清空（或清了一半），必须立刻把底稿写回去。

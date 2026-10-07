@@ -82,6 +82,14 @@ const h = vi.hoisted(() => {
           rec.filters.push(`eq.${c}.${String(v)}`)
           return b
         },
+        gt(c: string, v: unknown) {
+          rec.filters.push(`gt.${c}.${String(v)}`)
+          return b
+        },
+        limit(n: number) {
+          rec.filters.push(`limit.${n}`)
+          return b
+        },
         then(res: (v: unknown) => unknown, rej: (e: unknown) => unknown) {
           calls.push(rec)
           return Promise.resolve(results.length ? results.shift() : { data: [], error: null }).then(res, rej)
@@ -334,17 +342,18 @@ describe('fetchAll 的中止信号', () => {
     expect(h.calls.every((c) => c.aborted === undefined)).toBe(true)
   })
 
-  it('分页要按主键做 tiebreaker，否则跨页会重复或漏行', async () => {
+  it('分页要按主键做 tiebreaker，否则跨页会重复或漏行；校准记录和电表读数按 id 接着取（keyset），不用 offset', async () => {
     await fetchAll()
     const tx = h.calls.find((c) => c.table === 'transactions')
     expect(tx?.filters).toContain('order.id')
     expect(tx?.filters).toContain('range.0.999')
-    const fa = h.calls.find((c) => c.table === 'facade_adjusts')
-    expect(fa?.filters).toContain('order.id')
-    expect(fa?.filters).toContain('range.0.999')
-    // 电表读数按 id 升序：备份脚本也这么排，导出的 JSON 才能逐字节对得上
-    const mr = h.calls.find((c) => c.table === 'meter_readings')
-    expect(mr?.filters).toEqual(['cols=4', 'order.id', 'range.0.999'])
+    for (const t of ['facade_adjusts', 'meter_readings']) {
+      const c = h.calls.find((x) => x.table === t)
+      expect(c?.filters, t).toContain('gt.id.')
+      expect(c?.filters, t).toContain('order.id')
+      expect(c?.filters, t).toContain('limit.1000')
+      expect(c?.filters.some((f) => f.startsWith('range.')), t).toBe(false)
+    }
   })
 
   it('电表读数满 1000 条要翻下一页，不能静默截断在第一页', async () => {
@@ -352,7 +361,8 @@ describe('fetchAll 的中止信号', () => {
     const page = (from: number, n: number) => ({ data: Array.from({ length: n }, (_, i) => ({ id: `m${from + i}`, read_at: '2026-10-03T13:40:00.000Z', centi_kwh: from + i, created_at: '2026-10-03T13:40:00.000Z' })) })
     h.results.push({ data: [] }, { data: [] }, { data: [] }, { data: [] }, page(0, 1000), page(1000, 3))
     const snap = await fetchAll()
-    expect(h.calls.filter((c) => c.table === 'meter_readings').map((c) => c.filters.at(-1))).toEqual(['range.0.999', 'range.1000.1999'])
+    // 按 id 接着取（上一页最后一个 id 之后），不是 offset：两页之间有增删时 offset 会重一条或漏一条
+    expect(h.calls.filter((c) => c.table === 'meter_readings').map((c) => c.filters.filter((f) => f.startsWith('gt.') || f.startsWith('limit.')).join('+'))).toEqual(['gt.id.+limit.1000', 'gt.id.m999+limit.1000'])
     expect(snap.meter_readings).toHaveLength(1003)
   })
 
@@ -374,10 +384,26 @@ describe('fetchAll 的中止信号', () => {
 describe('电表读数的增删', () => {
   const r: MeterReading = { id: 'm1', read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 339340, created_at: '2026-10-03T13:40:05.000Z' }
 
-  it('新增：整条原样 insert，不改字段', async () => {
+  it('新增：整条原样按 id 覆盖（upsert），不改字段——保存报失败但其实落库了，再点一次不会变成两条', async () => {
+    // 变异：改回 insert → 红
     await insertMeterReading(r)
-    expect(shape()).toEqual(['meter_readings:insert'])
+    expect(shape()).toEqual(['meter_readings:upsert'])
     expect(h.calls[0].rows).toEqual(r)
+    expect(h.calls[0].opts).toEqual({ onConflict: 'id' })
+  })
+
+  it('增、删、拉全量之前都先确认手上有登录态：没有就当「登录已过期」抛出来，不拿 anon key 发请求', async () => {
+    // 变异：去掉 assertSession → 不抛，红
+    const real = h.client.auth.getSession
+    h.client.auth.getSession = async () => ({ data: { session: null }, error: null }) as never
+    try {
+      await expect(insertMeterReading(r)).rejects.toThrow(/session/i)
+      await expect(deleteMeterReading('m1')).rejects.toThrow(/session/i)
+      await expect(fetchAll()).rejects.toThrow(/session/i)
+      expect(h.calls).toHaveLength(0)
+    } finally {
+      h.client.auth.getSession = real
+    }
   })
 
   it('删除：只删这一个 id，绝不能发出不带过滤条件的删除', async () => {
@@ -399,6 +425,12 @@ describe('isPermanentError：分清「没网」和「数据被拒」', () => {
     for (const code of ['22P02', '23503', '23505', '42703']) {
       expect(isPermanentError({ code, message: 'x' }), code).toBe(true)
     }
+  })
+
+  it('42501（权限不够）不是数据被拒：登录过期后拿 anon key 发请求被 RLS 挡下就是它，必须可重传，否则待传队列会把离线记的账删掉', () => {
+    // 变异：去掉 42501 那行 → 红
+    expect(isPermanentError({ code: '42501', message: 'new row violates row-level security policy' })).toBe(false)
+    expect(isPermanentError({ code: '42P01', message: 'relation does not exist' })).toBe(true)
   })
 
   it('没网、超时、登录过期一律可重传——误判成永久失败是当场丢账', () => {

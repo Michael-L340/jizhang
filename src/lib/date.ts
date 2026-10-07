@@ -94,20 +94,21 @@ export function fmtDateRel(ymd: string, ref: string = today()): string {
 }
 
 /** ISO 时间 → 北京时间 'M月D日 HH:mm' */
+// 格式化器只建一次：读数列表、流水列表每行都要用，每次重渲染都 new 一个的话几百行就卡
+const FMT_ZH = new Intl.DateTimeFormat('zh-CN', {
+  timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
+})
+const FMT_HM = new Intl.DateTimeFormat('en-GB', {
+  timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
+})
+
 export function fmtIsoZh(iso: string): string {
-  const d = new Date(iso)
-  const f = new Intl.DateTimeFormat('zh-CN', {
-    timeZone: 'Asia/Shanghai', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit', hour12: false,
-  })
-  return f.format(d)
+  return FMT_ZH.format(new Date(iso))
 }
 
 /** ISO 时间 → 北京时间的 'HH:mm'。hourCycle 写死 h23，否则零点会变成「24:00」 */
 export function fmtIsoTimeZh(iso: string): string {
-  const f = new Intl.DateTimeFormat('en-GB', {
-    timeZone: 'Asia/Shanghai', hour: '2-digit', minute: '2-digit', hourCycle: 'h23',
-  })
-  return f.format(new Date(iso))
+  return FMT_HM.format(new Date(iso))
 }
 
 /**

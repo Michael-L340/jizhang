@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, peakWeekdays, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize, weekdayLead, weekdayOf, weekdayProfile, WEEKDAY_WEEKS, type WeekdaySlot } from './meter'
+import { costCents, dailyUsage, fmtDuration, fmtHours, fmtSpan, hourProfile, peakHours, peakWeekdays, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, readingIssues, spreadOf, summarize, weekdayLead, weekdayOf, weekdayProfile, WEEKDAY_WEEKS, type WeekdaySlot } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -333,5 +333,93 @@ describe('一周里哪天最费电', () => {
         if (x.days > WEEKDAY_WEEKS) expect.fail(`第 ${k} 份：周${x.dow} 有 ${x.days} 天，超过 ${WEEKDAY_WEEKS}`)
       }
     }
+  })
+})
+
+describe('读数输错、同一时刻、并列（2026-10-08 审出来的）', () => {
+  it('少输一位（3380 → 338.4 → 3389.7）：中间那条整条跳过，前后直接连起来算 9.7 度，列表标「和前后对不上」', () => {
+    // 变异：去掉离群点判断 → 338.4→3389.7 那段算成 3051.3 度，红
+    const rs = [R('2026-10-03 07:40', '3380.0'), R('2026-10-03 12:00', '338.4'), R('2026-10-03 18:05', '3389.7')]
+    const ivs = intervals(rs)
+    expect(ivs.map((iv) => fmtKwh(iv.used))).toEqual(['9.7'])
+    expect(readingIssues(rs).get(rs[1].id)).toBe('outlier')
+    expect(readingIssues(rs).get(rs[0].id)).toBe('first')
+  })
+
+  it('漏了小数点（3380 → 33894 → 3389.7）：尖峰那条跳过；换表（3400 → 5 → 12）不是离群点，照旧倒退那段不算', () => {
+    const spike = [R('2026-10-03 07:40', '3380.0'), R('2026-10-03 12:00', '33894'), R('2026-10-03 18:05', '3389.7')]
+    expect(intervals(spike).map((iv) => fmtKwh(iv.used))).toEqual(['9.7'])
+    const swap = [R('2026-10-03 07:40', '3400.0'), R('2026-10-03 12:00', '5.0'), R('2026-10-03 18:05', '12.0')]
+    expect(intervals(swap).map((iv) => fmtKwh(iv.used))).toEqual(['7.0'])
+    expect(readingIssues(swap).get(swap[1].id)).toBe('backward')
+  })
+
+  it('同一时刻两条：按后录的那条算，前一条标「同一时刻」；各段之和 = 首尾之差', () => {
+    // 变异：改回「同一时刻整段跳过」→ 之和 19 ≠ 20，红
+    const a = R('2026-10-03 07:00', '100.0')
+    const b = R('2026-10-03 08:00', '200.0')
+    const c = { ...R('2026-10-03 08:00', '210.0'), created_at: new Date('2026-10-03T08:05:00+08:00').toISOString() }
+    const d = R('2026-10-03 12:00', '300.0')
+    const ivs = intervals([a, b, c, d])
+    expect(ivs.reduce((n, iv) => n + iv.used, 0)).toBe(20000)
+    expect(ivs.map((iv) => iv.to.id)).toEqual([c.id, d.id])
+    expect(readingIssues([a, b, c, d]).get(b.id)).toBe('same_time')
+  })
+
+  it('记之前的预览：补到两条中间却比后一条大 → 指出来；一小时 15 度以上 → 八成漏了小数点；同一分钟已有一条 → 指出来', () => {
+    // 变异：不看后一条 → aboveNext 永远 null，红
+    const rs = [R('2026-10-03 07:40', '3380.0'), R('2026-10-03 18:05', '3389.7')]
+    const mid = preview(rs, parseReading('3395.0')!, at('2026-10-03 12:00'))!
+    expect(mid.aboveNext?.id).toBe(rs[1].id)
+    expect(mid.tooMuch).toBe(false)
+    const big = preview(rs, parseReading('33897')!, at('2026-10-03 21:40'))!
+    expect(big.tooMuch).toBe(true)
+    expect(big.aboveNext).toBeNull()
+    const same = preview(rs, parseReading('3390.0')!, at('2026-10-03 18:05'))!
+    expect(same.sameTime).toBe(true)
+    expect(preview(rs, parseReading('3392.6')!, at('2026-10-03 21:40'))!.sameTime).toBe(false)
+  })
+
+  it('并列不硬切：0 点和 12 点各记一次、下午 12 个钟点一样高 → 12 根全标，不是只标 12、13、14 点；连着的钟点写成「12–23 点」', () => {
+    // 变异：改回 slice(0, 3) → 只有三根，红
+    const rs: MeterReading[] = []
+    for (let d = 1; d <= 5; d++) {
+      rs.push(R(`2026-09-0${d} 00:00`, (3000 + (d - 1) * 8).toFixed(1)), R(`2026-09-0${d} 12:00`, (3003 + (d - 1) * 8).toFixed(1)))
+    }
+    rs.push(R('2026-09-06 00:00', '3040.0'))
+    const slots = hourProfile(rs, Date.parse('2026-09-01T00:00:00+08:00'), Date.parse('2026-09-06T00:00:00+08:00'))
+    expect(peakHours(slots)).toEqual([12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])
+    expect(fmtHours([12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23])).toBe('12–23 点')
+    expect(fmtHours([8, 9, 10, 14])).toBe('8–10 点、14 点')
+    expect(fmtHours([21])).toBe('21 点')
+    expect(spreadOf([100, 100, 300, null])).toBe(3)
+    expect(spreadOf([100, null])).toBeNull()
+  })
+
+  it('「什么时候最费电」不画不到 10 分钟的段（隔几秒的更正会画出几十度/时的尖刺）；每段带真正的起点', () => {
+    // 变异：去掉时长过滤 → 三段，红
+    const rs = [R('2026-10-03 07:40', '3380.0'), R('2026-10-03 07:41', '3380.1'), R('2026-10-03 18:05', '3389.7')]
+    const steps = rateSteps(rs, 0)
+    expect(steps).toHaveLength(1)
+    expect(steps[0].start).toBe(Date.parse(rs[1].read_at))
+    const since = Date.parse('2026-10-03T10:00:00+08:00')
+    const cut = rateSteps(rs, since)
+    expect(cut[0].from).toBe(since)
+    expect(cut[0].start).toBe(Date.parse(rs[1].read_at))
+  })
+
+  it('顶上三个数：日均按几个整天平均要说出来；这个月从哪天开始有读数要说出来', () => {
+    // 变异：avgDays 写死 7 / monthFrom 永远 null → 红
+    const rs = [R('2026-10-03 07:40', '3380.0'), R('2026-10-04 00:00', '3388.0'), R('2026-10-05 00:00', '3396.0'), R('2026-10-05 18:00', '3400.0')]
+    const sum = summarize(rs, at('2026-10-05 21:40'))
+    expect(sum.avgDays).toBe(1)
+    expect(sum.avg7).toBe(800)
+    expect(sum.monthFrom).toBe('2026-10-03')
+    const fromFirst = summarize([R('2026-10-01 00:00', '1.0'), R('2026-10-02 00:00', '9.0')], at('2026-10-02 10:00'))
+    expect(fromFirst.monthFrom).toBeNull()
+  })
+
+  it('fmtSpan 隔整年的同月同日不算同一天', () => {
+    expect(fmtSpan(R('2025-10-03 07:20', '1').read_at, R('2026-10-03 15:20', '2').read_at)).toBe('10/3 07:20 – 10/3 15:20')
   })
 })

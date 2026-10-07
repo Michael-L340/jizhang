@@ -489,3 +489,13 @@ describe('报错要能定位', () => {
     expect(run(f)).toThrow(/这一天不存在/)
   })
 })
+
+describe('时间必须带时区（2026-10-08 审出来的）', () => {
+  it('不带时区的拒收（手机按本地时区解释、数据库按 UTC 解释会差 8 小时）；+16:00 以上拒收（Postgres 不认）；+08:00 和 Z 都收', () => {
+    // 变异：改回原来宽松的正则 → 前两条不抛，红
+    expect(run(tx({ created_at: '2026-09-04T02:00:00' }))).toThrow(/记录时间/)
+    expect(run(tx({ created_at: '2026-09-04T02:00:00+16:00' }))).toThrow(/记录时间/)
+    expect(run(tx({ created_at: '2026-09-04T10:00:00+08:00' }))).not.toThrow()
+    expect(run(tx({ created_at: '2026-09-04T02:00:00.000Z' }))).not.toThrow()
+  })
+})

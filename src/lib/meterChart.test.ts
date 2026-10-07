@@ -7,7 +7,7 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
-import { dailyUsage, hourProfile, parseReading, rateSteps, summarize, weekdayProfile } from './meter'
+import { dailyUsage, hourProfile, parseReading, peakHours, rateSteps, summarize, weekdayProfile } from './meter'
 import { dailyOption, hourOption, rateOption, weekdayOption } from './meterChart'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, SVGRenderer])
@@ -70,7 +70,9 @@ describe('用电记录的图', () => {
     const o = hourOption(slots) as { series: { data: { value: number | null; itemStyle: { opacity: number } }[] }[] }
     const d = o.series[0].data
     expect(d).toHaveLength(24)
-    expect(d.filter((x) => x.itemStyle.opacity === 1)).toHaveLength(3)
+    // 至少三根深色；和第三根一样高的并列一起深色（硬切成三根是误导）
+    expect(d.filter((x) => x.itemStyle.opacity === 1).length).toBeGreaterThanOrEqual(3)
+    expect(d.map((x, h) => (x.itemStyle.opacity === 1 ? h : -1)).filter((h) => h >= 0)).toEqual(peakHours(slots))
     const max = Math.max(...d.map((x) => x.value ?? 0))
     expect(d.find((x) => x.value === max)!.itemStyle.opacity).toBe(1)
     expect(render(o)).toContain('<svg')
@@ -122,5 +124,31 @@ describe('一周里哪天最费电', () => {
     const idx = titles.map((t) => src.indexOf(`<span className="font-semibold">${t}</span>`))
     for (let i = 0; i < titles.length; i++) if (idx[i] < 0) expect.fail(`找不到「${titles[i]}」这张卡`)
     for (let i = 1; i < titles.length; i++) if (idx[i] < idx[i - 1]) expect.fail(`「${titles[i]}」排在「${titles[i - 1]}」前面了`)
+  })
+})
+
+describe('提示框的措辞和找段', () => {
+  it('每天用了多少度：盖了 23.7 小时写「只算了 23 小时」不写 24；不到 1 小时写「不到 1 小时」', () => {
+    // 变异：改回 Math.round → 「只算了 24 小时（还没盖满）」自相矛盾，红
+    const days = dailyUsage([R('2026-10-01 00:20', '3000.0'), R('2026-10-02 00:10', '3010.0')], '2026-10-01', '2026-10-02')
+    const o = dailyOption(days, null) as { tooltip: { formatter: (ps: { dataIndex: number }[]) => string } }
+    expect(o.tooltip.formatter([{ dataIndex: 0 }])).toContain('只算了 23 小时')
+    expect(o.tooltip.formatter([{ dataIndex: 1 }])).toContain('只算了不到 1 小时')
+  })
+
+  it('什么时候最费电：接着的两段，第二段起点往右挪 1 毫秒，提示框在第二段左半边找到的是第二段；写的是整段的起点和总量', () => {
+    // 变异：不挪 → 两段共用一个 x，find 先命中上一段，红
+    const rs = [R('2026-10-05 20:00', '3000.0'), R('2026-10-06 08:00', '3006.0'), R('2026-10-06 20:00', '3012.0')]
+    const since = Date.parse('2026-10-06T00:00:00+08:00')
+    const steps = rateSteps(rs, since)
+    const o = rateOption(steps, since, Date.parse('2026-10-07T00:00:00+08:00')) as { series: { data: [number, number | null][] }[]; tooltip: { formatter: (ps: { value: [number, number | null] }[]) => string } }
+    const pts = o.series[0].data
+    expect(pts[2][0]).toBe(steps[1].from + 1)
+    const tip = o.tooltip.formatter([{ value: pts[2] }])
+    expect(tip).toContain('10/6 08:00 – 10/6 20:00')
+    expect(tip).toContain('一共 6.0 度')
+    // 第一段被 since 截了起点，提示框仍写真正的起点 10/5 20:00、一共 6.0 度
+    expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('10/5 20:00 – 10/6 08:00')
+    expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('一共 6.0 度')
   })
 })

@@ -47,12 +47,59 @@ export interface Interval {
   perHour: number
 }
 
+/** 一条读数为什么没进「两次读数之间」的算法：第一条；同一时刻被后录的那条顶掉；和前后都对不上（孤立的输错）；比上一次还小 */
+export type ReadingIssue = 'first' | 'same_time' | 'outlier' | 'backward'
+
 /**
- * 相邻两次读数之间的一段段。读数倒退的那段（输错了、换表）不算，同一时刻的两条也不算（时长为 0 没法算速度）。
- * 等式：各段 used 之和 = 最后一次 − 第一次（读数没倒退过时），meter.test.ts 拿随机读数守着。
+ * 把读数整理成能连起来算的序列：
+ * - 同一时刻有几条，只留**最后录入**的那条（当作更正）；
+ * - 孤立的离群点整条跳过：比前一条小、而再下一条又不低于前一条（凹坑：少输一位），
+ *   或比后一条大、而后一条不低于前一条（尖峰：漏了小数点）。
+ *   换表那种「掉下去之后再也回不来」不算离群点，照旧按倒退处理（那一段不算用电）。
+ * 没有同一时刻、没有倒退的读数一条都不会被动，所以「各段之和 = 首尾之差」照旧成立。
+ */
+function cleanReadings(rs: MeterReading[]): { kept: MeterReading[]; issues: Map<string, ReadingIssue> } {
+  const s = sortReadings(rs)
+  const issues = new Map<string, ReadingIssue>()
+  const uniq: MeterReading[] = []
+  for (const r of s) {
+    const last = uniq[uniq.length - 1]
+    if (last && Date.parse(last.read_at) === Date.parse(r.read_at)) {
+      issues.set(last.id, 'same_time')
+      uniq[uniq.length - 1] = r
+    } else uniq.push(r)
+  }
+  const kept: MeterReading[] = []
+  for (let i = 0; i < uniq.length; i++) {
+    const cur = uniq[i]
+    const prev = kept[kept.length - 1]
+    const next = uniq[i + 1]
+    if (prev && next) {
+      const dip = cur.centi_kwh < prev.centi_kwh && next.centi_kwh >= prev.centi_kwh
+      const spike = cur.centi_kwh > next.centi_kwh && next.centi_kwh >= prev.centi_kwh
+      if (dip || spike) {
+        issues.set(cur.id, 'outlier')
+        continue
+      }
+    }
+    kept.push(cur)
+  }
+  if (kept.length) issues.set(kept[0].id, 'first')
+  for (let i = 1; i < kept.length; i++) if (kept[i].centi_kwh < kept[i - 1].centi_kwh) issues.set(kept[i].id, 'backward')
+  return { kept, issues }
+}
+
+/** 每条读数在算法里的待遇（列表那一行写什么）；正常连上了的不在表里 */
+export function readingIssues(rs: MeterReading[]): Map<string, ReadingIssue> {
+  return cleanReadings(rs).issues
+}
+
+/**
+ * 相邻两次读数之间的一段段（先过 cleanReadings）。读数倒退的那段（换表）不算。
+ * 等式：各段 used 之和 = 最后一次 − 第一次（读数没倒退过、没有同一时刻的两条时），meter.test.ts 拿随机读数守着。
  */
 export function intervals(rs: MeterReading[]): Interval[] {
-  const s = sortReadings(rs)
+  const s = cleanReadings(rs).kept
   const out: Interval[] = []
   for (let i = 1; i < s.length; i++) {
     const from = s[i - 1]
@@ -99,7 +146,10 @@ export interface DayUsage {
 
 /** start..end（含两端，北京时间）每天用了多少 */
 export function dailyUsage(rs: MeterReading[], start: string, end: string): DayUsage[] {
-  const ivs = intervals(rs)
+  const lo = dayStart(start)
+  const hi = dayStart(end) + DAY_MS
+  // 只留和这段日子有交集的段：半年的星期几统计对每一天都要扫一遍，读数攒到几千条时别每天都扫全部
+  const ivs = intervals(rs).filter((iv) => Date.parse(iv.to.read_at) > lo && Date.parse(iv.from.read_at) < hi)
   const out: DayUsage[] = []
   for (let t = dayStart(start); t <= dayStart(end); t += DAY_MS) {
     let covered = 0
@@ -114,14 +164,18 @@ export function dailyUsage(rs: MeterReading[], start: string, end: string): DayU
 }
 
 export interface PowerSummary {
-  /** 今天零点到最后一次读数用了多少 */
+  /** 今天零点到最后一次读数用了多少（0.01 度）；今天还没记就是 0 */
   today: number
-  /** 这个月 1 号零点到最后一次读数 */
+  /** 这个月到最后一次读数用了多少（0.01 度） */
   month: number
-  /** 最近 7 个整天（不含今天、只算被读数盖满的天）的日均；凑不够一天就是 null */
+  /** 最近 7 天里被读数盖满的整天的平均（0.01 度）；一个整天都没有就 null */
   avg7: number | null
-  /** 这个月预计：已经用的 + 日均 × 这个月剩下的时间（从最后一次读数算到月底）；没有日均就是 null */
+  /** 日均是按几个整天平均的（0–7），标题要写「近 N 天日均」，别在只有两天时说「近 7 天」 */
+  avgDays: number
+  /** 本月预计 = 已用 + 日均 × 最后一次读数到月底；没有日均就 null */
   projected: number | null
+  /** 这个月是从哪天开始有读数的（北京日期）；从 1 号就有、或这个月还没读数，就是 null */
+  monthFrom: string | null
 }
 
 /** 顶上三个大数字。now 只用来定「今天」「这个月」是哪天 */
@@ -138,10 +192,15 @@ export function summarize(rs: MeterReading[], now: Date): PowerSummary {
   const avg7 = full.length ? full.reduce((s, d) => s + d.used, 0) / full.length : null
   const last = ivs.length ? Date.parse(ivs[ivs.length - 1].to.read_at) : null
   const projected = avg7 === null || last === null ? null : month + (avg7 * Math.max(0, m1 - Math.max(last, m0))) / DAY_MS
-  return { today, month, avg7, projected }
+  const first = ivs.length ? Date.parse(ivs[0].from.read_at) : null
+  const monthFrom = first !== null && first > m0 + DAY_MS - 1 && first < m1 ? dayOf(first) : null
+  return { today, month, avg7, avgDays: full.length, projected, monthFrom }
 }
 
-/** 记一次之前，输入框底下那句「比上次多 2.9 度」：上一次读数（按时间，不按录入先后）和它比 */
+/** 一小时用到这么多度（0.01 度）基本不可能是真的（家里同时开十几台空调），八成是漏了小数点 */
+export const BIG_PER_HOUR = 1500
+
+/** 记一次之前，输入框底下那句「比上次多 2.9 度」：上一次读数（按时间，不按录入先后）和它比，再和下一条对一对 */
 export interface Preview {
   prev: MeterReading
   used: number
@@ -149,16 +208,34 @@ export interface Preview {
   perHour: number | null
   /** 比上一次还小：是输错了，还是换表了 */
   lower: boolean
+  /** 这个时间已经有一条读数了（补记到同一分钟） */
+  sameTime: boolean
+  /** 补记到两条中间、却比后面那条还大：八成输错了 */
+  aboveNext: MeterReading | null
+  /** 比上次多得离谱（每小时 ≥ BIG_PER_HOUR）：八成漏了小数点 */
+  tooMuch: boolean
 }
 
 export function preview(rs: MeterReading[], centi: number, at: Date): Preview | null {
   const t = at.getTime()
-  const before = sortReadings(rs).filter((r) => Date.parse(r.read_at) <= t)
+  const sorted = sortReadings(rs)
+  const before = sorted.filter((r) => Date.parse(r.read_at) <= t)
   const prev = before[before.length - 1]
   if (!prev) return null
+  const next = sorted.find((r) => Date.parse(r.read_at) > t) ?? null
   const hours = (t - Date.parse(prev.read_at)) / HOUR_MS
   const used = centi - prev.centi_kwh
-  return { prev, used, hours, perHour: hours > 0 && used >= 0 ? used / hours : null, lower: used < 0 }
+  const perHour = hours > 0 && used >= 0 ? used / hours : null
+  return {
+    prev,
+    used,
+    hours,
+    perHour,
+    lower: used < 0,
+    sameTime: Date.parse(prev.read_at) === t,
+    aboveNext: next && centi > next.centi_kwh ? next : null,
+    tooMuch: perHour !== null && perHour >= BIG_PER_HOUR,
+  }
 }
 
 /** 「过了 3 小时 35 分」 */
@@ -177,13 +254,10 @@ export function fmtDuration(hours: number): string {
  * 列表里一行就是一段（用户 2026-10-05：「应该展示区间，比如 7.20-15.20」）。
  */
 export function fmtSpan(fromIso: string, toIso: string): string {
-  const day = (iso: string) => {
-    const d = dayOf(Date.parse(iso))
-    return `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
-  }
-  const a = day(fromIso)
-  const b = day(toIso)
-  return a === b ? `${a} ${fmtIsoTimeZh(fromIso)}–${fmtIsoTimeZh(toIso)}` : `${a} ${fmtIsoTimeZh(fromIso)} – ${b} ${fmtIsoTimeZh(toIso)}`
+  const md = (d: string) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
+  const a = dayOf(Date.parse(fromIso))
+  const b = dayOf(Date.parse(toIso))
+  return a === b ? `${md(a)} ${fmtIsoTimeZh(fromIso)}–${fmtIsoTimeZh(toIso)}` : `${md(a)} ${fmtIsoTimeZh(fromIso)} – ${md(b)} ${fmtIsoTimeZh(toIso)}`
 }
 
 export interface HourSlot {
@@ -230,13 +304,39 @@ function standouts(vals: (number | null)[], max: number): number[] {
   const have = vals.filter((v): v is number => v !== null).sort((a, b) => a - b)
   if (!have.length) return []
   const mid = have.length % 2 ? have[(have.length - 1) / 2] : (have[have.length / 2 - 1] + have[have.length / 2]) / 2
-  return vals
+  const high = vals
     .map((v, i) => ({ v, i }))
     .filter((x): x is { v: number; i: number } => x.v !== null && x.v > 0 && x.v >= mid * PEAK_RATIO)
     .sort((a, b) => b.v - a.v)
-    .slice(0, max)
+  // 超过 max 格时在第 max 格处切，但并列的一起留下：读数稀的时候一段读数盖住的几个钟点逐位相等，
+  // 硬切成「8、9、10 点最费电」而 11–19 点一样高却是浅色，是误导
+  const cut = high.length > max ? high[max - 1].v : -Infinity
+  return high
+    .filter((x) => x.v >= cut)
     .map((x) => x.i)
     .sort((a, b) => a - b)
+}
+
+/** 「20–22 点」「8–10 点、14 点」：连着的钟点并成一段 */
+export function fmtHours(hours: number[]): string {
+  const hs = [...hours].sort((a, b) => a - b)
+  const parts: string[] = []
+  for (let i = 0; i < hs.length; ) {
+    let j = i
+    while (j + 1 < hs.length && hs[j + 1] === hs[j] + 1) j++
+    parts.push(j > i ? `${hs[i]}–${hs[j]} 点` : `${hs[i]} 点`)
+    i = j + 1
+  }
+  return parts.join('、')
+}
+
+/** 有数的格子里最高和最低差多少倍（1 = 一样高）；不到两格有数就 null */
+export function spreadOf(vals: (number | null)[]): number | null {
+  const have = vals.filter((v): v is number => v !== null)
+  if (have.length < 2) return null
+  const lo = Math.min(...have)
+  const hi = Math.max(...have)
+  return lo > 0 ? hi / lo : hi > 0 ? Infinity : 1
 }
 
 /**
@@ -322,11 +422,17 @@ export function costCents(centi: number, price: number): number {
   return Math.round(centi * price)
 }
 
-/** 「什么时候最费电」那张图：从 since 起每一段读数的平均速度（度/小时），画成台阶 */
-export function rateSteps(rs: MeterReading[], since: number): { from: number; to: number; perHour: number }[] {
+/** 「什么时候最费电」里不画比这还短的段：隔几秒的更正读数会画出几十度/时的尖刺，把整张图压扁 */
+export const MIN_STEP_MS = 10 * 60_000
+
+/**
+ * 「什么时候最费电」那张图：从 since 起每一段读数的平均速度（度/小时），画成台阶。
+ * from 是画图用的起点（被 since 截过），start 是这段真正的起点（提示框写它）。
+ */
+export function rateSteps(rs: MeterReading[], since: number): { from: number; to: number; start: number; perHour: number }[] {
   return intervals(rs)
-    .filter((iv) => Date.parse(iv.to.read_at) > since)
-    .map((iv) => ({ from: Math.max(since, Date.parse(iv.from.read_at)), to: Date.parse(iv.to.read_at), perHour: iv.perHour / 100 }))
+    .filter((iv) => Date.parse(iv.to.read_at) > since && Date.parse(iv.to.read_at) - Date.parse(iv.from.read_at) >= MIN_STEP_MS)
+    .map((iv) => ({ from: Math.max(since, Date.parse(iv.from.read_at)), to: Date.parse(iv.to.read_at), start: Date.parse(iv.from.read_at), perHour: iv.perHour / 100 }))
 }
 
 export { dayOf as beijingDayOf, dayStart as beijingDayStart, DAY_MS, HOUR_MS }
