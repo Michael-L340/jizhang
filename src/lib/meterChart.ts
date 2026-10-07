@@ -1,5 +1,5 @@
-// 用电记录页的两张图（ECharts option）。纯函数，颜色只走 palette.CHART。
-import { fmtKwh, peakHours, type DayUsage, type HourSlot } from './meter'
+// 用电记录页的几张图（ECharts option）。纯函数，颜色只走 palette.CHART。
+import { fmtKwh, peakHours, peakWeekdays, thriftWeekday, WEEKDAY_NAMES, weekdayMean, type DayUsage, type HourSlot, type WeekdaySlot } from './meter'
 import { CHART } from './palette'
 
 const AXIS = { axisLine: { lineStyle: { color: CHART.axis } }, axisTick: { show: false }, axisLabel: { color: CHART.label, fontSize: 10 } }
@@ -159,6 +159,115 @@ export function hourOption(slots: HourSlot[]) {
           value: x.perHour === null ? null : Math.round(x.perHour) / 100,
           itemStyle: { color: CHART.balance, opacity: top.has(x.hour) ? 1 : 0.45, borderRadius: [3, 3, 0, 0] },
         })),
+      },
+    ],
+  }
+}
+
+/** 调色板里的色值加个透明度（渐变的浅端、柱子的影子），不用另写一个色值 */
+const alpha = (hex: string, a: number) => {
+  const n = parseInt(hex.slice(1), 16)
+  return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`
+}
+/** 从上到下由深到浅的竖向渐变 */
+const fade = (hex: string, bottom = 0.35) => ({ type: 'linear', x: 0, y: 0, x2: 0, y2: 1, colorStops: [{ offset: 0, color: hex }, { offset: 1, color: alpha(hex, bottom) }] })
+
+/**
+ * 一周里哪天最费电：7 根柱子，周一到周日，高度 = 这个星期几平均每天几度（weekdayProfile）。
+ * 用户 2026-10-08 要「多花哨就多花哨」：柱子是渐变的、一根根弹起来（elasticOut，错开 70ms），每根顶上写度数，
+ * 最费电的那一两根（peakWeekdays）换成焦糖色、带 🔥 和影子，最省电的那根（thriftWeekday）带 🌿，
+ * 周六日的标签是焦糖色，再加一条七天平均的虚线。七天差不多时一根都不标。一个记满的整天都没有的星期几空着。
+ */
+export function weekdayOption(slots: WeekdaySlot[]) {
+  const top = new Set(peakWeekdays(slots))
+  const thrift = thriftWeekday(slots)
+  const mean = weekdayMean(slots)
+  const rich = {
+    fire: { fontSize: 13, lineHeight: 16, align: 'center' },
+    leaf: { fontSize: 12, lineHeight: 15, align: 'center' },
+    // 数字垫一块白底：平均虚线正好从柱顶穿过时，字不会和虚线叠成一团
+    hot: { fontSize: 11, fontWeight: 'bold', color: CHART.brandInk, lineHeight: 14, align: 'center', backgroundColor: CHART.gap, padding: [1, 3], borderRadius: 3 },
+    v: { fontSize: 10, color: CHART.label, lineHeight: 13, align: 'center', backgroundColor: CHART.gap, padding: [1, 3], borderRadius: 3 },
+  }
+  return {
+    animationDuration: 800,
+    animationEasing: 'elasticOut' as const,
+    grid: { left: 4, right: 8, top: 34, bottom: 0, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      axisPointer: { type: 'shadow' },
+      formatter: (ps: { dataIndex: number }[]) => {
+        const x = slots[ps[0]?.dataIndex ?? 0]
+        if (!x) return ''
+        const name = WEEKDAY_NAMES[x.dow - 1]
+        if (x.perDay === null) return `${name}<br/>还没有记满一整天的${name}`
+        const tag = top.has(x.dow) ? ' 🔥 最费电' : x.dow === thrift ? ' 🌿 最省电' : ''
+        const vs = mean === null || mean <= 0 ? '' : `<br/>比七天平均${x.perDay >= mean ? '多' : '少'} ${Math.round(Math.abs(x.perDay / mean - 1) * 100)}%`
+        return `${name}${tag}<br/><b>平均每天 ${fmtKwh(x.perDay)} 度</b>${vs}<br/><span style="opacity:.7">按 ${x.days} 个${name}平均</span>`
+      },
+    },
+    xAxis: {
+      type: 'category',
+      data: slots.map((x) => WEEKDAY_NAMES[x.dow - 1]),
+      ...AXIS,
+      axisLabel: {
+        ...AXIS.axisLabel,
+        interval: 0,
+        formatter: (v: string) => (v === '周六' || v === '周日' ? `{wk|${v}}` : v),
+        rich: { wk: { color: CHART.brandInk, fontWeight: 'bold', fontSize: 10 } },
+      },
+    },
+    yAxis: {
+      type: 'value',
+      name: '度/天',
+      nameTextStyle: { color: CHART.label, fontSize: 10, align: 'right' },
+      axisLabel: { color: CHART.label, fontSize: 10 },
+      splitLine: SPLIT,
+      // 顶上要放 🔥 和度数，留两成空
+      max: (v: { max: number }) => Math.ceil(Math.max(1, v.max * 1.22) * 10) / 10,
+    },
+    series: [
+      {
+        name: '平均每天用电',
+        type: 'bar',
+        barMaxWidth: 22,
+        showBackground: true,
+        backgroundStyle: { color: alpha(CHART.axis, 0.55), borderRadius: [6, 6, 6, 6] },
+        animationDelay: (i: number) => i * 70,
+        data: slots.map((x) => {
+          const hot = top.has(x.dow)
+          const leaf = x.dow === thrift
+          const hex = hot ? CHART.brandInk : CHART.balance
+          const num = x.perDay === null ? '' : fmtKwh(x.perDay)
+          return {
+            value: x.perDay === null ? null : Math.round(x.perDay) / 100,
+            itemStyle: {
+              color: fade(hex),
+              borderRadius: [6, 6, 2, 2],
+              ...(hot ? { shadowBlur: 8, shadowColor: alpha(hex, 0.35), shadowOffsetY: 3 } : {}),
+            },
+            label: {
+              show: x.perDay !== null,
+              position: 'top',
+              distance: 3,
+              formatter: hot ? `{fire|🔥}\n{hot|${num}}` : leaf ? `{leaf|🌿}\n{v|${num}}` : `{v|${num}}`,
+              rich,
+            },
+          }
+        }),
+        ...(mean === null
+          ? {}
+          : {
+              markLine: {
+                silent: true,
+                symbol: 'none',
+                animation: false,
+                data: [{ yAxis: Math.round(mean) / 100 }],
+                lineStyle: { type: 'dashed', color: CHART.brandInk, width: 1, opacity: 0.7 },
+                label: { show: false },
+              },
+            }),
       },
     ],
   }

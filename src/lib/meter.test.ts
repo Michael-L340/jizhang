@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize } from './meter'
+import { costCents, dailyUsage, fmtDuration, fmtSpan, hourProfile, peakHours, peakWeekdays, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, summarize, thriftWeekday, weekdayLead, weekdayMean, weekdayOf, weekdayProfile, WEEKDAY_WEEKS, type WeekdaySlot } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -222,5 +222,125 @@ describe('一天里几点最费电', () => {
     const flat = Array.from({ length: 24 }, (_, h) => slot(h, 35 + (h % 3)))
     expect(peakHours(flat)).toEqual([])
     expect(peakHours(Array.from({ length: 24 }, (_, h) => slot(h, null)))).toEqual([])
+  })
+})
+
+describe('一周里哪天最费电', () => {
+  const DAY = 86400_000
+  /** 从 from 到 to 每天零点记一次，第 i 天（from 是第 0 天）用 kwh(i, 日期) 度；读数从 1000.00 起 */
+  const daily = (from: string, to: string, kwh: (i: number, ymd: string) => number): MeterReading[] => {
+    const out: MeterReading[] = []
+    let v = 100000
+    const t0 = at(`${from} 00:00`).getTime()
+    for (let t = t0, i = 0; t <= at(`${to} 00:00`).getTime(); t += DAY, i++) {
+      const ymd = new Date(t + 8 * 3600_000).toISOString().slice(0, 10)
+      out.push(R(`${ymd} 00:00`, (v / 100).toFixed(2)))
+      v += Math.round(kwh(i, ymd) * 100)
+    }
+    return out
+  }
+  const slot = (dow: number, perDay: number | null): WeekdaySlot => ({ dow, perDay, days: perDay === null ? 0 : 5 })
+  const mk = (vals: (number | null)[]) => vals.map((v, i) => slot(i + 1, v))
+
+  it('周几：2026-10-08 是周四；周日是 7 不是 0', () => {
+    // 变异：直接用 getUTCDay()（周日 = 0）→ 红
+    expect(weekdayOf('2026-10-08')).toBe(4)
+    expect(weekdayOf('2026-10-11')).toBe(7)
+    expect(weekdayOf('2026-10-12')).toBe(1)
+  })
+
+  it('8/1（周六）起每天零点记一次到 10/9 零点，周六 12 度、别的天 8 度，10/8 看：周六那根 12 度、其余 8 度；周一到周三、周六日各 10 天，周四五各 9 天（今天 10/8 虽然记满了也不算）', () => {
+    // 变异：周几错一位 → 12 度落到周日那根，红；窗口把今天算进去 → 周四变 10 天，红
+    const rs = daily('2026-08-01', '2026-10-09', (i) => (i % 7 === 0 ? 12 : 8))
+    const w = weekdayProfile(rs, '2026-10-08')
+    expect(w.map((x) => x.dow)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(w.map((x) => x.perDay)).toEqual([800, 800, 800, 800, 800, 1200, 800])
+    expect(w.map((x) => x.days)).toEqual([10, 10, 10, 9, 9, 10, 10])
+  })
+
+  it('只算记满的整天：第一天中午才开始记、最后一天没记完，这两天都不算', () => {
+    // 变异：盖了一部分的天也算 → 周六（10/3 中午起只盖半天）多出一根，红
+    const rs = [R('2026-10-03 12:00', '1000.0'), R('2026-10-04 00:00', '1004.0'), R('2026-10-05 00:00', '1012.0'), R('2026-10-05 12:00', '1015.0')]
+    const w = weekdayProfile(rs, '2026-10-06')
+    expect(w.map((x) => x.perDay)).toEqual([null, null, null, null, null, null, 800])
+    expect(w.map((x) => x.days)).toEqual([0, 0, 0, 0, 0, 0, 1])
+  })
+
+  it(`窗口 = 今天的前一天往回整整 ${WEEKDAY_WEEKS} 周：今天 10/8，4/9 那天的 100 度算进来，4/8 的不算`, () => {
+    // 变异：窗口多一天或少一天 → 红
+    const spike = (day: string) => daily('2026-01-01', '2026-10-08', (_, ymd) => (ymd === day ? 100 : 8))
+    const inWin = weekdayProfile(spike('2026-04-09'), '2026-10-08')
+    expect(inWin[3].days).toBe(26)
+    expect(inWin[3].perDay).toBeCloseTo((25 * 800 + 10000) / 26, 6)
+    const outWin = weekdayProfile(spike('2026-04-08'), '2026-10-08')
+    expect(outWin.map((x) => x.perDay)).toEqual([800, 800, 800, 800, 800, 800, 800])
+    expect(outWin.map((x) => x.days)).toEqual([26, 26, 26, 26, 26, 26, 26])
+  })
+
+  it('最费电的那一两天：周末明显高 → 两天；七天差不多 → 不挑；三天都高也只标两根；只有一天有数 → 不挑', () => {
+    // 变异：最多挑 3 个 → 第三组红
+    expect(peakWeekdays(mk([800, 800, 800, 800, 800, 1200, 1100]))).toEqual([6, 7])
+    expect(peakWeekdays(mk([800, 820, 790, 810, 800, 830, 805]))).toEqual([])
+    expect(peakWeekdays(mk([1300, 800, 800, 800, 800, 1200, 1100]))).toEqual([1, 6])
+    expect(peakWeekdays(mk([null, null, null, null, null, 800, null]))).toEqual([])
+  })
+
+  it('最省电的那一天：明显比一般低的最低那天；七天差不多 → 不挑；七天平均', () => {
+    // 变异：门槛写成 < 中位数 → 第二组挑出 790，红
+    expect(thriftWeekday(mk([800, 800, 800, 800, 800, 1200, 600]))).toBe(7)
+    expect(thriftWeekday(mk([800, 820, 790, 810, 800, 830, 805]))).toBeNull()
+    expect(thriftWeekday(mk([null, null, null, null, null, 800, null]))).toBeNull()
+    expect(weekdayMean(mk([800, 800, 800, 800, 800, 1200, 800]))).toBeCloseTo(6000 / 7, 9)
+    expect(weekdayMean(mk([null, null, null, null, null, null, null]))).toBeNull()
+  })
+
+  it('「比其他天多几成」：周六 12 度、其余 8 度 → 多 50%；其余天都没数 → 不说', () => {
+    expect(weekdayLead(mk([800, 800, 800, 800, 800, 1200, 800]), [6])).toBeCloseTo(0.5, 9)
+    expect(weekdayLead(mk([null, null, null, null, null, 1200, null]), [6])).toBeNull()
+    expect(weekdayLead(mk([800, 800, 800, 800, 800, 1200, 800]), [])).toBeNull()
+  })
+
+  it('不变量（随机读数，从不倒退）：Σ 每个星期几（平均每天几度 × 天数）= 窗口里记满的整天用掉的电，整天数也对得上；没数 ⇔ 0 天；每个星期几最多 26 天', () => {
+    let s = 20261008
+    const rnd = () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 2 ** 32)
+    const today = '2026-10-08'
+    const t0 = at(`${today} 00:00`).getTime()
+    for (let k = 0; k < 200; k++) {
+      let v = 300000
+      let t = Date.parse('2026-03-20T00:00:00+08:00') + Math.floor(rnd() * 40 * DAY)
+      const rs: MeterReading[] = []
+      for (let i = 0; i < 2 + Math.floor(rnd() * 150); i++) {
+        t += 60_000 + Math.floor(rnd() * 40 * 3600_000)
+        v += Math.floor(rnd() * 900)
+        rs.push({ id: `w${k}-${i}`, read_at: new Date(t).toISOString(), centi_kwh: v, created_at: new Date(t).toISOString() })
+      }
+      // 独立口径：读数之间线性插值；「记满的整天」= 第一次读数不晚于这天零点、最后一次不早于第二天零点
+      const pts = rs.map((r) => [Date.parse(r.read_at), r.centi_kwh] as const)
+      const valueAt = (x: number) => {
+        let i = 0
+        while (i + 1 < pts.length && pts[i + 1][0] <= x) i++
+        if (i + 1 >= pts.length) return pts[i][1]
+        const [a, va] = pts[i]
+        const [b, vb] = pts[i + 1]
+        return va + ((vb - va) * (x - a)) / (b - a)
+      }
+      let want = 0
+      let n = 0
+      for (let d = t0 - WEEKDAY_WEEKS * 7 * DAY; d < t0; d += DAY) {
+        if (pts[0][0] <= d && pts[pts.length - 1][0] >= d + DAY) {
+          want += valueAt(d + DAY) - valueAt(d)
+          n++
+        }
+      }
+      const w = weekdayProfile(rs, today)
+      const got = w.reduce((a, x) => a + (x.perDay ?? 0) * x.days, 0)
+      const days = w.reduce((a, x) => a + x.days, 0)
+      if (days !== n) expect.fail(`第 ${k} 份：算了 ${days} 个整天，应该是 ${n} 个`)
+      if (Math.abs(got - want) > 1e-6) expect.fail(`第 ${k} 份：合计 ${got} ≠ 用掉的 ${want}`)
+      for (const x of w) {
+        if ((x.perDay === null) !== (x.days === 0)) expect.fail(`第 ${k} 份：周${x.dow} 没数和 0 天对不上`)
+        if (x.days > WEEKDAY_WEEKS) expect.fail(`第 ${k} 份：周${x.dow} 有 ${x.days} 天，超过 ${WEEKDAY_WEEKS}`)
+      }
+    }
   })
 })

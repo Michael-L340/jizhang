@@ -1,5 +1,5 @@
 /// <reference types="node" />
-// 用电记录页的两张图：真画一遍（SSR），不报错、该空的空、颜色不写死。
+// 用电记录页的几张图：真画一遍（SSR），不报错、该空的空、颜色不写死。
 import { readFileSync } from 'node:fs'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
@@ -7,8 +7,9 @@ import { GridComponent, TooltipComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
-import { dailyUsage, hourProfile, parseReading, rateSteps, summarize } from './meter'
-import { dailyOption, hourOption, rateOption } from './meterChart'
+import { dailyUsage, hourProfile, parseReading, rateSteps, summarize, weekdayProfile } from './meter'
+import { CHART } from './palette'
+import { dailyOption, hourOption, rateOption, weekdayOption } from './meterChart'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, SVGRenderer])
 
@@ -81,5 +82,72 @@ describe('用电记录的图', () => {
       const src = readFileSync(new URL(f, import.meta.url), 'utf8')
       expect(src.match(/#[0-9a-fA-F]{3,8}\b/g) ?? [], f).toEqual([])
     }
+  })
+})
+
+describe('一周里哪天最费电', () => {
+  /** 9/14（周一）起每天零点记一次到 10/8，周六 12 度、别的天 8 度 */
+  const RW: MeterReading[] = []
+  for (let t = Date.parse('2026-09-14T00:00:00+08:00'), v = 100000, i = 0; t <= Date.parse('2026-10-08T00:00:00+08:00'); t += 86400_000, i++) {
+    const ymd = new Date(t + 8 * 3600_000).toISOString().slice(0, 10)
+    RW.push(R(`${ymd} 00:00`, (v / 100).toFixed(2)))
+    v += i % 7 === 5 ? 1200 : 800
+  }
+
+  type Bar = { value: number | null; itemStyle: { color: { colorStops: { color: string }[] }; shadowBlur?: number }; label: { show: boolean; formatter: string; rich: { v: { backgroundColor: string } } } }
+  type Opt = {
+    xAxis: { data: string[]; axisLabel: { formatter: (v: string) => string } }
+    series: { animationDelay: (i: number) => number; markLine?: { data: { yAxis: number }[] }; data: Bar[] }[]
+  }
+
+  it('7 根柱子周一到周日都标出来，周六那根焦糖色带 🔥、其余蓝色渐变；每根顶上写度数；周六日标签焦糖色；一根根错开弹起来；平均虚线 8.57；画得出来', () => {
+    // 变异：所有柱子一个颜色 / 🔥 不写 / 不错开 → 各自红；周几标签不全（interval 没设 0）→ 画出来缺「周二」，红
+    const o = weekdayOption(weekdayProfile(RW, '2026-10-08')) as Opt
+    expect(o.xAxis.data).toEqual(['周一', '周二', '周三', '周四', '周五', '周六', '周日'])
+    expect(o.xAxis.axisLabel.formatter('周六')).toContain('{wk|周六}')
+    expect(o.xAxis.axisLabel.formatter('周三')).toBe('周三')
+    const d = o.series[0].data
+    expect(d).toHaveLength(7)
+    expect(d.map((x) => x.value)).toEqual([8, 8, 8, 8, 8, 12, 8])
+    expect(d.map((x) => x.itemStyle.color.colorStops[0].color)).toEqual([CHART.balance, CHART.balance, CHART.balance, CHART.balance, CHART.balance, CHART.brandInk, CHART.balance])
+    expect(d[5].itemStyle.shadowBlur).toBeGreaterThan(0)
+    expect(d[0].itemStyle.shadowBlur).toBeUndefined()
+    expect(d[5].label.formatter).toContain('🔥')
+    expect(d[5].label.formatter).toContain('12.0')
+    expect(d[0].label.formatter).toBe('{v|8.0}')
+    expect(o.series[0].animationDelay(6)).toBeGreaterThan(o.series[0].animationDelay(0))
+    expect(o.series[0].markLine!.data[0].yAxis).toBe(8.57)
+    expect(d[0].label.rich.v.backgroundColor).toBe(CHART.gap)
+    const svg = render(o)
+    expect(svg).toContain('<svg')
+    for (const w of ['周一', '周二', '周三', '周四', '周五', '周六', '周日']) expect(svg).toContain(`>${w}<`)
+    expect(svg).toContain('🔥')
+    expect(svg).toContain('linearGradient')
+  })
+
+  it('最省电的那根带 🌿；七天差不多时 🔥🌿 都不出现', () => {
+    // 变异：🌿 不写 → 红
+    const low = RW.map((r, i) => ({ ...r, centi_kwh: r.centi_kwh - (i >= 3 ? 400 * Math.floor((i + 4) / 7) : 0) }))
+    const o = weekdayOption(weekdayProfile(low, '2026-10-08')) as Opt
+    const leaf = o.series[0].data.find((x) => x.label.formatter.includes('🌿'))
+    expect(leaf).toBeDefined()
+    const flat = weekdayOption(weekdayProfile(RW.map((r, i) => ({ ...r, centi_kwh: 100000 + i * 800 })), '2026-10-08')) as Opt
+    expect(flat.series[0].data.some((x) => /🔥|🌿/.test(x.label.formatter))).toBe(false)
+  })
+
+  it('一个记满的整天都没有的星期几空着（不是 0）', () => {
+    // 变异：没数画 0 → 红
+    const o = weekdayOption(weekdayProfile(RW.slice(0, 3), '2026-10-08')) as Opt
+    expect(o.series[0].data.map((x) => x.value)).toEqual([8, 8, null, null, null, null, null])
+    expect(o.series[0].data.map((x) => x.label.show)).toEqual([true, true, false, false, false, false, false])
+    expect(render(o)).toContain('<svg')
+  })
+
+  it('用电页卡片的顺序是用户定的（2026-10-08）：每天用了多少度 → 一周里哪天最费电 → 什么时候最费电 → 一天里几点最费电 → 最近的读数', () => {
+    const src = readFileSync(new URL('../pages/Power.tsx', import.meta.url), 'utf8')
+    const titles = ['每天用了多少度', '一周里哪天最费电', '什么时候最费电', '一天里几点最费电', '最近的读数']
+    const idx = titles.map((t) => src.indexOf(`<span className="font-semibold">${t}</span>`))
+    for (let i = 0; i < titles.length; i++) if (idx[i] < 0) expect.fail(`找不到「${titles[i]}」这张卡`)
+    for (let i = 1; i < titles.length; i++) if (idx[i] < idx[i - 1]) expect.fail(`「${titles[i]}」排在「${titles[i - 1]}」前面了`)
   })
 })

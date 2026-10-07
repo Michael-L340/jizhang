@@ -225,20 +225,101 @@ export function hourProfile(rs: MeterReading[], from: number, to: number): HourS
 /** 「明显更高」的门槛：比中位数高这么多才算最费电的钟点 */
 export const PEAK_RATIO = 1.2
 
+/** 明显比一般高的那几格：≥ 中位数 × PEAK_RATIO、而且大于 0，最多 max 格；返回下标，从小到大 */
+function standouts(vals: (number | null)[], max: number): number[] {
+  const have = vals.filter((v): v is number => v !== null).sort((a, b) => a - b)
+  if (!have.length) return []
+  const mid = have.length % 2 ? have[(have.length - 1) / 2] : (have[have.length / 2 - 1] + have[have.length / 2]) / 2
+  return vals
+    .map((v, i) => ({ v, i }))
+    .filter((x): x is { v: number; i: number } => x.v !== null && x.v > 0 && x.v >= mid * PEAK_RATIO)
+    .sort((a, b) => b.v - a.v)
+    .slice(0, max)
+    .map((x) => x.i)
+    .sort((a, b) => a - b)
+}
+
 /**
  * 最费电的钟点（最多 3 个，按钟点排好）：只挑**明显**比一般钟点高的（≥ 中位数 × PEAK_RATIO）。
  * 只在早晚各记一次时 24 个钟点差不多一样高，硬挑三个出来标深色是误导，那种情况返回空。
  */
 export function peakHours(slots: HourSlot[]): number[] {
-  const vals = slots.filter((x) => x.perHour !== null).map((x) => x.perHour!).sort((a, b) => a - b)
-  if (!vals.length) return []
-  const mid = vals.length % 2 ? vals[(vals.length - 1) / 2] : (vals[vals.length / 2 - 1] + vals[vals.length / 2]) / 2
-  return slots
-    .filter((x) => x.perHour !== null && x.perHour > 0 && x.perHour >= mid * PEAK_RATIO)
-    .sort((a, b) => b.perHour! - a.perHour!)
-    .slice(0, 3)
-    .map((x) => x.hour)
+  return standouts(
+    slots.map((x) => x.perHour),
+    3,
+  )
+    .map((i) => slots[i].hour)
     .sort((a, b) => a - b)
+}
+
+export interface WeekdaySlot {
+  /** 周几：1 = 周一 … 7 = 周日 */
+  dow: number
+  /** 这个星期几平均每天用几度（0.01 度）；一个记满的整天都没有就是 null */
+  perDay: number | null
+  /** 平均了几个整天 */
+  days: number
+}
+
+/** 「一周里哪天最费电」往回看多少周：半年。每个星期几能攒 26 个样本，比 3 个月稳；每周七天都齐，冷热季节对七天一视同仁 */
+export const WEEKDAY_WEEKS = 26
+export const WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] as const
+
+/** 北京日期 → 周几（1 = 周一 … 7 = 周日） */
+export function weekdayOf(ymd: string): number {
+  return ((new Date(`${ymd}T00:00:00Z`).getUTCDay() + 6) % 7) + 1
+}
+
+/**
+ * 一周里哪天最费电：today 的前一天往回数整整 WEEKDAY_WEEKS 周（182 天，每个星期几恰好 26 个位置），
+ * 只拿被读数盖满的整天（和「近 7 天日均」同一口径；today 还没记完，不算），按星期几归堆平均。
+ */
+export function weekdayProfile(rs: MeterReading[], today: string): WeekdaySlot[] {
+  const t0 = dayStart(today)
+  const used = new Array<number>(7).fill(0)
+  const count = new Array<number>(7).fill(0)
+  for (const d of dailyUsage(rs, dayOf(t0 - WEEKDAY_WEEKS * 7 * DAY_MS), dayOf(t0 - DAY_MS))) {
+    if (d.coveredHours < 24 - 1e-9) continue
+    const i = weekdayOf(d.date) - 1
+    used[i] += d.used
+    count[i] += 1
+  }
+  return used.map((u, i) => ({ dow: i + 1, perDay: count[i] ? u / count[i] : null, days: count[i] }))
+}
+
+/** 最费电的那一两天（1 = 周一 … 7 = 周日，按周几排好）：规则同 peakHours，但最多 2 天——七天里标三天就快一半了 */
+export function peakWeekdays(slots: WeekdaySlot[]): number[] {
+  return standouts(
+    slots.map((x) => x.perDay),
+    2,
+  )
+    .map((i) => slots[i].dow)
+    .sort((a, b) => a - b)
+}
+
+/** 最省电的那一天（1 = 周一 … 7 = 周日）：明显比一般低（≤ 中位数 ÷ PEAK_RATIO）的最低那天；七天差不多就 null */
+export function thriftWeekday(slots: WeekdaySlot[]): number | null {
+  const have = slots.filter((x) => x.perDay !== null).map((x) => x.perDay!).sort((a, b) => a - b)
+  if (!have.length) return null
+  const mid = have.length % 2 ? have[(have.length - 1) / 2] : (have[have.length / 2 - 1] + have[have.length / 2]) / 2
+  const low = slots.filter((x) => x.perDay !== null && x.perDay <= mid / PEAK_RATIO).sort((a, b) => a.perDay! - b.perDay!)[0]
+  return low ? low.dow : null
+}
+
+/** 有数的那几天平均每天几度（0.01 度），画成参照虚线；一天都没有就 null */
+export function weekdayMean(slots: WeekdaySlot[]): number | null {
+  const have = slots.filter((x) => x.perDay !== null)
+  return have.length ? have.reduce((n, x) => n + x.perDay!, 0) / have.length : null
+}
+
+/** 深色那几天比其余有数的天平均多几成（0.24 = 多 24%）；其余天一个有数的都没有、或平均是 0，就 null */
+export function weekdayLead(slots: WeekdaySlot[], peaks: number[]): number | null {
+  const top = slots.filter((x) => peaks.includes(x.dow) && x.perDay !== null)
+  const rest = slots.filter((x) => !peaks.includes(x.dow) && x.perDay !== null)
+  if (!top.length || !rest.length) return null
+  const mean = (xs: WeekdaySlot[]) => xs.reduce((s, x) => s + x.perDay!, 0) / xs.length
+  const base = mean(rest)
+  return base > 0 ? mean(top) / base - 1 : null
 }
 
 /** 电价（元/度）存本机，没填就是 null（只显示度数） */

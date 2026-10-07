@@ -14,6 +14,8 @@ import {
   fmtSpan,
   hourProfile,
   peakHours,
+  peakWeekdays,
+  thriftWeekday,
   intervals,
   parsePrice,
   parseReading,
@@ -22,8 +24,12 @@ import {
   rateSteps,
   sortReadings,
   summarize,
+  WEEKDAY_NAMES,
+  weekdayLead,
+  weekdayMean,
+  weekdayProfile,
 } from '../lib/meter'
-import { dailyOption, hourOption, rateOption } from '../lib/meterChart'
+import { dailyOption, hourOption, rateOption, weekdayOption } from '../lib/meterChart'
 import { fmtYuan } from '../lib/money'
 import { useStore } from '../lib/store'
 import type { MeterReading } from '../types'
@@ -75,6 +81,15 @@ export function Power() {
   const slots = useMemo(() => hourProfile(readings, now.getTime() - 30 * DAY_MS, now.getTime()), [readings, now])
   const topHours = useMemo(() => peakHours(slots), [slots])
   const hasSlots = slots.some((x) => x.perHour !== null)
+  // 一周里哪天最费电：最近半年，只算记满的整天
+  const wdays = useMemo(() => weekdayProfile(readings, todayYmd), [readings, todayYmd])
+  const topDays = useMemo(() => peakWeekdays(wdays), [wdays])
+  const wdAny = wdays.some((x) => x.perDay !== null)
+  const wdFull = wdays.every((x) => x.perDay !== null)
+  const wdLead = weekdayLead(wdays, topDays)
+  const wdTopAvg = topDays.length ? wdays.filter((x) => topDays.includes(x.dow)).reduce((n, x) => n + (x.perDay ?? 0), 0) / topDays.length : null
+  const wdThrift = thriftWeekday(wdays)
+  const wdMean = weekdayMean(wdays)
   const ivs = useMemo(() => intervals(readings), [readings])
   // 列表里每条读数旁边写「比上一次多几度」：按到达这条的那一段查
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
@@ -155,6 +170,31 @@ export function Power() {
               <Chart option={dailyOption(days, sum.avg7)} height={180} />
             </Suspense>
             <div className="text-[11px] text-muted leading-relaxed mt-1">读数不用在零点记：两次读数之间用的电，按时间平均分到每一天。浅色的柱子是那天还没算全（比如今天）。</div>
+          </div>
+
+          <div className="card p-4 mt-3">
+            <div className="flex items-baseline justify-between mb-1">
+              <span className="font-semibold">一周里哪天最费电</span>
+              <span className="text-[11px] text-muted">最近半年 · 平均每天几度</span>
+            </div>
+            {wdAny ? (
+              <Suspense fallback={<div style={{ height: 170 }} />}>
+                <Chart option={weekdayOption(wdays)} height={170} />
+              </Suspense>
+            ) : (
+              <div className="text-sm text-muted py-8 text-center">记满一整天（零点到零点都有读数盖着）才画得出来</div>
+            )}
+            <div className="text-[11px] text-muted leading-relaxed mt-1">
+              {topDays.length && wdTopAvg !== null
+                ? `🔥 ${topDays.map((d) => WEEKDAY_NAMES[d - 1]).join('、')}最费电：平均每天 ${fmtKwh(wdTopAvg)} 度${wdLead === null ? '' : `，比其他天多 ${Math.round(wdLead * 100)}%`}。`
+                : wdFull
+                  ? '一周七天差不多，没有哪天特别费电。'
+                  : ''}
+              {wdThrift !== null ? `🌿 ${WEEKDAY_NAMES[wdThrift - 1]}最省电：${fmtKwh(wdays[wdThrift - 1].perDay ?? 0)} 度。` : ''}
+              {wdMean !== null ? `七天平均 ${fmtKwh(wdMean)} 度（虚线）。` : ''}
+              {!wdFull && wdAny ? '还没记满一周（每个星期几至少要有一个记满的整天），先看个大概。' : ''}
+              只算被读数盖满的整天（今天这种还没记完的不算），同一个星期几合起来平均。
+            </div>
           </div>
 
           <div className="card p-4 mt-3">
