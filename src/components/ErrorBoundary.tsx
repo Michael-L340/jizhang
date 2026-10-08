@@ -22,7 +22,8 @@ export class ErrorBoundary extends Component<Props, State> {
         <div className="p-6 text-center">
           <div className="text-lg font-semibold mb-2">{this.props.name ?? '该页面'}出错了</div>
           <div className="text-sm text-muted mb-4 break-all">{this.state.error.message}</div>
-          <button className="chip on" onClick={() => this.setState({ error: null })}>
+          {/* 懒加载的图表 chunk 拉不到（刚发新版、断网）时 React.lazy 会记住那次失败，光清 state 再渲染还是同一个错，只能刷新 */}
+          <button className="chip on" onClick={() => (/dynamically imported module|Importing a module script failed|Failed to fetch/i.test(this.state.error?.message ?? '') ? location.reload() : this.setState({ error: null }))}>
             重试
           </button>
         </div>

@@ -26,6 +26,7 @@ const api = vi.hoisted(() => ({
   changePassword: vi.fn(),
   signOut: vi.fn(),
   hasSession: vi.fn(),
+  hasStoredSession: vi.fn(() => false),
   onAuthChange: vi.fn(() => () => {}),
   upsertTx: vi.fn(),
   friendlyError: (e: unknown) => String((e as { message?: string })?.message ?? e),
@@ -594,7 +595,7 @@ describe('导入与整库恢复', () => {
     api.importAll.mockResolvedValueOnce(undefined) // 回滚成功
     api.fetchAll.mockResolvedValueOnce(snap([tx('old1'), tx('old2')]))
 
-    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow('恢复失败：网络不通。你的账本已经退回操作前的样子，没有丢东西。')
+    await expect(st().restoreSnapshot(snapshot)).rejects.toThrow('恢复失败：网络不通。你的账本已经退回操作前的样子（')
     expect(api.importAll).toHaveBeenCalledTimes(2)
     // 回滚写回去的必须是「操作前」那份，不是要恢复的那份
     expect(api.importAll.mock.calls[1][0].transactions.map((t: Transaction) => t.id)).toEqual(['old1', 'old2'])
@@ -1185,13 +1186,50 @@ describe('离线记账：待上传队列', () => {
   it('断网记一笔又改一笔金额：队列里只有一条，传的是改完的值', async () => {
     api.insertTx.mockRejectedValueOnce(offline())
     await st().addTx(tx('t1', { amount: 100 }))
-    api.updateTx.mockRejectedValueOnce(offline())
+    // 这个 id 还在队列里：改动不走 updateTx（云端还没有这一行，命中 0 行会被当成功），直接换队列里的版本、马上试一次补传
+    api.upsertTx.mockRejectedValueOnce(offline())
     await st().editTx(tx('t1', { amount: 999 }))
+    expect(api.updateTx).not.toHaveBeenCalled()
     expect(st().outboxCount).toBe(1)
     api.upsertTx.mockResolvedValue(undefined)
     await st().flushOutbox()
-    expect(api.upsertTx).toHaveBeenCalledTimes(1)
-    expect(api.upsertTx.mock.calls[0][0].amount).toBe(999)
+    expect(api.upsertTx).toHaveBeenLastCalledWith(expect.objectContaining({ amount: 999 }))
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('队列里的那笔在线改一下、删一下：不直接发 update / delete，队列换成新状态，补传后云端是新值（2026-10-09 审出来的）', async () => {
+    // 变异：去掉 editTx/removeTx 开头的 outboxTx.has 分支 → updateTx 被调用、队列里还是 100，红
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1', { amount: 100 }))
+    api.upsertTx.mockRejectedValueOnce(offline())
+    await st().editTx(tx('t1', { amount: 2000 }))
+    expect(api.updateTx).not.toHaveBeenCalled()
+    api.fetchAll.mockResolvedValueOnce(snap([]))
+    await st().refresh()
+    expect(st().transactions.find((t) => t.id === 't1')?.amount).toBe(2000)
+    api.deleteTx.mockRejectedValueOnce(offline())
+    await st().removeTx('t1')
+    expect(ids()).not.toContain('t1')
+    api.deleteTx.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.deleteTx).toHaveBeenLastCalledWith('t1')
+    expect(st().outboxCount).toBe(0)
+    expect(ids()).not.toContain('t1')
+  })
+
+  it('补传成功的那几笔要登记在途补丁：和补传同时出门的那次同步落地时不能把它们冲掉（2026-10-09 审出来的）', async () => {
+    // 变异：flushOutbox 成功后不 pendingTx.set/settle → 同步落地后 t1 消失，红
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1', { amount: 100 }))
+    let release!: () => void
+    api.fetchAll.mockReturnValueOnce(new Promise((r) => (release = () => r(snap([])))))
+    const sync = st().refresh()
+    api.upsertTx.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(st().outboxCount).toBe(0)
+    release()
+    await sync
+    expect(ids()).toContain('t1')
   })
 
   it('断网记一笔又删掉：不该 upsert，只发一次 delete', async () => {

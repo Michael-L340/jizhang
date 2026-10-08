@@ -126,6 +126,10 @@ export function Entry() {
   const editing = useMemo(() => (editId ? txs.find((t) => t.id === editId) ?? null : null), [txs, editId])
   // 回填的来源：编辑态是那条记录本身，「再记一笔」是被复制的那条
   const source = useMemo(() => editing ?? (copyId ? txs.find((t) => t.id === copyId) ?? null : null), [editing, copyId, txs])
+  // 外页面下，藏起来的记录就当不存在：里页面开着它的编辑页切走 60 秒退回外页面、或按返回键回到 /add?id=，都不能看到它
+  useEffect(() => {
+    if (mode === 'outer' && source?.hidden) nav('/', { replace: true })
+  }, [mode, source, nav])
   const memRef = useRef<Memory>(loadLocal(MEM_KEY, DEFAULT_MEM))
   const mem = memRef.current
 
@@ -293,7 +297,8 @@ export function Entry() {
     setAdding(false)
   }
 
-  const cents = (parseYuan(amount) ?? 0) * (neg ? -1 : 1)
+  // 负号只有校准才有：编辑一条负校准改成支出时，负号没处去掉，会一直报「请输入金额」
+  const cents = (parseYuan(amount) ?? 0) * (type === 'adjust' && neg ? -1 : 1)
   const onCredit = type === 'expense' && accountId !== null && credits.some((c) => c.id === accountId)
   const instN = inst === 'custom' ? Number(customInst) : Number(inst)
   const instOk = Number.isInteger(instN) && instN >= 1 && instN <= INST_MAX
@@ -303,7 +308,9 @@ export function Entry() {
   // 存完账户页说 10/17，两个数对不上
   const creditAcc = accountId ? (credits.find((c) => c.id === accountId) ?? null) : null
   // 白条不参与里外：涉及白条账户的记录（白条消费、还款转账）不给「外面隐藏」开关，藏了面板会对不上
-  const involvesCredit = credits.some((c) => c.id === accountId || c.id === fromId || c.id === toId)
+  // 按当前类型看字段：转账只看两头，其余只看 accountId。三个字段一起看的话，上一笔记在白条上的记忆（mem.accountId）
+  // 会让一笔藏起来的银行转账被当成「涉及白条」，按钮不显示、一保存 hidden 就被清成 null，这笔悄悄回到外页面
+  const involvesCredit = type === 'transfer' ? credits.some((c) => c.id === fromId || c.id === toId) : credits.some((c) => c.id === accountId)
   const defer = creditAcc ? paidThisCycle({ date }, creditAcc, txs) : false
   const plan = onCredit && cents > 0 && instOk ? installmentPlan({ date, amount: cents, installments: instN }, creditAcc?.repay_day ?? null, defer) : null
 
@@ -316,6 +323,7 @@ export function Entry() {
     if (type === 'transfer' && (!fromId || !toId)) return '请选择账户'
     if (type === 'transfer' && fromId === toId) return '转出和转入账户不能相同'
     if (onCredit && !instOk) return `分期期数要是 1 到 ${INST_MAX} 的整数`
+    if (onCredit && instOk && instN > cents) return '期数不能比金额的分数还多'
     return null
   }
 
@@ -460,7 +468,7 @@ export function Entry() {
               原来是「0 用类型色 + .00 用灰色」，看起来像一个数字被涂了两种颜色。 */}
           <span className={`num text-4xl font-semibold ${amount === '' ? 'text-muted' : amountColor}`}>
             <span className="text-2xl mr-1">¥</span>
-            {neg ? '-' : ''}
+            {type === 'adjust' && neg ? '-' : ''}
             {amount || '0.00'}
           </span>
         </div>
@@ -576,7 +584,8 @@ export function Entry() {
           open={dateOpen}
           value={date}
           onPick={(d) => {
-            setDateTouched(true)
+            // 点的是今天就不算「手动改过」：挂起过夜后日期还要能跟着走到新的今天
+            setDateTouched(d !== today())
             setDate(d)
           }}
           onClose={() => setDateOpen(false)}

@@ -155,7 +155,7 @@ export function Stats() {
           const rows = ps
             .filter((p) => p.value > 0)
             .map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)
-          return [head, ...(rows.length ? rows : ['无支出'])].join('<br/>') + TAP
+          return [head, ...(rows.length ? rows : [trendKind === 'expense' ? '无支出' : '无收入'])].join('<br/>') + TAP
         },
       },
       grid: { left: 4, right: 14, top: 34, bottom: 0, containLabel: true },
@@ -228,7 +228,7 @@ export function Stats() {
           formatter: (ps: { dataIndex: number; marker: string; seriesName: string; value: number }[]) => {
             if (!ps.length) return ''
             const bars = ps.filter((p) => p.value > 0).sort((a, b) => b.value - a.value)
-            if (!bars.length) return [full(ps[0].dataIndex), '无支出'].join('<br/>') + TAP
+            if (!bars.length) return [full(ps[0].dataIndex), trendKind === 'expense' ? '无支出' : '无收入'].join('<br/>') + TAP
             const sum = bars.reduce((t, p) => t + p.value, 0)
             const rows = bars.map(
               (p) =>
@@ -384,7 +384,7 @@ export function Stats() {
         </div>
 
         {pieRows.length === 0 ? (
-          <div className="text-sm text-muted py-12 text-center">本月没有数据</div>
+          <div className="text-sm text-muted py-12 text-center">{ym === monthOf(today()) ? '本月' : fmtMonthZh(ym)}没有数据</div>
         ) : (
           <>
             <div className="relative mt-1">

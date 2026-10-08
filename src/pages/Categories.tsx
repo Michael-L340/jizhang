@@ -10,10 +10,13 @@ import { loadRecentIcons, pushRecent, saveRecentIcons, type IconGroup } from '..
 import { categoryColor } from '../lib/palette'
 import { useStore } from '../lib/store'
 import type { CatKind, Category } from '../types'
+import { outerList } from '../lib/facade'
 
 export function Categories() {
   const nav = useNavigate()
   const categories = useStore((st) => st.categories)
+  const accounts = useStore((st) => st.accounts)
+  const mode = useStore((st) => st.mode)
   const transactions = useStore((st) => st.transactions)
   const addCategory = useStore((st) => st.addCategory)
   const updateCategory = useStore((st) => st.updateCategory)
@@ -64,7 +67,8 @@ export function Categories() {
   // 展开/收起分类时会重跑 O(分类数 × 流水数)。改成一次扫描建表。
   const countById = useMemo(() => {
     const m = new Map<string, number>()
-    for (const t of transactions) {
+    // 外页面只数外页面看得见的：藏起来的记录连条数都不能露
+    for (const t of outerList(transactions, accounts, mode)) {
       if (!t.category_id) continue
       m.set(t.category_id, (m.get(t.category_id) ?? 0) + 1)
     }

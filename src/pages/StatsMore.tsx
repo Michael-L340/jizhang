@@ -110,7 +110,7 @@ export function StatsMore() {
   return (
     <div className="px-4 pb-6">
       <div className="flex items-center justify-between pt-4 pb-1">
-        <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1 w-16 text-left" onClick={() => nav(-1)}>
+        <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1 w-16 text-left" onClick={() => nav('/stats')}>
           ‹ 统计
         </button>
         <span className="text-lg font-bold">进阶分析</span>

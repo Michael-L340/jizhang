@@ -12,7 +12,7 @@ const md = (ymd: string) => `${Number(ymd.slice(5, 7))}.${Number(ymd.slice(8, 10
  * 每天用了多少度（柱子）+ 近 7 天日均（虚线）。
  * 一点没被读数盖住的天画成空（第一次记之前），只盖住一部分的天（今天、刚开始记的那天）画浅色：数是对的，只是这天还没算全。
  */
-export function dailyOption(days: DayUsage[], avg7: number | null) {
+export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7) {
   const n = days.length
   const every = Math.max(1, Math.ceil(n / 6))
   return {
@@ -30,7 +30,7 @@ export function dailyOption(days: DayUsage[], avg7: number | null) {
         // 23.7 小时不能写成「只算了 24 小时（还没盖满）」，不到 1 小时也别写「0 小时」
         const hrs = Math.floor(d.coveredHours)
         const part = d.coveredHours < 24 - 1e-9 ? `<br/><span style="opacity:.7">只算了${hrs < 1 ? '不到 1 ' : ` ${hrs} `}小时（读数还没盖满这一天）</span>` : ''
-        const avg = avg7 === null ? '' : `<br/><span style="opacity:.7">近 7 天日均 ${fmtKwh(avg7)} 度</span>`
+        const avg = avg7 === null ? '' : `<br/><span style="opacity:.7">近 ${avgDays} 天日均 ${fmtKwh(avg7)} 度</span>`
         return `${head}<br/><b>${fmtKwh(d.used)} 度</b>${part}${avg}`
       },
     },
@@ -50,7 +50,7 @@ export function dailyOption(days: DayUsage[], avg7: number | null) {
         ? []
         : [
             {
-              name: '近7天日均',
+              name: `近${avgDays}天日均`,
               type: 'line',
               data: days.map(() => Math.round(avg7) / 100),
               showSymbol: false,

@@ -148,7 +148,7 @@ export function Power() {
                 <span className="text-sm font-normal text-muted"> 度</span>
               </div>
               <div className="text-xs text-muted">
-                {sum.avg7 === null ? '记满一整天之后，这里会写日均' : `近 {sum.avgDays} 天日均 ${fmtKwh(sum.avg7)} 度`}
+                {sum.avg7 === null ? '记满一整天之后，这里会写日均' : `近 ${sum.avgDays} 天日均 ${fmtKwh(sum.avg7)} 度`}
                 {money(sum.today)}
               </div>
             </div>
@@ -181,7 +181,7 @@ export function Power() {
             </div>
             {daysAny ? (
               <Suspense fallback={<div style={{ height: 180 }} />}>
-                <Chart option={dailyOption(days, sum.avg7)} height={180} />
+                <Chart option={dailyOption(days, sum.avg7, sum.avgDays)} height={180} />
               </Suspense>
             ) : (
               <div className="text-sm text-muted py-8 text-center">最近 30 天没有读数</div>

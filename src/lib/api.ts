@@ -248,9 +248,9 @@ export async function insertFacadeAdjust(f: FacadeAdjust): Promise<void> {
 // ---------- 电表读数（0011） ----------
 
 /** 整批写电表读数（按 id 覆盖）：导入、恢复失败时写回，都走这里 */
-export async function upsertMeterReadings(rows: MeterReading[]): Promise<void> {
+export async function upsertMeterReadings(rows: MeterReading[], up: { onConflict: string; ignoreDuplicates?: boolean } = { onConflict: 'id' }): Promise<void> {
   for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await supabase.from('meter_readings').upsert(rows.slice(i, i + 500), { onConflict: 'id' })
+    const { error } = await supabase.from('meter_readings').upsert(rows.slice(i, i + 500), up)
     if (error) throw error
   }
 }
@@ -273,12 +273,14 @@ export async function deleteMeterReading(id: string): Promise<void> {
 // ---------- 分类 ----------
 
 export async function addCategory(input: { kind: CatKind; parent_id: string | null; name: string; sort: number }): Promise<Category> {
+  await assertSession()
   const { data, error } = await supabase.from('categories').insert(input).select(CAT_COLS).single()
   if (error) throw error
   return data as Category
 }
 
 export async function updateCategory(id: string, patch: Partial<Pick<Category, 'name' | 'icon' | 'sort' | 'is_archived' | 'note' | 'parent_id'>>): Promise<void> {
+  await assertSession()
   const { error } = await supabase.from('categories').update(patch).eq('id', id)
   if (error) throw error
 }
@@ -286,6 +288,7 @@ export async function updateCategory(id: string, patch: Partial<Pick<Category, '
 // ---------- 账户 ----------
 
 export async function updateAccount(id: string, patch: Partial<Pick<Account, 'name' | 'sort' | 'is_archived' | 'facade_offset'>>): Promise<void> {
+  await assertSession()
   const { error } = await supabase.from('accounts').update(patch).eq('id', id)
   if (error) throw error
 }
@@ -310,7 +313,12 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  * PostgREST 不允许无条件 delete，每条都带一个「匹配全部」的过滤条件；RLS 保证只删自己的行。
  */
 export async function wipeAll(): Promise<void> {
-  await assertSession()
+  // 登录态没了就在第一句之前失败：挂上 step = 'meter_readings'，store 才知道云端一行都没动，别去走回滚、别吓唬人
+  try {
+    await assertSession()
+  } catch (e) {
+    wipeFailed('meter_readings', e)
+  }
   const mr = await supabase.from('meter_readings').delete().not('id', 'is', null)
   if (mr.error) wipeFailed('meter_readings', mr.error)
   const fa = await supabase.from('facade_adjusts').delete().not('id', 'is', null)
@@ -349,28 +357,35 @@ function wipeFailed(step: WipeStep, cause: unknown): never {
  * 中途失败前面的批次已经在云端，重跑同一个文件是安全的（upsert 幂等）。
  * 金额在 txToRow 里过 centsToDb，整数「分」→ numeric 字符串，这是全项目唯一的转换点。
  */
-export async function importAll(snap: Snapshot): Promise<void> {
+/**
+ * 写入一份快照。整库恢复 / 回滚：按 id 覆盖（merge-duplicates）。
+ * 合并导入（onlyNew）：**只插入云端没有的 id**（ignore-duplicates）。postgrest 的 upsert 是整行覆盖，
+ * 合并一份老备份会把 hidden / repay_day / defer_after_repay 这些新列清成 null、把备份之后藏起来的记录放回外页面（2026-10-09 审出来的）；
+ * 「找回误删的几笔，不删现有数据」本来就只该补缺。
+ */
+export async function importAll(snap: Snapshot, opts: { onlyNew?: boolean } = {}): Promise<void> {
   await assertSession()
-  const acc = await supabase.from('accounts').upsert(snap.accounts, { onConflict: 'id' })
+  const up = { onConflict: 'id', ignoreDuplicates: Boolean(opts.onlyNew) }
+  const acc = await supabase.from('accounts').upsert(snap.accounts, up)
   if (acc.error) throw acc.error
   // 外页面校准记录只引用账户，账户进去之后就能写；cents 本来就是整数分，不过换算
   for (let i = 0; i < snap.facade_adjusts.length; i += 500) {
-    const { error } = await supabase.from('facade_adjusts').upsert(snap.facade_adjusts.slice(i, i + 500), { onConflict: 'id' })
+    const { error } = await supabase.from('facade_adjusts').upsert(snap.facade_adjusts.slice(i, i + 500), up)
     if (error) throw error
   }
   // 电表读数和谁都没有外键，放哪儿都行；centi_kwh 本来就是整数，不过换算
-  await upsertMeterReadings(snap.meter_readings)
+  await upsertMeterReadings(snap.meter_readings, up)
   const parents = snap.categories.filter((c) => !c.parent_id)
   const children = snap.categories.filter((c) => c.parent_id)
-  const p = await supabase.from('categories').upsert(parents, { onConflict: 'id' })
+  const p = await supabase.from('categories').upsert(parents, up)
   if (p.error) throw p.error
   if (children.length) {
-    const ch = await supabase.from('categories').upsert(children, { onConflict: 'id' })
+    const ch = await supabase.from('categories').upsert(children, up)
     if (ch.error) throw ch.error
   }
   const rows = snap.transactions.map(txToRow)
   for (let i = 0; i < rows.length; i += 500) {
-    const { error } = await supabase.from('transactions').upsert(rows.slice(i, i + 500), { onConflict: 'id' })
+    const { error } = await supabase.from('transactions').upsert(rows.slice(i, i + 500), up)
     if (error) throw error
   }
 }
@@ -383,7 +398,14 @@ export async function signIn(email: string, password: string): Promise<void> {
 }
 
 /** 修改当前登录账号的密码 */
-export async function changePassword(newPassword: string): Promise<void> {
+export async function changePassword(newPassword: string, currentPassword: string): Promise<void> {
+  // 先用当前密码登一次：拿着解锁的手机（或偷到一份 token）不该能直接改密码锁死账号。
+  // 服务端那道「改密码要求当前密码」是另一层，这里不依赖它
+  const { data } = await supabase.auth.getUser()
+  const email = data.user?.email
+  if (!email) throw new Error('Auth session missing!')
+  const check = await supabase.auth.signInWithPassword({ email, password: currentPassword })
+  if (check.error) throw new Error('当前密码不对')
   const { error } = await supabase.auth.updateUser({ password: newPassword })
   if (error) throw error
 }
@@ -437,9 +459,24 @@ export async function fetchBackupStatus(onFail?: (e: unknown) => void): Promise<
   }
 }
 
+/** 本机存没存着会话钥匙（不联网、不等换 token）。断网冷启动先靠它决定要不要先把缓存的账本亮出来 */
+export function hasStoredSession(): boolean {
+  try {
+    return Object.keys(localStorage).some((k) => /^sb-.*-auth-token$/.test(k))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 有没有登录。getSession 在 JWT 过期时会去换 token，断网时 supabase-js 先退避重试约 25 秒才放弃，
+ * 放弃后本机的会话并不会删（只有服务端明确说「刷新令牌无效」才删）。所以换不到 token 但钥匙还在 = 离线态，
+ * 仍算登录着：同步走失败重试，写入进待传队列。以前这里直接返回 false，离线冷启动会卡 25 秒然后进登录页，离线记不了账。
+ */
 export async function hasSession(): Promise<boolean> {
   const { data } = await supabase.auth.getSession()
-  return Boolean(data.session)
+  if (data.session) return true
+  return hasStoredSession()
 }
 
 export function onAuthChange(cb: (signedIn: boolean) => void): () => void {

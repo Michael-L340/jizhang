@@ -54,6 +54,7 @@ describe('用电记录的图', () => {
     expect(bars[0].value).toBeNull()
     expect(bars.at(-1)!.value).toBeGreaterThan(0)
     expect(o.series.map((s) => s.name)).toEqual(['用电', '近7天日均'])
+    expect((dailyOption(days, 800, 2) as { series: { name: string }[] }).series[1].name).toBe('近2天日均')
     expect(render(o)).toContain('<svg')
   })
 

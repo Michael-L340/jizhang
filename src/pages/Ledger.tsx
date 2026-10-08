@@ -77,6 +77,13 @@ export function Ledger() {
   }, [params, setParams])
   const [q, setQ] = useRecentState('jz_ledger_q', '')
   const [searchOpen, setSearchOpen] = useRecentState('jz_ledger_searchOpen', false)
+  // 退回外页面时清掉搜索词、收起搜索框：里页面搜过藏起来的记录，词留在框里等于把线索摆在外页面上
+  useEffect(() => {
+    if (mode === 'outer') {
+      setQ('')
+      setSearchOpen(false)
+    }
+  }, [mode, setQ, setSearchOpen])
   // 搜索是跨月的——要找三个月前那笔窗帘钱，不该先翻到那个月。
   // 所以一旦输入内容，月份就不参与过滤了，顶上的月份选择器也收起来。
   const searching = q.trim() !== ''
@@ -162,7 +169,8 @@ export function Ledger() {
     if (!el || !hasMore) return
     const io = new IntersectionObserver((es) => {
       if (es.some((e) => e.isIntersecting)) setLimit((n) => n + PAGE_DAYS)
-    }, { rootMargin: '600px 0px' })
+    // root 得是真正滚动的那个容器，不然 rootMargin 只扩视口、哨兵仍被 .app-main 裁着，提前 600px 加载落空
+    }, { root: el.closest('.app-main'), rootMargin: '600px 0px' })
     io.observe(el)
     return () => io.disconnect()
   }, [hasMore, shown])
@@ -176,6 +184,8 @@ export function Ledger() {
   // 从图表或首页跳过来：定位到那一天并短暂高亮；那天没记录就提示一下
   useLayoutEffect(() => {
     if (!target || scrolledFor.current === target) return
+    // URL 里的 ym / cat 要等 passive effect 才生效：这时列表还是旧月份、旧筛选，先别定位，否则会先弹「没有记录」再滚到那天
+    if (params.get('ym') || params.get('date') || params.get('cat')) return
     const el = document.getElementById(`day-${target}`)
     if (el) {
       scrolledFor.current = target
@@ -193,7 +203,7 @@ export function Ledger() {
     scrolledFor.current = target
     showToast(`${fmtDateZh(target, false)} 没有记录`)
     setTarget(null)
-  }, [target, groups, showToast])
+  }, [target, groups, showToast, params])
   // 按筛选后的口径算。传全量 txs 的话，选了「微信」之后列表和每日小计都只剩微信，
   // 顶上这行却还是全月全账户的数，两个合计对不上会让人以为漏了记录。
   // list 已经按 inMonth 过滤过，monthSummary 里那次判断只是冗余。
@@ -321,7 +331,7 @@ export function Ledger() {
       </div>
 
       {groups.length === 0 ? (
-        <div className="text-center text-muted text-sm py-16">{all ? (filtered ? '没有符合筛选的记录' : '还没有记录') : '这个月没有记录'}</div>
+        <div className="text-center text-muted text-sm py-16">{searching ? '没有找到' : all ? (filtered ? '没有符合筛选的记录' : '还没有记录') : '这个月没有记录'}</div>
       ) : (
         sections.map((sec) => (
           <div key={sec.ym}>

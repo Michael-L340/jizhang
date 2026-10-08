@@ -532,11 +532,15 @@ export function installmentPlan(
  * 已经被某笔还款「勾选结清」的支出 id。
  * settles 挂在还款那一侧，所以删掉还款记录，这里自然就不再包含它了。
  */
-export function settledIds(txs: Transaction[], ignoreRepayId?: string): Set<string> {
+export function settledIds(txs: Transaction[], ignoreRepayId?: string, accId?: string): Set<string> {
   const out = new Set<string>()
+  // 只认「转进这个白条的转账」上挂的结清，并且只结清这个白条上的支出：
+  // 还款或订单在记一笔页被改到别的白条、或改成别的类型以后，settles 原样留着，不核账户的话两个白条的账单都会错位
+  const onAcc = accId ? new Set(txs.filter((t) => t.type === 'expense' && t.account_id === accId).map((t) => t.id)) : null
   for (const t of txs) {
     if (!t.settles || t.id === ignoreRepayId) continue
-    for (const id of t.settles) out.add(id)
+    if (accId && !(t.type === 'transfer' && t.to_account_id === accId)) continue
+    for (const id of t.settles) if (!onAcc || onAcc.has(id)) out.add(id)
   }
   return out
 }
@@ -649,9 +653,10 @@ export interface CreditBill {
  * 否则改勾选时那几单根本不显示、金额也预填不对。
  */
 export function creditBill(txs: Transaction[], acc: Account, todayStr: string, ignoreRepayId?: string): CreditBill {
-  const settled = settledIds(txs, ignoreRepayId)
+  const settled = settledIds(txs, ignoreRepayId, acc.id)
   const dueDate = currentDueDate(todayStr, acc.repay_day)
-  const amountOf = new Map(txs.map((t) => [t.id, t.amount]))
+  // 结清金额只算这个白条上的支出（同上）
+  const amountOf = new Map(txs.filter((t) => t.type === 'expense' && t.account_id === acc.id).map((t) => [t.id, t.amount]))
   // 本期窗口的起点，只用来判 afterRepay：上一个还款日之后、本期到期日之前的还款才算数
   const prevDue = dueDate === null || acc.repay_day === null ? null : dayInMonth(shiftMonth(monthOf(dueDate), -1), acc.repay_day)
 
@@ -667,6 +672,12 @@ export function creditBill(txs: Transaction[], acc: Account, todayStr: string, i
       if (prevDue !== null && t.date > prevDue && t.date <= dueDate!) repayDates.push(t.date)
       continue
     }
+    // 白条上的退款（income）和往上校准（adjust 为正）也抵欠款：当作没指名的还款往前顶，
+    // 否则账户标题的「欠 ¥X」和面板的「本期该还」对不上
+    if (t.account_id === acc.id && (t.type === 'income' || (t.type === 'adjust' && t.amount > 0))) {
+      pool += t.amount
+      continue
+    }
     if (t.type !== 'expense' || t.account_id !== acc.id || settled.has(t.id)) continue
     const selectable = Math.max(1, t.installments ?? 1) === 1
     // 到期日先定死（只看原始流水），再去做还款往前顶，两步不互相咬
@@ -676,7 +687,14 @@ export function creditBill(txs: Transaction[], acc: Account, todayStr: string, i
   }
 
   // 到期日从早到晚排队，同一天按下单先后。往前顶就是按这个顺序发钱
-  flat.sort((a, b) => (a.due.date === b.due.date ? (a.tx.created_at < b.tx.created_at ? -1 : 1) : a.due.date < b.due.date ? -1 : 1))
+  // 同一天按下单日期、再按录入先后、再按 id；三态比较器，相等返回 0（补记的老订单不能排到晚下单的后面）
+  flat.sort(
+    (a, b) =>
+      (a.due.date < b.due.date ? -1 : a.due.date > b.due.date ? 1 : 0) ||
+      (a.tx.date < b.tx.date ? -1 : a.tx.date > b.tx.date ? 1 : 0) ||
+      (a.tx.created_at < b.tx.created_at ? -1 : a.tx.created_at > b.tx.created_at ? 1 : 0) ||
+      (a.tx.id < b.tx.id ? -1 : a.tx.id > b.tx.id ? 1 : 0),
+  )
 
   const rows: BillRow[] = []
   const upcoming: BillRow[] = []
@@ -699,6 +717,9 @@ export function creditBill(txs: Transaction[], acc: Account, todayStr: string, i
     if (state === 'upcoming') upcoming.push(row)
     // 逾期但已经还完的不再列出来，否则拖过一年账单里会堆着十二行早就还清的历史。
     // 本期那一行还完了照样留着，「本期该还 6.66 / 已还 6.66」要看得见才知道自己没漏还
+    // 没有还款日的账户（拼多多先用后付）：过了下单日的一律是 current，永远不会变 overdue，
+    // 还完的单要在这里退场，否则「本期该还」越积越大、面板默认勾上一年的历史订单
+    else if (dueDate === null && paid >= f.due.amount && f.due.date < todayStr) continue
     else if (state === 'current' || paid < f.due.amount) rows.push(row)
   }
 

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { CatIcon } from '../components/CatIcon'
@@ -61,6 +61,11 @@ export function Accounts() {
   // 真实校准那一行的备注（用户 2026-09-27 要的）。空着就是「余额校准」
   const [note, setNote] = useState('')
   const [busy, setBusy] = useState(false)
+  // 里外一切换就关掉校准弹层：在里页面开着弹层切去银行 App 查余额，60 秒后自动退回外页面，
+  // 弹层还开着、框里预填的还是真实余额，这时点确认会把真实余额写成外页面校准（2026-10-09 审出来的）
+  useEffect(() => {
+    setTarget(null)
+  }, [mode])
 
   // 白条：余额为负是欠款。核对时让用户输「待还」（正数），差额再翻回余额的方向。
   const creditTarget = target ? credits.some((c) => c.id === target.id) : false
@@ -119,6 +124,8 @@ export function Accounts() {
   }
 
   async function confirm() {
+    // 备注框按两次回车会提交两次（按钮禁了、confirm 自己没看 busy），第二次会再写一条外页面校准
+    if (busy) return
     if (!target) return
     // 外页面：不写流水，只记一条外页面校准（改这个账户在外面显示多少）
     if (facadeOnly) {
@@ -217,7 +224,8 @@ export function Accounts() {
   const keyOf = (r: { tx: Transaction; due: { seq: number } }) => `${r.tx.id}#${r.due.seq}`
   /** 勾选之和。改勾选时金额跟着变，但用户仍然可以自己改成别的数 */
   function pickSum(ids: ReadonlySet<string>): number {
-    return billRows.reduce((sum, r) => sum + (ids.has(keyOf(r)) ? r.due.amount : 0), 0)
+    // 按未还部分算，不按整期：已经被往前顶还掉的那部分不能再还一遍
+    return billRows.reduce((sum, r) => sum + (ids.has(keyOf(r)) ? Math.max(0, r.due.amount - r.paid) : 0), 0)
   }
   const pickedSum = pickSum(picked)
   function togglePick(id: string) {
@@ -258,8 +266,9 @@ export function Accounts() {
     // 金额栏就等于勾选之和，也就是「本期该还」。全都还清了就留空，不再兜底填全部欠款：
     // 那个兜底正是用户 2026-09-08 撞上的坑，面板空着却预填 20.00，看着像在催一次还清。
     const b = creditBill(txs, a, today0)
-    setPicked(new Set(b.rows.map((r) => `${r.tx.id}#${r.due.seq}`)))
-    setRepayInput(b.total > 0 ? yuanStr(b.total) : '')
+    // 只勾还没还完的行，金额预填「还差多少」（b.left），不是整期金额：已经还掉的不能再还一遍
+    setPicked(new Set(b.rows.filter((r) => r.paid < r.due.amount).map((r) => `${r.tx.id}#${r.due.seq}`)))
+    setRepayInput(b.left > 0 ? yuanStr(b.left) : '')
   }
 
   /** 点最近的某笔还款：把它的金额和勾选装回面板，改完保存 */

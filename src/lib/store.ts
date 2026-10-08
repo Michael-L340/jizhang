@@ -250,6 +250,16 @@ function enqueue(id: string, v: Transaction | typeof DELETED): void {
   outboxTx.set(id, v)
 }
 
+/** 已经在队列里的 id 的后续增删改：只改队列和界面，马上试着补传，返回 true（对用户来说已经记下了） */
+function queueWrite(id: string, v: Transaction | typeof DELETED, patch: (s: State) => Partial<State>): true {
+  enqueue(id, v)
+  useStore.setState(patch)
+  useStore.setState({ outboxCount: outboxTx.size })
+  useStore.getState().persist()
+  void useStore.getState().flushOutbox()
+  return true
+}
+
 /** 单次 fetchAll 的超时。没有它，iOS 后台冻结时飞在路上的请求可能永远不 settle */
 /**
  * 同步失败后的自动重试间隔。
@@ -350,6 +360,8 @@ export const useStore = create<State>((set, get) => ({
         /* 读不到就当没有 */
       }
     }
+    // 本机存着会话钥匙就先按登录着渲染（缓存的账本马上能看、能记）；下面那句断网时要等 25 秒才回来
+    if (api.hasStoredSession()) set({ auth: 'in' })
     const signedIn = await api.hasSession()
     set({ auth: signedIn ? 'in' : 'out' })
     unsubAuth?.()
@@ -441,6 +453,10 @@ export const useStore = create<State>((set, get) => ({
         try {
           if (v === DELETED) await api.deleteTx(id)
           else await api.upsertTx(v)
+          // 和普通写入一样登记在途补丁再 settle：online 事件会同时触发补传和同步，
+          // 那次同步出门时这几笔还没落库，落地时它们已经不在队列里，没有补丁就会被冲掉（刚联网，离线记的账消失）
+          pendingTx.set(id, v)
+          settle(settledTx, pendingTx, id)
           // 只删「我刚传的那一版」。这一条在等响应的几百毫秒里可能又被改过
           // （改的那次也没网，于是队列里换成了新版本）；无条件 delete 会把新版本一起抹掉，
           // 结果云端是旧值、界面是新值、队列空了——再也没有东西会去纠正它。
@@ -520,6 +536,8 @@ export const useStore = create<State>((set, get) => ({
     backupSeq++
     try {
       localStorage.removeItem(CACHE_KEY)
+      // 搜索词、筛选、上次用的账户这些也是这个账号的痕迹，一起清。只删自己前缀的键，同一个域名下还住着交易日志
+      for (const k of Object.keys(localStorage)) if (/^jz_(ledger_|entry_memory|repay_from|stats_)/.test(k)) localStorage.removeItem(k)
     } catch {
       /* ignore */
     }
@@ -534,7 +552,13 @@ export const useStore = create<State>((set, get) => ({
     set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
   },
 
+  /**
+   * 这个 id 还在待传队列里（断网时记的、改的）：不直接发请求，队列里换成新状态再补传。
+   * 直接发的话：update / delete 命中 0 行不报错，当成功，但队列里的旧版本还在，
+   * 下次同步「队列在最上面」把界面打回旧值，补传再把旧值写进云端——改动丢了、删掉的复活。
+   */
   async addTx(t) {
+    if (outboxTx.has(t.id)) return queueWrite(t.id, t, (s) => ({ transactions: [t, ...s.transactions.filter((x) => x.id !== t.id)] }))
     pendingTx.set(t.id, t)
     // 函数式 set + 按 id 打补丁：整数组快照回滚会把并发操作的结果一起抹掉
     set((s) => ({ transactions: [t, ...s.transactions] }))
@@ -566,6 +590,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async editTx(t) {
+    if (outboxTx.has(t.id)) return queueWrite(t.id, t, (s) => ({ transactions: s.transactions.map((x) => (x.id === t.id ? t : x)) }))
     const before = get().transactions.find((x) => x.id === t.id)
     pendingTx.set(t.id, t)
     set((s) => ({ transactions: s.transactions.map((x) => (x.id === t.id ? t : x)) }))
@@ -594,6 +619,7 @@ export const useStore = create<State>((set, get) => ({
   },
 
   async removeTx(id) {
+    if (outboxTx.has(id)) return queueWrite(id, DELETED, (s) => ({ transactions: s.transactions.filter((x) => x.id !== id) }))
     const row = get().transactions.find((x) => x.id === id)
     pendingTx.set(id, DELETED)
     set((s) => ({ transactions: s.transactions.filter((x) => x.id !== id) }))
@@ -746,7 +772,7 @@ export const useStore = create<State>((set, get) => ({
 
   async importSnapshot(snap) {
     try {
-      await api.importAll(snap)
+      await api.importAll(snap, { onlyNew: true })
     } finally {
       // importAll 每 500 条一批逐批提交，失败时前面的批次已经在云端了。
       // 不管成败都把界面拉到云端真实状态，否则用户看到的是「什么都没发生」。
@@ -798,7 +824,7 @@ export const useStore = create<State>((set, get) => ({
       }
       throw new RestoreFailed(
         rollbackErr === null
-          ? `恢复失败：${why}。你的账本已经退回操作前的样子，没有丢东西。`
+          ? `恢复失败：${why}。你的账本已经退回操作前的样子（备份文件里有、操作前没有的记录可能还留着，多出来的看一眼条数就知道）。`
           : `恢复失败：${why}。自动退回也没成功（${rollbackErr}），云端现在可能只有一部分数据。` +
             '别在这个页面上做别的操作：手机里那个备份文件先别删，等有网了回到这一页，用同一个文件再走一次「整库恢复」——' +
             '同一个文件重复导入是安全的，不会变成两份。',

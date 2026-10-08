@@ -292,6 +292,17 @@ describe('importAll', () => {
     expect(h.calls.filter((c) => c.table === 'meter_readings').map((b) => (b.rows as unknown[]).length)).toEqual([500, 500, 1])
   })
 
+  it('合并导入（onlyNew）只插入云端没有的 id：每张表的 upsert 都带 ignoreDuplicates，整库恢复不带', async () => {
+    // 变异：up 不看 opts.onlyNew → 红
+    const snap: Snapshot = { accounts: [{ id: 'acc1', name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }], categories: [{ id: 'c1', kind: 'expense', parent_id: null, name: '吃', icon: null, sort: 1, is_archived: false, note: null }], transactions: [tx()], facade_adjusts: [], meter_readings: [{ id: 'm1', read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 1, created_at: '2026-10-03T13:40:00.000Z' }] }
+    await importAll(snap, { onlyNew: true })
+    expect(h.calls.length).toBeGreaterThanOrEqual(4)
+    expect(h.calls.every((c) => c.op === 'upsert' && (c.opts as { ignoreDuplicates: boolean }).ignoreDuplicates === true)).toBe(true)
+    h.calls.length = 0
+    await importAll(snap)
+    expect(h.calls.every((c) => (c.opts as { ignoreDuplicates: boolean }).ignoreDuplicates === false)).toBe(true)
+  })
+
   it('全部是按 id 合并，一条删除都不发', async () => {
     await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_readings: [], transactions: [tx()] })
     expect(h.calls.every((c) => c.op === 'upsert')).toBe(true)

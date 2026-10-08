@@ -51,6 +51,8 @@ export function TxSwipe({ tx, children }: Props) {
 
   const onDown = (e: React.PointerEvent) => {
     if (e.pointerType === 'mouse' && e.button !== 0) return
+    // 「改日期」弹层是 portal 挂到 body 的，但 React 合成事件照样冒到这里：在日历上横划不能带着背后那一行走、更不能触发删除
+    if (!e.currentTarget.contains(e.target as Node)) return
     start.current = { x: e.clientX, y: e.clientY, id: e.pointerId, horizontal: null }
     setAnimating(false)
   }

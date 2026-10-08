@@ -499,3 +499,17 @@ describe('时间必须带时区（2026-10-08 审出来的）', () => {
     expect(run(tx({ created_at: '2026-09-04T02:00:00.000Z' }))).not.toThrow()
   })
 })
+
+describe('数据库会拒、校验也要拒（2026-10-09 审出来的）', () => {
+  it('id 只认小写带横线：大写或不带横线的在数据库里是同一个 uuid，查重按字符串比会漏', () => {
+    // 变异：isUuid 加回 /i 或 32 位写法 → 红
+    expect(run(acc({ id: 'ABCDEF01-0000-4000-8000-000000000000' }, 1))).toThrow(/UUID/)
+    expect(run(acc({ id: 'abcdef010000400080000000000000ab' }, 1))).toThrow(/UUID/)
+    expect(run(acc({ id: 'abcdef01-0000-4000-8000-0000000000ab' }, 1))).not.toThrow()
+  })
+  it('对外偏移量超过 int4、备注里带 NUL 都拒', () => {
+    expect(run(acc({ facade_offset: 3000000000 }))).toThrow(/偏移量/)
+    expect(run(tx({ note: 'x\u0000y' }))).toThrow(/不能存的字符/)
+    expect(run(tx({ note: '正常备注' }))).not.toThrow()
+  })
+})

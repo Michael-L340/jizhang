@@ -37,7 +37,8 @@ function asRow(v: unknown): Raw | null {
 
 /** 三张表的 id 都是 uuid 列，'a1' 这种字符串进不去（Postgres 报 22P02） */
 function isUuid(v: unknown): v is string {
-  return typeof v === 'string' && (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v) || /^[0-9a-f]{32}$/i.test(v))
+  // 只认小写带横线这一种写法：大写 / 不带横线的在数据库里是同一个 uuid，但这里的查重和外键对照是按字符串比的，放进去会在整库恢复清空之后撞 21000
+  return typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)
 }
 
 function daysIn(y: number, m: number): number {
@@ -122,6 +123,8 @@ function settlesOf(v: unknown, fail: Fail): string[] | null {
 function textOf(v: unknown, name: string, fail: Fail): string | null {
   const s: unknown = v ?? null
   if (s !== null && typeof s !== 'string') fail(`的${name}不是文字（读到 ${JSON.stringify(v)}）`)
+  // 数据库的 text 装不下 NUL，整库恢复会在清空之后才报错
+  if (typeof s === 'string' && s.includes('\u0000')) fail(`的${name}里有不能存的字符`)
   return s as string | null
 }
 
@@ -183,7 +186,7 @@ function hiddenOf(v: unknown, fail: Fail): boolean | null {
 function facadeOffsetOf(v: unknown, fail: Fail): number | null {
   const n: unknown = v ?? null
   if (n === null) return null
-  if (!Number.isInteger(n)) fail(`的对外偏移量不对（读到 ${JSON.stringify(v)}），只能是整数「分」或留空`)
+  if (!Number.isInteger(n) || Math.abs(n as number) > 2147483647) fail(`的对外偏移量不对（读到 ${JSON.stringify(v)}），只能是整数「分」或留空`)
   return n as number
 }
 

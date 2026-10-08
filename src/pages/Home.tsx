@@ -152,7 +152,7 @@ export function Home() {
             <span className="block num text-sm font-medium text-income">今日收入 +{fmtYuan(dayStat.income)}</span>
           ) : null}
           {/* 笔数用户说不需要看，只留一个「可以点」的箭头 */}
-          <span className="block text-xs text-muted mt-0.5">{dayStat.count ? '›' : '还没记账 ›'}</span>
+          <span className="block text-xs text-muted mt-0.5">{dayStat.count || dayStat.income ? '›' : '还没记账 ›'}</span>
         </span>
       </Link>
 

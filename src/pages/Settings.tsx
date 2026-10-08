@@ -81,6 +81,7 @@ export function Settings() {
   // 导入失败的信息要留在屏幕上。toast 只有 5 秒，而这段话用户需要读完并照着做
   const [importErr, setImportErr] = useState('')
   const [pwOpen, setPwOpen] = useState(false)
+  const [pw0, setPw0] = useState('')
   const [pw1, setPw1] = useState('')
   const [pw2, setPw2] = useState('')
   const [pwErr, setPwErr] = useState('')
@@ -97,12 +98,14 @@ export function Settings() {
 
   async function submitPassword() {
     setPwErr('')
+    if (!pw0) return setPwErr('先输入当前密码')
     if (pw1.length < 6) return setPwErr('密码至少 6 位')
     if (pw1 !== pw2) return setPwErr('两次输入不一致')
     setBusy('pw')
     try {
-      await changePassword(pw1)
+      await changePassword(pw1, pw0)
       setPwOpen(false)
+      setPw0('')
       setPw1('')
       setPw2('')
       // 不用一闪而过的 toast：自动备份拿的是这个密码去登录，不同步过去当晚就开始失败。
@@ -186,7 +189,7 @@ export function Settings() {
         // 但恢复完它们会补传上去，结果是「备份 + 这几笔」，得先说清楚，不能让人以为恢复完就是备份原样。
         if (outboxCount > 0) warn.push(`注意：还有 ${outboxCount} 笔没上传到云端。恢复完成后它们会自动补上去，所以最终结果是「这个备份文件 + 这 ${outboxCount} 笔」，不是备份文件原样。`)
         const ok = window.confirm(
-          `整库恢复会先删掉云端现在的 ${accounts.length} 个账户、${categories.length} 个分类、${transactions.length} 条流水、${meter_readings.length} 条电表读数，` +
+          `整库恢复会先删掉云端现在的 ${accounts.length} 个账户、${categories.length} 个分类、${csvSnapshot.transactions.length} 条流水、${meter_readings.length} 条电表读数，` +
             `再按这个文件重建成 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水、${snap.meter_readings.length} 条电表读数。\n\n` +
             (warn.length ? `${warn.join('\n\n')}\n\n` : '') +
             '文件已经逐条查过，能导进去。中途万一断网会自动退回操作前的样子。\n\n请先确认这个备份文件还在手机或电脑里。继续？',
@@ -197,7 +200,7 @@ export function Settings() {
       } else {
         const ok = window.confirm(
           `合并导入 ${snap.accounts.length} 个账户、${snap.categories.length} 个分类、${snap.transactions.length} 条流水。` +
-            '同 ID 的会被覆盖，现有数据不会被删除。继续？',
+            '只补回云端没有的记录，已有的（同 ID）一条不动、不会被覆盖。继续？',
         )
         if (!ok) return
         await importSnapshot(snap)
@@ -287,7 +290,7 @@ export function Settings() {
         {statusNote ? <div className={`text-[11px] mt-2 ${syncFailed || cacheWarn || (backupChecked && backupFailed) ? 'text-expense' : backupTone === 'warn' ? 'text-adjust' : 'text-muted'}`}>{statusNote}</div> : null}
         {/* 核对备份和恢复结果时要拿这两个数去对，别只留百分比 */}
         <div className="text-[11px] text-muted mt-1 num">
-          共 {transactions.length} 条记录 · 缓存 {fmtBytes(cacheBytes)} / {fmtBytes(CACHE_LIMIT_BYTES)}
+          共 {csvSnapshot.transactions.length} 条记录 · 缓存 {fmtBytes(cacheBytes)} / {fmtBytes(CACHE_LIMIT_BYTES)}
         </div>
       </div>
 
@@ -305,8 +308,9 @@ export function Settings() {
         <Item icon="📤" label="导出 CSV" hint="Excel 可打开" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
         {/* JSON 备份是完整账本，只在里页面给；外页面不给这一项（不是改成外页面那本账：半份备份拿去「整库恢复」会丢账） */}
         {mode === 'inner' ? <Item icon="🗂️" label="导出 JSON 备份" hint={trustworthy ? '完整备份，可用于恢复' : '会标记为「未同步」'} action={busy === 'json' ? '…' : '导出'} onClick={exportJson} /> : null}
-        <Item icon="📥" label="合并导入" hint="找回误删的几笔，不删现有数据" action={busy === 'import' ? '…' : '选文件'} onClick={() => pickFile('merge')} />
-        <Item icon="♻️" label="整库恢复" hint="先清空，再按备份文件重建" action={busy === 'import' ? '…' : '选文件'} danger onClick={() => pickFile('restore')} />
+        {/* 导入和恢复也只在里页面：和 JSON 备份一样，外页面不碰整本账 */}
+        {mode === 'inner' ? <Item icon="📥" label="合并导入" hint="只补回云端没有的记录，现有的一条不动" action={busy === 'import' ? '…' : '选文件'} onClick={() => pickFile('merge')} /> : null}
+        {mode === 'inner' ? <Item icon="♻️" label="整库恢复" hint="先清空，再按备份文件重建" action={busy === 'import' ? '…' : '选文件'} danger onClick={() => pickFile('restore')} /> : null}
         {importErr ? <div className="text-xs text-expense leading-relaxed py-2">{importErr}</div> : null}
       </Group>
       {/* 放在 Group 外面：隐藏元素也算 :last-child，留在卡片里会让最后一行多一条分隔线 */}
@@ -319,7 +323,7 @@ export function Settings() {
       </Group>
 
       <Group title="账号">
-        <Item icon="🔑" label="修改密码" onClick={() => setPwOpen(true)} />
+        {mode === 'inner' ? <Item icon="🔑" label="修改密码" onClick={() => setPwOpen(true)} /> : null}
         <Item
           icon="🔄"
           label="检查更新"
@@ -436,6 +440,7 @@ export function Settings() {
       </Sheet>
 
       <Sheet open={pwOpen} onClose={() => setPwOpen(false)} title="修改密码">
+        <input className="w-full rounded-xl bg-bg px-4 py-3 mb-2" type="password" autoComplete="current-password" placeholder="当前密码" value={pw0} onChange={(e) => setPw0(e.target.value)} />
         <input
           className="w-full rounded-xl bg-bg px-4 py-3 mb-2"
           type="password"
