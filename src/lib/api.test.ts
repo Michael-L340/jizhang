@@ -83,6 +83,8 @@ const h = vi.hoisted(() => {
           return b
         },
         gt(c: string, v: unknown) {
+          // 学数据库的脾气：id 是 uuid，空串比不了（v1.3.28 线上就是 `id > ''` 挂的）
+          if (c === 'id' && v === '') throw new Error('invalid input syntax for type uuid: ""')
           rec.filters.push(`gt.${c}.${String(v)}`)
           return b
         },
@@ -349,7 +351,7 @@ describe('fetchAll 的中止信号', () => {
     expect(tx?.filters).toContain('range.0.999')
     for (const t of ['facade_adjusts', 'meter_readings']) {
       const c = h.calls.find((x) => x.table === t)
-      expect(c?.filters, t).toContain('gt.id.')
+      expect(c?.filters.some((f) => f.startsWith('gt.')), t).toBe(false)
       expect(c?.filters, t).toContain('order.id')
       expect(c?.filters, t).toContain('limit.1000')
       expect(c?.filters.some((f) => f.startsWith('range.')), t).toBe(false)
@@ -362,7 +364,8 @@ describe('fetchAll 的中止信号', () => {
     h.results.push({ data: [] }, { data: [] }, { data: [] }, { data: [] }, page(0, 1000), page(1000, 3))
     const snap = await fetchAll()
     // 按 id 接着取（上一页最后一个 id 之后），不是 offset：两页之间有增删时 offset 会重一条或漏一条
-    expect(h.calls.filter((c) => c.table === 'meter_readings').map((c) => c.filters.filter((f) => f.startsWith('gt.') || f.startsWith('limit.')).join('+'))).toEqual(['gt.id.+limit.1000', 'gt.id.m999+limit.1000'])
+    // 第一页不能带 gt：id 是 uuid，`id > ''` 数据库拒收（v1.3.28 线上事故）；第二页从上一页最后一个 id 之后取
+    expect(h.calls.filter((c) => c.table === 'meter_readings').map((c) => c.filters.filter((f) => f.startsWith('gt.') || f.startsWith('limit.')).sort().join('+'))).toEqual(['limit.1000', 'gt.id.m999+limit.1000'])
     expect(snap.meter_readings).toHaveLength(1003)
   })
 

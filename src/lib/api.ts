@@ -180,7 +180,9 @@ export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
   // 按 id 翻页（上一页最后一个 id 之后再取一页），不用 offset：两页之间有增删时 offset 会重一条或漏一条
   const facade_adjusts: FacadeAdjust[] = []
   for (let after = ''; ; ) {
-    const { data, error } = await withSignal(supabase.from('facade_adjusts').select(FA_COLS).gt('id', after).order('id').limit(PAGE))
+    // 第一页不加 gt：id 是 uuid，`id > ''` 会被数据库拒（invalid input syntax for type uuid，v1.3.28 线上就是这么挂的）
+    const q = supabase.from('facade_adjusts').select(FA_COLS).order('id').limit(PAGE)
+    const { data, error } = await withSignal(after ? q.gt('id', after) : q)
     if (error) throw error
     facade_adjusts.push(...(data as FaRow[]).map(rowToFa))
     if (data.length < PAGE) break
@@ -190,7 +192,9 @@ export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
   // 按 id 升序：备份脚本也按 id 升序排这一节，App 导出的 JSON 才能和它逐字节一致
   const meter_readings: MeterReading[] = []
   for (let after = ''; ; ) {
-    const { data, error } = await withSignal(supabase.from('meter_readings').select(MR_COLS).gt('id', after).order('id').limit(PAGE))
+    // 第一页不加 gt：id 是 uuid，`id > ''` 会被数据库拒（invalid input syntax for type uuid，v1.3.28 线上就是这么挂的）
+    const q = supabase.from('meter_readings').select(MR_COLS).order('id').limit(PAGE)
+    const { data, error } = await withSignal(after ? q.gt('id', after) : q)
     if (error) throw error
     meter_readings.push(...(data as MrRow[]).map(rowToMr))
     if (data.length < PAGE) break
