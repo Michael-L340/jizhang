@@ -1,10 +1,11 @@
 import { useEffect } from 'react'
-import { createHashRouter, Outlet, RouterProvider, useLocation } from 'react-router-dom'
+import { createHashRouter, Outlet, RouterProvider, useLocation, useNavigationType } from 'react-router-dom'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { ErrorBoundary } from './components/ErrorBoundary'
 import { TabBar } from './components/TabBar'
 import { Toast } from './components/Toast'
 import { useStore } from './lib/store'
+import { ledgerPosition } from './lib/ledgerPosition'
 import { Accounts } from './pages/Accounts'
 import { Categories } from './pages/Categories'
 import { Power } from './pages/Power'
@@ -110,13 +111,16 @@ function Root() {
 
 /** 带底部 Tab 的外壳 */
 function Shell() {
-  const { pathname } = useLocation()
+  const { pathname, key } = useLocation()
+  const navigationType = useNavigationType()
+  const mode = useStore((s) => s.mode)
   // 几个标签页共用这一个滚动容器，切页时它不会归零：首页滑到底再点「全部 ›」，流水页一打开就在中间。
   // 进阶分析自己记着位置（StatsMore 的 savedScroll），它不归零
   useEffect(() => {
     if (pathname === '/stats/more') return
+    if (pathname === '/ledger' && navigationType === 'POP' && ledgerPosition.key === key && ledgerPosition.mode === mode) return
     document.querySelector('.app-main')?.scrollTo({ top: 0 })
-  }, [pathname])
+  }, [pathname, key, navigationType, mode])
   return (
     <div className="flex-1 min-h-0 flex flex-col safe-top">
       <main className="app-main pb-2">

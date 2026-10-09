@@ -1,5 +1,5 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
@@ -11,6 +11,7 @@ import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
 import { fmtDateRel, fmtDateZh, fmtMonthZh } from '../lib/date'
 import { ALL_MONTHS, daysToShow, monthSections, PAGE_DAYS, ymFromQuery } from '../lib/ledger'
+import { ledgerPosition } from '../lib/ledgerPosition'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
 import { outerBook, outerList } from '../lib/facade'
 import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, filterFromQuery, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
@@ -41,12 +42,15 @@ export function Ledger() {
   const showToast = useStore((s) => s.showToast)
 
   const [params, setParams] = useSearchParams()
+  const { key } = useLocation()
+  const navigationType = useNavigationType()
+  const [resume] = useState(() => navigationType === 'POP' && ledgerPosition.key === key && ledgerPosition.mode === mode ? { ...ledgerPosition } : null)
   // 月份、搜索词、筛选都是「这次在看什么」：点进一笔改完回来还在，隔几个小时再开就回到全部。
   // 默认看全部、一直往下翻，选了某个月才只看那个月（用户 2026-10-01）。从别的页带参数跳过来时参数优先。
   const [ym, setYm] = useRecentState('jz_ledger_ym', () => ymFromQuery(params.get('ym'), params.get('date')) ?? ALL_MONTHS)
   const all = ym === ALL_MONTHS
   // 全部模式先画多少天，翻到底再加（见 lib/ledger.ts 的 PAGE_DAYS）
-  const [limit, setLimit] = useState(PAGE_DAYS)
+  const [limit, setLimit] = useState(resume?.days ?? PAGE_DAYS)
   const moreRef = useRef<HTMLDivElement>(null)
   const [target, setTarget] = useState<string | null>(() => params.get('date'))
   const scrolledFor = useRef<string | null>(null)
@@ -77,12 +81,14 @@ export function Ledger() {
   }, [params, setParams])
   const [q, setQ] = useRecentState('jz_ledger_q', '')
   const [searchOpen, setSearchOpen] = useRecentState('jz_ledger_searchOpen', false)
+  const previousMode = useRef(resume ? mode : null)
   // 退回外页面时清掉搜索词、收起搜索框：里页面搜过藏起来的记录，词留在框里等于把线索摆在外页面上
   useEffect(() => {
-    if (mode === 'outer') {
+    if (mode === 'outer' && previousMode.current !== 'outer') {
       setQ('')
       setSearchOpen(false)
     }
+    previousMode.current = mode
   }, [mode, setQ, setSearchOpen])
   // 搜索是跨月的——要找三个月前那笔窗帘钱，不该先翻到那个月。
   // 所以一旦输入内容，月份就不参与过滤了，顶上的月份选择器也收起来。
@@ -172,6 +178,25 @@ export function Ledger() {
   const shown = sectioned ? daysToShow(groups, limit, target) : groups.length
   const sections = useMemo(() => (sectioned ? monthSections(groups.slice(0, shown)) : [{ ym, expense: 0, income: 0, days: groups }]), [sectioned, groups, shown, ym])
   const hasMore = shown < groups.length
+
+  // 先画出离开时已加载的日期，再恢复位置；保存和直接返回都走同一条历史记录。
+  useLayoutEffect(() => {
+    document.querySelector('.app-main')?.scrollTo({ top: resume?.top ?? 0, behavior: 'instant' })
+  }, [resume])
+  useLayoutEffect(() => {
+    const el = document.querySelector('.app-main')
+    if (!el) return
+    const remember = () => {
+      Object.assign(ledgerPosition, { key, mode, top: el.scrollTop, days: Math.max(limit, shown) })
+    }
+    remember()
+    el.addEventListener('scroll', remember, { passive: true })
+    return () => el.removeEventListener('scroll', remember)
+  }, [key, mode, limit, shown])
+  // 从搜索跳到更早的一天后，高亮结束也不能把那一段收回去。
+  useEffect(() => {
+    if (shown > limit) setLimit(shown)
+  }, [shown, limit])
 
   // 翻到底（底下那条看不见的线露出来）就接着画下一批
   useEffect(() => {

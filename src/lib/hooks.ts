@@ -114,10 +114,16 @@ export function saveLocal(key: string, value: unknown) {
  * 滚回顶部是四页共同的，放在这里做；各页自己要清什么状态写在 onReset 里。
  * 依赖只放 resetAt：onReset 每次渲染都是新函数，放进依赖会让 effect 每次都跑。
  */
+const handledTabResets = new Set<string>()
+
 export function useTabReset(onReset?: () => void): void {
-  const resetAt = (useLocation().state as { resetAt?: number } | null)?.resetAt
+  const location = useLocation()
+  const resetAt = (location.state as { resetAt?: number } | null)?.resetAt
   useEffect(() => {
     if (!resetAt) return
+    const token = `${location.key}:${resetAt}`
+    if (handledTabResets.has(token)) return
+    handledTabResets.add(token)
     onReset?.()
     document.querySelector('.app-main')?.scrollTo({ top: 0 })
     // eslint-disable-next-line react-hooks/exhaustive-deps
