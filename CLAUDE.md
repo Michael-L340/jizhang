@@ -23,6 +23,7 @@
 - **待传队列里的 id 的后续增删改只改队列**（`store.ts` 的 `queueWrite`，2026-10-09 审出来的）：云端还没有这一行，直接发 update / delete 命中 0 行不报错、当成功，队列里的旧版本却还在，下次同步被打回旧值、补传再把旧值写进云端。补传成功的每一笔也要像普通写入一样登记在途补丁再 settle：online 事件同时触发补传和同步，不登记就会被那次同步冲掉。
 - **断网冷启动不能卡在登录页**：`api.hasSession` 换不到 token 但本机还存着 `sb-*-auth-token` 就算登录着（离线态）；`init` 先按 `hasStoredSession()` 把缓存的账本亮出来，再等 getSession（断网要 25 秒）。
 - **`fetchAll` 拉回来账户是空的、而本地明明有 → 当失败处理，绝不能收下。** supabase-js 在 session 失效时**不报错**，而是拿 anon key 发请求（`_getAccessToken` 的兜底 `?? supabaseKey`），RLS 一挡返回「零行、无错误」。收下的话界面清空、`persist()` 还会把本机缓存一起覆盖成空的，全程零报错。账户表永远不该是空的（`0001` 就预置了四个）；第一次装 App 时本地本来就空，那种空快照照收。
+- **账本缓存在 IndexedDB（`jz-cache` 库，`lib/cache.ts`），待传队列单独在 localStorage 的 `jz_outbox_v1`**（2026-10-09 起；之前整份在 localStorage 的 `jz_cache_v1`，整个域名只有 5 MiB、还要和交易日志分）。规矩：① 队列一变就同步落盘（`saveOutbox`），不等账本那 500ms 去抖；冷启动把队列叠在缓存账本上（`applyPending`），两份分开写、哪份新不一定。② IndexedDB 打不开就退回 localStorage（上限照旧 5 MiB）；开门 / 读写挂起分别等 `OPEN_TIMEOUT_MS` / `WRITE_TIMEOUT_MS` 就放弃，这个会话往后都走 localStorage；两边都有账本时按 `at` 挑新的。③ 老缓存 `jz_cache_v1` 只在写进 IndexedDB 成功、**而且 `jz_outbox_v1` 已经存在**之后才删——它里面还包着一份队列。④ 读写删全部排队（`cache.ts` 的 `serial`），退出登录的删一定落在之前的写后面；`persist` 的落地回调要核 `cacheGen`，退出后不许再动 state。⑤ 回退到 1.3.30 及以前：旧代码只读 `jz_cache_v1`，看不见 IndexedDB 和 `jz_outbox_v1`——回退前先确认待传队列为空（设置页「立即上传」），否则那几笔就丢了。⑥ 测试用 fake-indexeddb，假定时器**不许假 setImmediate**（它靠这个推进），推进完定时器要 `drain()`。
 - 写入失败分两类，别只写「失败就回滚」：`api.isPermanentError` 为真（`23xxx`/`42xxx` 错误码）才回滚，其余（没网、超时、登录过期）进 `lib/outbox.ts` 的待上传队列，联网后补传。默认可重传——误判成永久失败是当场丢账，误判成网络问题只是队列里卡一条、用户看得见。
 - 白条账户 `kind = 'credit'`（京东白条、花呗、拼多多、美团月付），余额为负 = 欠款。**下单记支出**（账户选白条，支出算在下单那个月）、**平台扣款记转账**（银行 → 白条）、利息单独记支出。还款不预排流水。
 - **到期日 = 下单日之后最近的那个还款日**（`accounts.repay_day`，京东 17、花呗和美团 1）。还款日当天下单算下一个月；填 31 时短月落到月末。`installments` 的第 k 期 = 第 1 期往后推 k−1 个月。`repay_day` 为空 = 没有固定还款日（拼多多先用后付逐笔扣），这种账户不排期，只要没被勾选结清就一直算欠着。
@@ -131,7 +132,7 @@ bug 修复类固定四段，`git log` 扫一眼就知道该回退到哪一条：
 功能类保持要点列表即可。
 
 ## 同一个 Supabase 项目里还住着交易日志（2026-10-05 起）
-- 交易日志（仓库 `Michael-L340/trade-journal`，网址 `/trade-journal/`）和记账共用这个 Supabase 项目，**也共用同一个登录账号**。它的对象一律带 tj 前缀：表 `tj_journal`、`tj_journal_history`，函数 `tj_me`、`tj_journal_guard`、`tj_storage_bytes`、`tj_storage_usage`，Storage 私有桶 `tj-shots` 和 `storage.objects` 上的 `tj_shots_select`、`tj_shots_insert` 两条策略。建表脚本是交易日志仓库的 `supabase/tj_0001_init.sql`，不在本仓库的 migrations 里。
+- 交易日志（仓库 `Michael-L340/trade`，网址 `/trade/`；2026-10-09 前叫 trade-journal）和记账共用这个 Supabase 项目，**也共用同一个登录账号**。它的对象一律带 tj 前缀：表 `tj_journal`、`tj_journal_history`，函数 `tj_me`、`tj_journal_guard`、`tj_storage_bytes`、`tj_storage_usage`，Storage 私有桶 `tj-shots` 和 `storage.objects` 上的 `tj_shots_select`、`tj_shots_insert` 两条策略。建表脚本是交易日志仓库的 `supabase/tj_0001_init.sql`，不在本仓库的 migrations 里。
 - 记账的代码、迁移、`backup.mjs` 一律不碰 tj 对象。`wipeAll`、`importAll`、Snapshot、整库恢复都不涉及交易日志；删账号会连带交易日志一起受影响，别删。
 - 账号的 `user_metadata.tj_backup` 是交易日志备份写的状态，记账别覆盖整个 user_metadata。
 - Allow new users to sign up 和 Allow anonymous sign-ins 是两个应用共用的项目设置，必须保持关闭。
