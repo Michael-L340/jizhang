@@ -99,6 +99,16 @@ export function Ledger() {
   const setChildId = (childId: string) => setFilter({ ...filter, childId })
   const [open, setOpen] = useState(false)
 
+  // 搜索结果里点某一天的标题：退出搜索、清掉筛选，回到全部流水并定位到那一天（用户 2026-10-09 要的）
+  function gotoDay(date: string) {
+    setQ('')
+    setSearchOpen(false)
+    setFilter(NO_FILTER)
+    setYm(ALL_MONTHS)
+    setTarget(date)
+    scrolledFor.current = null
+  }
+
   // 再点一次「流水」回到默认：全部月份、不筛选、不搜索、滚回顶部。
   // 这里连月份一起重置——统计页刻意不重置（那是用户挑的趋势区间），
   // 而流水页的「默认」就是全部流水。
@@ -356,10 +366,18 @@ export function Ledger() {
             {sec.days.map((g) => (
           <div key={g.date} id={`day-${g.date}`} className="mt-3" style={{ scrollMarginTop: 'var(--ledger-sticky-h, 92px)' }}>
             <div className="flex justify-between px-4 pb-1 text-xs text-muted">
-              <span>
-                {fmtDateZh(g.date)}
-                {fmtDateRel(g.date) === '今天' || fmtDateRel(g.date) === '昨天' ? ` · ${fmtDateRel(g.date)}` : ''}
-              </span>
+              {searching ? (
+                <button type="button" className="text-left" onClick={() => gotoDay(g.date)}>
+                  {fmtDateZh(g.date)}
+                  {fmtDateRel(g.date) === '今天' || fmtDateRel(g.date) === '昨天' ? ` · ${fmtDateRel(g.date)}` : ''}
+                  <span className="ml-1 text-brand-ink">看这一天 ›</span>
+                </button>
+              ) : (
+                <span>
+                  {fmtDateZh(g.date)}
+                  {fmtDateRel(g.date) === '今天' || fmtDateRel(g.date) === '昨天' ? ` · ${fmtDateRel(g.date)}` : ''}
+                </span>
+              )}
               <span className="num">
                 {g.expense ? `支出 ${fmtYuan(g.expense)}` : ''}
                 {g.expense && g.income ? ' · ' : ''}
