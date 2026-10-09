@@ -16,12 +16,14 @@ const BY_NAME: { test: (n: string) => boolean; color: string }[] = [
   // 「非经常」必须排在「经常」前面，否则前者会被后者先匹配走
   { test: (n) => n.includes('非经常') || n.includes('大额'), color: '#17979b' },
   { test: (n) => n.includes('经常') || n.includes('固定'), color: '#408632' },
-  { test: (n) => n.includes('娱乐') || n.includes('游戏'), color: '#7051d6' },
-  { test: (n) => n.includes('意外'), color: '#c62f85' },
+  // 2026-10-09 用户：「娱乐也不要紫色了」「不能什么红色（偏暖红）吗」→ 玫瑰红（正红是支出色，离它要 > 20°）；
+  // 意外开支原来的玫红和它撞，改成雾蓝
+  { test: (n) => n.includes('娱乐') || n.includes('游戏'), color: '#c4466a' },
+  { test: (n) => n.includes('意外'), color: '#4573c4' },
   { test: (n) => n.includes('工资') || n.includes('实习'), color: '#1f9d55' },
   { test: (n) => n.includes('生活费'), color: '#2f6fed' },
   { test: (n) => n.includes('奖学金'), color: '#f5a524' },
-  { test: (n) => n.includes('理财'), color: '#7c5cff' },
+  { test: (n) => n.includes('理财'), color: '#8a9a2b' }, // 原来是紫的，用户不要紫色（2026-10-09）
   { test: (n) => n.includes('退款'), color: '#14b8a6' },
   // 收入里的「其他」。原来和「意外开支」共用一条规则，跟着拿了支出红——
   // 一个收入分类显示成支出色。拆开单列，给个中性灰。
@@ -30,7 +32,8 @@ const BY_NAME: { test: (n: string) => boolean; color: string }[] = [
 
 // 没匹配到名字的分类按顺序取。前四个刻意不和上面五个一级支出色重复，
 // 这样新建一个一级分类不会撞上「日常餐饮」；用完一轮才开始复用。
-const FALLBACK = ['#7a9523', '#945738', '#aa40bf', '#64748b', '#c7820a', '#408632', '#17979b', '#7051d6', '#c62f85']
+// 不放紫色（用户 2026-10-09）
+const FALLBACK = ['#7a9523', '#945738', '#3f7f99', '#64748b', '#c7820a', '#408632', '#17979b', '#c4466a', '#4573c4']
 
 /** 一级分类的固定颜色 */
 export function categoryColor(name: string, index = 0): string {
@@ -82,7 +85,7 @@ function hslToHex(h: number, s: number, l: number): string {
 }
 
 /** 色相左右各摆多少度。太大会跑出这个色系，太小又分不清 */
-const HUE_SPREAD = 28
+const HUE_SPREAD = 16
 /** 明度从多暗走到多亮。范围写死而不跟着父色走，保证任何一个大类下的对比度都一样 */
 const L_MIN = 0.34
 const L_MAX = 0.78
@@ -116,6 +119,23 @@ export function childColors(parentColor: string, n: number): string[] {
     if (i + mid < n) out.push(ramp[i + mid])
   }
   return out
+}
+
+/**
+ * 统计页点进一个大类后那个饼的颜色（用户 2026-10-09：「深到浅，按照比例动态来，就像 excel 里面饼状图那样」）。
+ *
+ * 同一个色相，按传进来的顺序从深到浅均分 n 档：饼图和图例都按金额降序，所以最大的一块最深、
+ * 一圈顺下去越来越浅。不交错、不摆色相——和 childColors 相反，这里要的就是「有顺序」。
+ * 代价：同一个二级这个月最大是深色，下个月变小就变浅，颜色跟着名次走（用户接受）。
+ */
+export function drillColors(parentColor: string, n: number): string[] {
+  if (n <= 1) return [parentColor]
+  const [h, s0] = hexToHsl(parentColor)
+  const s = Math.min(0.6, s0 * 0.8)
+  return Array.from({ length: n }, (_, i) => {
+    const t = i / (n - 1)
+    return hslToHex(h, s * (1 - t * 0.25), 0.36 + t * 0.46)
+  })
 }
 
 /**

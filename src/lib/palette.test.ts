@@ -1,7 +1,7 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { categoryColor, CHART, childColors, childShade, contrast, hexToHsl, READABLE_MIN, readableOn } from './palette'
+import { categoryColor, CHART, childColors, childShade, drillColors, contrast, hexToHsl, READABLE_MIN, readableOn } from './palette'
 
 /** 两个颜色在 RGB 空间的距离。粗糙但够用：肉眼能分辨大约要 40 以上 */
 function dist(a: string, b: string): number {
@@ -11,7 +11,7 @@ function dist(a: string, b: string): number {
 }
 
 /** 现行的五个一级支出色，下面的不变量都要在它们身上成立 */
-const ROOTS = ['#c7820a', '#408632', '#17979b', '#7051d6', '#c62f85']
+const ROOTS = ['#c7820a', '#408632', '#17979b', '#c4466a', '#4573c4']
 const EXPENSE_ROOTS = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支']
 
 /**
@@ -99,9 +99,9 @@ describe('流水行里二级分类的底色', () => {
   })
 
   it('仍然是父色那个色系，一眼还能看出属于哪个大类', () => {
-    const [h0] = hexToHsl('#7051d6')
+    const [h0] = hexToHsl('#c4466a')
     for (const s of [1, 2, 3, 4, 5, 6]) {
-      const [h] = hexToHsl(childShade('#7051d6', s))
+      const [h] = hexToHsl(childShade('#c4466a', s))
       expect(Math.min(Math.abs(h - h0), 360 - Math.abs(h - h0))).toBeLessThanOrEqual(25)
     }
   })
@@ -112,13 +112,12 @@ describe('流水行里二级分类的底色', () => {
 })
 
 describe('一级支出分类的配色约束', () => {
-  it('五个色相两两至少差 56°——差少了，两边的二级分类会互相撞', () => {
-    // childColors 把色相往左右各摆 28°，每个大类要独占 56°。
-    // 旧配色的蓝(219)和紫(253)只差 34°，这条会红。
+  it('五个色相两两至少差 32°——差少了，两边的二级分类会互相撞', () => {
+    // childColors 把色相往左右各摆 16°，每个大类要独占 32°（2026-10-09 去掉紫色后从 28° / 56° 收窄）。
     const hs = EXPENSE_ROOTS.map((n) => hexToHsl(categoryColor(n))[0]).sort((a, b) => a - b)
     for (let i = 0; i < hs.length; i++) {
       const gap = ((hs[(i + 1) % hs.length] - hs[i] + 360) % 360) || 360
-      expect(gap, `${hs[i].toFixed(0)}° 之后只隔了 ${gap.toFixed(0)}°`).toBeGreaterThanOrEqual(56)
+      expect(gap, `${hs[i].toFixed(0)}° 之后只隔了 ${gap.toFixed(0)}°`).toBeGreaterThanOrEqual(32)
     }
   })
 
@@ -228,5 +227,26 @@ describe('色块上的字用白字还是深字（readableOn）', () => {
         if (fg === CHART.ink && contrast(CHART.ink, bg) <= contrast(CHART.gap, bg)) expect.fail(`${bg} 换成深字反而更糊`)
       }
     }
+  })
+})
+
+describe('点进大类后的饼：由深到浅', () => {
+  it('按顺序一档比一档浅，色相不变；只有一项时就是父色', () => {
+    expect(drillColors('#c4466a', 1)).toEqual(['#c4466a'])
+    for (const root of ['#c7820a', '#408632', '#17979b', '#c4466a', '#4573c4']) {
+      for (const n of [2, 3, 5, 9]) {
+        const hs = drillColors(root, n).map(hexToHsl)
+        for (let i = 1; i < n; i++) expect(hs[i][2]).toBeGreaterThan(hs[i - 1][2])
+        for (const [h] of hs) expect(Math.min(Math.abs(h - hexToHsl(root)[0]), 360 - Math.abs(h - hexToHsl(root)[0]))).toBeLessThanOrEqual(4)
+      }
+    }
+  })
+
+  it('不再有紫色：一级分类和备用色的色相都不落在 250°–310°', () => {
+    const names = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支', '理财收益', ...Array.from({ length: 9 }, (_, i) => `新分类${i}`)]
+    names.forEach((n, i) => {
+      const [h, s] = hexToHsl(categoryColor(n, i))
+      if (s > 0.2) expect(h < 250 || h > 310, `${n} 是紫色`).toBe(true)
+    })
   })
 })

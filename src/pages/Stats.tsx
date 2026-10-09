@@ -12,7 +12,7 @@ import { axisLabels, endDot, gridTopFor, legendRows, shortLabels } from '../lib/
 import { outerBook } from '../lib/facade'
 import { rangeBounds } from '../lib/range'
 import { CHILD_NONE } from '../lib/filter'
-import { categoryColor, CHART, childColors } from '../lib/palette'
+import { categoryColor, CHART, drillColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
 import { useActiveAccounts, useStore } from '../lib/store'
 import { esc } from '../lib/more/html'
@@ -71,7 +71,7 @@ export function Stats() {
       ? drillAgg.children
       : [{ id: drillAgg.id, name: drillAgg.name, amount: drillAgg.amount, count: drillAgg.count }]
     : agg
-  const pieColors = drillAgg ? childColors(rootColors[drillIdx], pieRows.length) : rootColors
+  const pieColors = drillAgg ? drillColors(rootColors[drillIdx], pieRows.length) : rootColors
   const pieTotal = pieRows.reduce((s, r) => s + r.amount, 0)
   // drill 存的是分类 id，换月后那个分类可能在新月份里根本没有记录，drillAgg 变 undefined
   // 而 drill 仍是 truthy：界面退回一级列表，却因为到处写着 !drill 而点不动。
