@@ -5,6 +5,8 @@ import { CatIcon } from '../components/CatIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
+import { Switch } from '../components/Switch'
+import { capSeries, DEFAULT_TREND_FILTER, dropBig, normalizeTrendFilter, parseYuanInt, type TrendFilter } from '../lib/trendFilter'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, positiveAgg, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
@@ -49,6 +51,10 @@ export function Stats() {
   const [range, setRange] = usePersistedState<RangeValue>('jz_stats_range', { kind: 'year' })
   const [rangeOpen, setRangeOpen] = useState(false)
   const [trendKind, setTrendKind] = usePersistedState<'expense' | 'income'>('jz_stats_trendKind', 'expense')
+  // 趋势图的两个开关（不看大额单笔 / 封顶），算法在 lib/trendFilter.ts
+  const [tfRaw, setTf] = usePersistedState<TrendFilter>('jz_stats_trendFilter', DEFAULT_TREND_FILTER)
+  const tf = useMemo(() => normalizeTrendFilter(tfRaw), [tfRaw])
+  const [tfOpen, setTfOpen] = useState(false)
   const [balMode, setBalMode] = usePersistedState<'total' | 'account'>('jz_stats_balMode', 'total')
   const [help, setHelp] = useState(false)
 
@@ -133,9 +139,13 @@ export function Stats() {
   // 而 seriesTotals 只按 monthOf(date) 匹配桶键、从不看端点：选 6月1日–6月10日，
   // 算出来的是整个 6 月。非自定义区间的端点本来就对齐月初月末，这一刀是空操作。
   const inRange = useMemo(() => otxs.filter((t) => t.date >= tStart && t.date <= tEnd), [otxs, tStart, tEnd])
-  const trendTotal = useMemo(() => seriesTotals(inRange, keys, unit, trendKind), [inRange, keys, unit, trendKind])
-  const trendByCat = useMemo(() => seriesByCategory(inRange, cats, keys, unit, trendKind), [inRange, cats, keys, unit, trendKind])
+  // 「不看大额单笔」：先把超过门槛的那几笔拿掉再算，合计和每个点都跟着少
+  const bigCut = useMemo(() => dropBig(inRange, trendKind, tf.big ? tf.bigYuan * 100 : 0), [inRange, trendKind, tf.big, tf.bigYuan])
+  const trendTotal = useMemo(() => seriesTotals(bigCut.txs, keys, unit, trendKind), [bigCut, keys, unit, trendKind])
+  const trendByCat = useMemo(() => seriesByCategory(bigCut.txs, cats, keys, unit, trendKind), [bigCut, cats, keys, unit, trendKind])
   const trendSum = useMemo(() => trendTotal.reduce((a, b) => a + b, 0), [trendTotal])
+  // 「封顶」只管合计那条线：超过的点压成一个小尖、顶上标真实数字；分类 / 堆叠不封
+  const capped = useMemo(() => capSeries(trendTotal.map((v) => v / 100), tf.cap && lineMode === 'total' ? tf.capYuan : 0), [trendTotal, tf.cap, tf.capYuan, lineMode])
   const fewPoints = keys.length <= 3
   // x 轴标签：年份永远带着，装不下就逐级降密度（降级链在 lib/chart.ts 的 axisLabels）。
   // 堆叠档多一根右轴，可用宽度要多让出一列数字，所以两张图分开算。
@@ -152,9 +162,11 @@ export function Stats() {
         formatter: (ps: { dataIndex: number; marker: string; seriesName: string; value: number }[]) => {
           if (!ps.length) return ''
           const head = full(ps[0].dataIndex)
+          // 封顶压下去的点，提示框里仍然是真实数字
+          const val = (p: { dataIndex: number; value: number }) => (capped.over.has(p.dataIndex) ? capped.real[p.dataIndex] : p.value)
           const rows = ps
-            .filter((p) => p.value > 0)
-            .map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span>`)
+            .filter((p) => val(p) > 0)
+            .map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(val(p))}</span>`)
           return [head, ...(rows.length ? rows : [trendKind === 'expense' ? '无支出' : '无收入'])].join('<br/>') + TAP
         },
       },
@@ -168,7 +180,7 @@ export function Stats() {
         axisLine: { lineStyle: { color: CHART.axis } },
         axisLabel: { fontSize: 10, color: CHART.label, interval: (i: number) => trendAxis.show[i] ?? false },
       },
-      yAxis: { type: 'value', splitLine: { lineStyle: { color: CHART.axis } }, axisLabel: { fontSize: 10, color: CHART.label, formatter: axisMoney } },
+      yAxis: { type: 'value', max: capped.max, splitLine: { lineStyle: { color: CHART.axis } }, axisLabel: { fontSize: 10, color: CHART.label, formatter: axisMoney } },
     }
     if (lineMode === 'total') {
       return {
@@ -185,8 +197,16 @@ export function Stats() {
             ...endDot(keys.length, CHART.gap),
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
-            label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
-            data: trendTotal.map((v) => v / 100),
+            label: {
+              show: fewPoints || capped.over.size > 0,
+              position: 'top',
+              fontSize: 10,
+              color: CHART.label,
+              // 封顶的那几个尖顶上标真实数字（带 ▲），点少时每个点都标
+              formatter: (p: { dataIndex: number; value: number }) =>
+                capped.over.has(p.dataIndex) ? `▲${yuan(capped.real[p.dataIndex])}` : fewPoints ? yuan(p.value) : '',
+            },
+            data: capped.data,
           },
         ],
       }
@@ -274,7 +294,7 @@ export function Stats() {
         data: c.data.map((v) => v / 100),
       })),
     }
-  }, [lineMode, keys, trendAxis, trendTotal, trendByCat, fewPoints, unit, trendKind, chartW])
+  }, [lineMode, keys, trendAxis, trendTotal, trendByCat, capped, fewPoints, unit, trendKind, chartW])
 
   // 余额曲线直接画那本账：外页面校准记录是 adjust，在它的日期上是一级台阶，以前的点不动
   //（2026-09-27 起；以前是整条平移，见 docs/里外页面.md）
@@ -462,34 +482,49 @@ export function Stats() {
       </div>
 
       <div className="card p-4 mb-3">
-        <div className="flex items-start justify-between mb-2">
-          <div>
-            <div className="inline-flex rounded-full bg-bg p-0.5 mb-1">
-              {(['expense', 'income'] as const).map((k) => (
-                <button
-                  key={k}
-                  type="button"
-                  className={`px-3 py-1 rounded-full text-xs ${trendKind === k ? 'bg-ink text-white' : 'text-muted'}`}
-                  onClick={() => setTrendKind(k)}
-                >
-                  {k === 'expense' ? '支出' : '收入'}
-                </button>
-              ))}
-            </div>
-            <div className="num text-lg font-semibold leading-tight">{fmtYuan(trendSum, { symbol: true })}</div>
-          </div>
+        {/* 一排：左边支出 / 收入，右边合计 / 分类 / 堆叠 + 筛选按钮（开着任一项时带个小点）；合计数单独一行 */}
+        <div className="flex items-center justify-between mb-1">
           <div className="inline-flex rounded-full bg-bg p-0.5">
-            {(['total', 'category', 'stack'] as const).map((m) => (
+            {(['expense', 'income'] as const).map((k) => (
               <button
-                key={m}
+                key={k}
                 type="button"
-                className={`px-3 py-1 rounded-full text-xs ${lineMode === m ? 'bg-ink text-white' : 'text-muted'}`}
-                onClick={() => setLineMode(m)}
+                className={`px-3 py-1 rounded-full text-xs ${trendKind === k ? 'bg-ink text-white' : 'text-muted'}`}
+                onClick={() => setTrendKind(k)}
               >
-                {m === 'total' ? '合计' : m === 'category' ? '分类' : '堆叠'}
+                {k === 'expense' ? '支出' : '收入'}
               </button>
             ))}
           </div>
+          <div className="flex items-center gap-1.5">
+            <div className="inline-flex rounded-full bg-bg p-0.5">
+              {(['total', 'category', 'stack'] as const).map((m) => (
+                <button
+                  key={m}
+                  type="button"
+                  className={`px-3 py-1 rounded-full text-xs ${lineMode === m ? 'bg-ink text-white' : 'text-muted'}`}
+                  onClick={() => setLineMode(m)}
+                >
+                  {m === 'total' ? '合计' : m === 'category' ? '分类' : '堆叠'}
+                </button>
+              ))}
+            </div>
+            <button
+              type="button"
+              aria-label="趋势图设置"
+              onClick={() => setTfOpen(true)}
+              className={`relative w-7 h-7 rounded-full border inline-flex items-center justify-center ${tf.big || tf.cap ? 'border-brand bg-brand-soft text-brand-ink' : 'border-line text-muted'}`}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+                <path d="M4 6h16M7 12h10M10 18h4" />
+              </svg>
+              {tf.big || tf.cap ? <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-brand-ink" /> : null}
+            </button>
+          </div>
+        </div>
+        <div className="num text-lg font-semibold leading-tight mb-2">
+          {fmtYuan(trendSum, { symbol: true })}
+          {bigCut.count ? <span className="text-[11px] font-normal text-muted ml-1.5">不含 {bigCut.count} 笔大额</span> : null}
         </div>
 
         {lineMode !== 'total' && trendByCat.length === 0 ? (
@@ -499,21 +534,34 @@ export function Stats() {
             <Chart option={trendOption} height={230} onAxisClick={gotoLedger} />
           </Suspense>
         )}
-        <div className="text-[11px] text-muted mt-1">
-          {lineMode === 'stack'
-            ? `每根柱是${unit === 'day' ? '当天' : '当月'}${trendKind === 'expense' ? '支出' : '收入'}总额，按一级分类分段`
-            : `每个点是${unit === 'day' ? '当天' : '当月'}${trendKind === 'expense' ? '支出' : '收入'}总额${lineMode === 'category' ? '，按分类分开' : ''}`}
-。点一下看明细，再点一下看
-          {unit === 'day' ? '当天' : '当月'}的流水。
-          {unit === 'month' && monthOf(tEnd) === monthOf(today()) ? '本月还没结束，显示的是目前的总计。' : ''}
-        </div>
       </div>
+
+      <Sheet open={tfOpen} onClose={() => setTfOpen(false)} title="趋势图">
+        <TrendFilterRow
+          label="不看大额单笔"
+          sub="超过这个数的单笔不算进当天"
+          on={tf.big}
+          yuan={tf.bigYuan}
+          prefix="≥"
+          onToggle={(on) => setTf({ ...tf, big: on })}
+          onYuan={(n) => setTf({ ...tf, bigYuan: n })}
+        />
+        <TrendFilterRow
+          label="封顶"
+          sub="超过的画成一个小尖、标出数字（只对「合计」）"
+          on={tf.cap}
+          yuan={tf.capYuan}
+          onToggle={(on) => setTf({ ...tf, cap: on })}
+          onYuan={(n) => setTf({ ...tf, capYuan: n })}
+        />
+      </Sheet>
 
       <div className="card p-4 mb-3">
         <div className="flex items-start justify-between mb-2">
           <div>
+            {/* 「余额」会被读成净资产，口径写在标题里：不含白条 */}
             <div className="text-sm text-muted">
-              总资产{balAsOf >= today() ? '（当前）' : ` · 截至${unit === 'day' ? fmtDateZh(balAsOf, false) : fmtMonthZh(monthOf(balAsOf)) + '末'}`}
+              总资产 · 不含白条{balAsOf >= today() ? '' : ` · 截至${unit === 'day' ? fmtDateZh(balAsOf, false) : fmtMonthZh(monthOf(balAsOf)) + '末'}`}
             </div>
             <div className="num text-lg font-semibold leading-tight">{fmtYuan(bal.total[bal.total.length - 1] ?? 0, { symbol: true })}</div>
           </div>
@@ -533,11 +581,7 @@ export function Stats() {
         <Suspense fallback={<div style={{ height: 230 }} />}>
           <Chart option={balOption} height={230} onAxisClick={gotoLedger} />
         </Suspense>
-        {/* 「余额」两个字会被读成净资产。这里把口径说死：四个资产账户之和，白条欠款不减 */}
-        <div className="text-[11px] text-muted mt-1">
-          总资产 = 中国银行 + 招商银行 + 支付宝 + 微信，<b className="font-medium">不扣白条欠款</b>（白条在首页和账户页单独一行）。
-          每个点是{unit === 'day' ? '当天' : '当月'}结束时的余额，含区间之前累计的全部记录；点一下看明细，再点一下看当时的流水。
-        </div>
+
       </div>
 
       {/* 进阶分析的入口：那一页的月份和时间范围就是这一页的（同一对钥匙）。
@@ -569,6 +613,38 @@ export function Stats() {
         </div>
         <div className="text-xs text-muted mt-4">说明可以在「账户 → 设置 → 支出用途」里修改。</div>
       </Sheet>
+    </div>
+  )
+}
+
+/** 趋势图设置面板里的一行：开关 + 金额框。金额只收正整数，填坏了不改值 */
+function TrendFilterRow(props: { label: string; sub: string; on: boolean; yuan: number; prefix?: string; onToggle: (on: boolean) => void; onYuan: (n: number) => void }) {
+  const [text, setText] = useState(String(props.yuan))
+  return (
+    <div className="flex items-center justify-between gap-3 py-3 border-b border-line last:border-b-0">
+      <div className="min-w-0">
+        <div className="text-sm">{props.label}</div>
+        <div className="text-[11px] text-muted">{props.sub}</div>
+      </div>
+      <div className="flex items-center gap-2.5 shrink-0">
+        <label className="inline-flex items-center gap-1 bg-bg rounded-lg px-2 py-1 text-sm num">
+          {props.prefix ? <span className="text-muted">{props.prefix}</span> : null}
+          <input
+            inputMode="numeric"
+            className="w-14 bg-transparent text-right outline-none"
+            value={text}
+            onChange={(e) => {
+              const v = e.target.value.replace(/\D/g, '')
+              setText(v)
+              const n = parseYuanInt(v)
+              if (n !== null) props.onYuan(n)
+            }}
+            onBlur={() => setText(String(props.yuan))}
+          />
+          <span className="text-muted">元</span>
+        </label>
+        <Switch on={props.on} onChange={props.onToggle} label={props.label} />
+      </div>
     </div>
   )
 }

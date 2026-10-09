@@ -3,6 +3,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { CatIcon } from '../components/CatIcon'
 import { IconPicker } from '../components/IconPicker'
+import { HelpTip } from '../components/HelpTip'
 import { Sheet } from '../components/Sheet'
 import { ART, toImgIcon } from '../lib/art'
 import { guessIcon, ICON_GROUPS } from '../lib/icons'
@@ -224,8 +225,11 @@ export function Categories() {
         ) : null}
       </div>
 
-      <div className="text-xs text-muted leading-relaxed px-1">
-        点图标可以换图标（七百个 emoji 分组翻页，外加「我的图」里几张自己做的图），点分类名展开二级。二级分类没设图标时会按名字自动选一个，也可以点进去换。分类只能归档不能删除，历史记录永远不会变成孤儿。改名和移动都会追溯影响已有记录的统计归属。
+      <div className="flex justify-end px-1">
+        <HelpTip title="分类">
+          <p>点图标换图标，点名字展开二级。二级没设图标时按名字自动选一个。</p>
+          <p>分类只能归档不能删除。改名和移动会影响已有记录的统计归属。</p>
+        </HelpTip>
       </div>
 
       {/* 单个分类的操作 */}

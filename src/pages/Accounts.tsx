@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { CatIcon } from '../components/CatIcon'
 import { ChipGroup } from '../components/ChipGroup'
+import { HelpTip } from '../components/HelpTip'
 import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
 import type { BillRow, CreditBill } from '../lib/compute'
@@ -562,11 +563,11 @@ export function Accounts() {
         </div>
       ) : null}
 
-      <div className="text-xs text-muted mt-4 leading-relaxed">
-        点账户输入实际余额。一致就什么都不记；不一致时，差额会记成一条「余额校准」，出现在流水里但不计入收入支出，随时可以删除或改成一笔正常收支。
-        {credits.length
-          ? ' 白条：下单时记支出（账户选白条、填分几期），到期日按这个账户的还款日算。平台扣款时点开白条，勾上还的是哪几笔再记还款，记成转账，不会把同一笔算两次。'
-          : ''}
+      <div className="flex justify-end mt-3 pr-1">
+        <HelpTip title="账户和白条">
+          <p>点账户输入实际余额：一致就什么都不记；不一致时差额记成一条「余额校准」，不计入收入支出，随时可以删掉。</p>
+          {credits.length ? <p>白条：下单记支出（账户选白条、填分几期），到期日按还款日算；平台扣款时点开白条勾上还的是哪几笔再记还款，记成转账。</p> : null}
+        </HelpTip>
       </div>
 
       {/* 白条弹层：分期明细 + 一键还款 + 核对待还 */}
@@ -650,7 +651,7 @@ export function Accounts() {
             ) : null}
             {/* 实时预告这笔钱会抵到哪几期。输什么会发生什么，不用先记一笔再看 */}
             {alloc ? <div className="text-[11px] text-brand-ink mb-1 num">{alloc}</div> : null}
-            <div className="text-[11px] text-muted mb-3">金额跟着勾选自动变，扣得不一样可以自己改。记成转账，不进收支统计。</div>
+            <div className="text-[11px] text-muted mb-3">金额跟着勾选变，可以改。</div>
             <button
               type="button"
               disabled={busy || (!editingRepay && !fromAcc) || !repayCents || repayCents <= 0}
@@ -719,10 +720,7 @@ export function Accounts() {
               >
                 <span className="flex-1 min-w-0">
                   <span className="block text-sm">本期还过款之后下的单，算下一期</span>
-                  <span className="block text-[11px] text-muted mt-0.5">
-                    京东白条是这样：还清之后账单已经出了，新单只能进下一期。花呗、美团多半不是，别乱开。
-                    只认你自己记的还款，平台上还了没记这里就不算。
-                  </span>
+                  <span className="block text-[11px] text-muted mt-0.5">京东是这样，花呗、美团多半不是。只认这里记的还款。</span>
                 </span>
                 <span
                   className={`w-11 h-6 rounded-full shrink-0 mt-0.5 flex items-center px-0.5 transition-colors ${creditTarget2.defer_after_repay ? 'bg-brand justify-end' : 'bg-line justify-start'}`}

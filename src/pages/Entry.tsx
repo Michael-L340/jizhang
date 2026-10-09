@@ -483,25 +483,8 @@ export function Entry() {
 
         {!online ? <div className="text-xs text-expense text-center mb-2">当前离线，暂不能记账</div> : null}
 
-        {type === 'expense' || type === 'income' ? (
-          <label className={`flex items-start gap-2.5 rounded-xl border px-3 py-2 mb-3 ${offset ? 'bg-brand-soft border-brand' : 'bg-card border-line'}`}>
-            <input
-              type="checkbox"
-              className="mt-0.5 w-[18px] h-[18px] accent-brand-ink shrink-0"
-              checked={offset}
-              onChange={(e) => {
-                setOffset(e.target.checked)
-                setAdding(false)
-              }}
-            />
-            <span className="min-w-0">
-              <span className="block text-sm">{type === 'income' ? '抵消支出（比如退款）' : '抵消收入（比如帮人垫付）'}</span>
-              <span className="block text-[11px] text-muted">
-                {type === 'income' ? '不算收入，从下面选的支出分类里扣' : '不算支出，从下面选的收入分类里扣'}
-              </span>
-            </span>
-          </label>
-        ) : null}
+        {/* 「抵消」亮着时分类是另一边的，上面只留一行标题说明在扣哪边（开关本身在底下那排胶囊里） */}
+        {offset && catSide ? <div className="text-xs text-muted mb-1">{catSide === 'expense' ? '从哪类支出里扣' : '从哪类收入里扣'}</div> : null}
 
         {catSide === 'expense' ? (
           <>
@@ -597,8 +580,21 @@ export function Entry() {
           <button type="button" className={`chip flex-1 text-left truncate ${note ? '' : 'text-muted'}`} onClick={toggleNote}>
             {note || '备注（可不填）'}
           </button>
+          {type === 'expense' || type === 'income' ? (
+            <button
+              type="button"
+              className={`chip ${offset ? 'on' : 'text-muted'}`}
+              title={type === 'income' ? '不算收入，从支出里扣（退款）' : '不算支出，从收入里扣（垫付）'}
+              onClick={() => {
+                setOffset((v) => !v)
+                setAdding(false)
+              }}
+            >
+              抵消
+            </button>
+          ) : null}
           {mode === 'inner' && !involvesCredit ? (
-            <button type="button" className={`chip ${hidden ? 'on' : 'text-muted'}`} title="外页面当这一笔不存在：列表、余额、曲线、统计都不算它" onClick={() => setHidden((v) => !v)}>
+            <button type="button" className={`chip ${hidden ? 'on' : 'text-muted'}`} onClick={() => setHidden((v) => !v)}>
               {hidden ? '外面隐藏 ·' : '外面隐藏'}
             </button>
           ) : null}

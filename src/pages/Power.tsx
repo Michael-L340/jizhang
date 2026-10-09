@@ -1,5 +1,6 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { HelpTip } from '../components/HelpTip'
 import { Sheet } from '../components/Sheet'
 import { fmtIsoZh, nowIso } from '../lib/date'
 import { newId } from '../lib/id'
@@ -97,8 +98,6 @@ export function Power() {
   const hourSpread = spreadOf(slots.map((x) => x.perHour))
   const wdSpread = spreadOf(wdays.map((x) => x.perDay))
   const wdMinDays = Math.min(...wdays.filter((x) => x.perDay !== null).map((x) => x.days))
-  // 半年窗口里有没有隔了两天以上的读数：那几天是平均摊开的，柱子会被抹平
-  const wdLongGap = ivs.some((iv) => iv.hours > 48 && Date.parse(iv.to.read_at) > now.getTime() - 26 * 7 * DAY_MS)
   const daysAny = days.some((d) => d.coveredHours > 0)
   // 列表里每条读数旁边写「比上一次多几度」：按到达这条的那一段查
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
@@ -177,7 +176,13 @@ export function Power() {
           <div className="card p-4 mt-3">
             <div className="flex items-baseline justify-between mb-1">
               <span className="font-semibold">每天用了多少度</span>
-              <span className="text-[11px] text-muted">最近 30 天</span>
+              <span className="flex items-center gap-2 text-[11px] text-muted">
+                最近 30 天
+                <HelpTip title="每天用了多少度">
+                  <p>读数不用在零点记：两次读数之间用的电按时间平均分到每一天。</p>
+                  <p>浅色的柱子是那天还没算全（比如今天）。</p>
+                </HelpTip>
+              </span>
             </div>
             {daysAny ? (
               <Suspense fallback={<div style={{ height: 180 }} />}>
@@ -186,13 +191,18 @@ export function Power() {
             ) : (
               <div className="text-sm text-muted py-8 text-center">最近 30 天没有读数</div>
             )}
-            <div className="text-[11px] text-muted leading-relaxed mt-1">读数不用在零点记：两次读数之间用的电，按时间平均分到每一天。浅色的柱子是那天还没算全（比如今天）。</div>
           </div>
 
           <div className="card p-4 mt-3">
             <div className="flex items-baseline justify-between mb-1">
               <span className="font-semibold">一周里哪天最费电</span>
-              <span className="text-[11px] text-muted">最近半年 · 平均每天几度</span>
+              <span className="flex items-center gap-2 text-[11px] text-muted">
+                最近半年 · 平均每天几度
+                <HelpTip title="一周里哪天最费电">
+                  <p>只算被读数盖满的整天（今天这种还没记完的不算），同一个星期几合起来平均。</p>
+                  <p>每个星期几至少要有一个记满的整天才算记满一周。</p>
+                </HelpTip>
+              </span>
             </div>
             {wdAny ? (
               <Suspense fallback={<div style={{ height: 170 }} />}>
@@ -209,16 +219,20 @@ export function Power() {
                     ? '高低有差别，但没有哪天特别突出。'
                     : '一周七天差不多，没有哪天特别费电。'
                   : ''}
-              {!wdFull && wdAny ? '还没记满一周（每个星期几至少要有一个记满的整天），先看个大概。' : wdAny && wdMinDays < 3 ? `每个星期几才 ${wdMinDays} 天，先看个大概。` : ''}
-              {wdLongGap ? '有的读数隔了两天以上，那几天是平均摊开的。' : ''}
-              只算被读数盖满的整天（今天这种还没记完的不算），同一个星期几合起来平均。
+              {!wdFull && wdAny ? '还没记满一周，先看个大概。' : wdAny && wdMinDays < 3 ? `每个星期几才 ${wdMinDays} 天，先看个大概。` : ''}
             </div>
           </div>
 
           <div className="card p-4 mt-3">
             <div className="flex items-baseline justify-between mb-1">
               <span className="font-semibold">什么时候最费电</span>
-              <span className="text-[11px] text-muted">最近 3 天 · 每小时几度</span>
+              <span className="flex items-center gap-2 text-[11px] text-muted">
+                最近 3 天 · 每小时几度
+                <HelpTip title="什么时候最费电">
+                  <p>每一段 = 两次读数之间平均每小时用几度。一天记得越多，这条线越细。</p>
+                  <p>高的那几段一般是空调、热水器开着的时候。</p>
+                </HelpTip>
+              </span>
             </div>
             {steps.length ? (
               <Suspense fallback={<div style={{ height: 170 }} />}>
@@ -227,13 +241,18 @@ export function Power() {
             ) : (
               <div className="text-sm text-muted py-8 text-center">最近 3 天记了两次以上才画得出来</div>
             )}
-            <div className="text-[11px] text-muted leading-relaxed mt-1">每一段 = 两次读数之间平均每小时用几度。一天记得越多，这条线越细；高的那几段一般是空调、热水器开着的时候。</div>
           </div>
 
           <div className="card p-4 mt-3">
             <div className="flex items-baseline justify-between mb-1">
               <span className="font-semibold">一天里几点最费电</span>
-              <span className="text-[11px] text-muted">最近 30 天 · 平均每小时几度</span>
+              <span className="flex items-center gap-2 text-[11px] text-muted">
+                最近 30 天 · 平均每小时几度
+                <HelpTip title="一天里几点最费电">
+                  <p>两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。</p>
+                  <p>一天记得越勤越准；两次读数隔得久，各钟点就会差不多高。</p>
+                </HelpTip>
+              </span>
             </div>
             {hasSlots ? (
               <Suspense fallback={<div style={{ height: 170 }} />}>
@@ -248,9 +267,8 @@ export function Power() {
                 : hasSlots
                   ? hourSpread !== null && hourSpread > 1.2
                     ? '高低有差别，但没有哪几个钟点特别突出。'
-                    : '各钟点差不多高（两次读数隔得久就会这样），一天多记几次才看得出。'
+                    : '各钟点差不多高，一天多记几次才看得出。'
                   : ''}
-              两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。一天记得越勤越准。
             </div>
           </div>
 
@@ -323,7 +341,7 @@ export function Power() {
           <>
             <div className="num text-2xl font-semibold text-center mt-2">{fmtReading(picked.centi_kwh)} 度</div>
             <div className="text-center text-sm text-muted mb-4 num">{fmtIsoZh(picked.read_at)}</div>
-            <div className="text-xs text-muted mb-3 leading-relaxed">记错了就删掉再记一次。删掉之后，前后两次读数会直接连起来算。</div>
+            <div className="text-xs text-muted mb-3">删掉之后，前后两次读数直接连起来算。</div>
             <div className="flex gap-2">
               <button type="button" className="flex-1 chip text-center" onClick={() => setPicked(null)}>
                 取消

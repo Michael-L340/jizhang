@@ -233,7 +233,7 @@ export function Settings() {
     ? `有 ${outboxCount} 笔还没上传，也没能存进这台设备：先别关 App，联网后会自动上传。`
     : syncFailed
     ? syncRetrying
-      ? '连接不上，正在自动重试（2 秒 / 6 秒 / 15 秒各一次），不用管它。'
+      ? '连接不上，正在自动重试。'
       : `最近一次同步失败${syncError ? `：${syncError}` : ''}，点「同步」再试。`
     : backupChecked && backupFailed
       ? '读不到备份状态：网络不通或登录过期，点上面那一格重试。'
@@ -307,7 +307,7 @@ export function Settings() {
 
       <Group title="分类与账户">
         <Item icon="🏷️" label="分类管理" hint={`${stat.expenseRoots} 个支出大类 · ${stat.children} 个二级 · ${stat.incomeRoots} 个收入分类`} onClick={() => nav('/categories')} />
-        <Item icon="💳" label="账户" hint={`${assetsCount} 个资产 · ${accounts.length - assetsCount} 个白条 · 点进去改名`} onClick={() => setAccOpen(true)} />
+        <Item icon="💳" label="账户" hint={`${assetsCount} 个资产 · ${accounts.length - assetsCount} 个白条`} onClick={() => setAccOpen(true)} />
       </Group>
 
       <Group title="生活">
@@ -315,7 +315,7 @@ export function Settings() {
       </Group>
 
       <Group title="备份与恢复">
-        {trustworthy ? null : <div className="text-xs text-expense leading-relaxed py-2 border-b border-line">这次打开 App 后还没成功同步过，现在导出的是本机缓存，可能不是最新的。建议先点上面的「同步」。</div>}
+        {trustworthy ? null : <div className="text-xs text-expense leading-relaxed py-2 border-b border-line">还没同步过，导出的可能不是最新的。</div>}
         <Item icon="📤" label="导出 CSV" hint="Excel 可打开" action={busy === 'csv' ? '…' : '导出'} onClick={exportCsv} />
         {/* JSON 备份是完整账本，只在里页面给；外页面不给这一项（不是改成外页面那本账：半份备份拿去「整库恢复」会丢账） */}
         {mode === 'inner' ? <Item icon="🗂️" label="导出 JSON 备份" hint={trustworthy ? '完整备份，可用于恢复' : '会标记为「未同步」'} action={busy === 'json' ? '…' : '导出'} onClick={exportJson} /> : null}
@@ -329,8 +329,8 @@ export function Settings() {
 
       <Group title="滑动手势">
         {/* 动作清单和显示的文案都要过 gesture.ts：外页面下清单里没有 hide 那一项、配置了它也显示成「不用」（死规则，gesture.test.ts 守着这页不许出现那四个字，注释也算） */}
-        <Item icon="👈" label="左滑" hint="流水行往左滑" action={SWIPE_LABEL[effectiveSwipe(swipe, mode).left]} onClick={() => setSwipePick('left')} />
-        <Item icon="👉" label="右滑" hint="流水行往右滑" action={SWIPE_LABEL[effectiveSwipe(swipe, mode).right]} onClick={() => setSwipePick('right')} />
+        <Item icon="👈" label="左滑" action={SWIPE_LABEL[effectiveSwipe(swipe, mode).left]} onClick={() => setSwipePick('left')} />
+        <Item icon="👉" label="右滑" action={SWIPE_LABEL[effectiveSwipe(swipe, mode).right]} onClick={() => setSwipePick('right')} />
       </Group>
 
       <Group title="账号">
@@ -350,7 +350,6 @@ export function Settings() {
         <Item
           icon="🧹"
           label="强制刷新"
-          hint="清空程序缓存重新加载，账本不受影响"
           action="刷新"
           onClick={async () => {
             if (!window.confirm('清空程序缓存并重新加载？需要联网，账本数据和登录状态不受影响。')) return
