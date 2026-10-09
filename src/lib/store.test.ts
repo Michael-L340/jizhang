@@ -7,7 +7,7 @@ import 'fake-indexeddb/auto'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
-import { CACHE_LIMIT_BYTES } from './backup'
+import { CACHE_LIMIT_BYTES, IDB_LIMIT_BYTES } from './backup'
 import { DB_NAME, LEDGER_KEY, LEGACY_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, STORE } from './cache'
 
 // ---------- 假的 api.ts ----------
@@ -528,19 +528,32 @@ describe('S2 本机缓存（账本在 IndexedDB）', () => {
     expect(st().outboxCount).toBe(2)
   })
 
-  it('用 IndexedDB 时上限问浏览器（navigator.storage.estimate），问不到就是 null', async () => {
-    // 变异：noteBackend 不去问 storageQuota → 红
+  it('用 IndexedDB 时上限暂定 5 GiB；浏览器报的配额更小就按浏览器的，问不到就按 5 GiB', async () => {
+    // 变异：noteBackend 不取 min → 第一段红；问不到时给 null → 第二段红
     const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
     Object.defineProperty(globalThis, 'navigator', { value: { storage: { estimate: async () => ({ quota: 123_456_789, usage: 1 }) } }, configurable: true, writable: true })
     try {
       await st().init()
       await drain()
       expect(st().cacheQuota).toBe(123_456_789)
+      Object.defineProperty(globalThis, 'navigator', { value: { storage: { estimate: async () => ({ quota: 64 * 1024 ** 3 }) } }, configurable: true, writable: true })
+      vi.resetModules()
+      const again = await import('./store')
+      await again.useStore.getState().init()
+      await drain()
+      expect(again.useStore.getState().cacheQuota).toBe(IDB_LIMIT_BYTES)
+      Object.defineProperty(globalThis, 'navigator', { value: {}, configurable: true, writable: true })
+      vi.resetModules()
+      const third = await import('./store')
+      await third.useStore.getState().init()
+      await drain()
+      expect(third.useStore.getState().cacheQuota).toBe(IDB_LIMIT_BYTES)
     } finally {
       if (nav) Object.defineProperty(globalThis, 'navigator', nav)
       else delete (globalThis as { navigator?: unknown }).navigator
     }
   })
+
 })
 
 // ══════════════════════════════════════════════════════════════

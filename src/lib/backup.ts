@@ -30,6 +30,12 @@ export const BACKUP_STALE_MS = 48 * 60 * 60 * 1000
  */
 export const CACHE_LIMIT_BYTES = 5 * 1024 * 1024
 
+/**
+ * 用 IndexedDB 时的上限：暂定 5 GiB（用户 2026-10-09 定的，「既然可以几十个 G，那就暂定最大 5G」）。
+ * 浏览器报的配额比它还小就按浏览器的。设置页的百分比、进度条、七成提醒都按它算
+ */
+export const IDB_LIMIT_BYTES = 5 * 1024 * 1024 * 1024
+
 /** 占到上限的这个比例就该提醒用户了。写满之后离线看到的会是旧账本 */
 export const CACHE_WARN_RATIO = 0.7
 

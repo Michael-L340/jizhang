@@ -3,7 +3,7 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { Account, CatKind, Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
 import * as api from './api'
-import { CACHE_LIMIT_BYTES, cacheBytes, type BackupStatus } from './backup'
+import { CACHE_LIMIT_BYTES, cacheBytes, IDB_LIMIT_BYTES, type BackupStatus } from './backup'
 import { dropLegacy, LEDGER_KEY, readLedger, readOutboxDump, removeLedger, removeOutboxDump, storageQuota, writeLedger, writeOutboxDump, type Backend } from './cache'
 import { nowIso } from './date'
 import { applyPending, DELETED, type Pending } from './pending'
@@ -331,9 +331,9 @@ function noteBackend(b: Backend): void {
     useStore.setState({ cacheQuota: CACHE_LIMIT_BYTES })
     return
   }
-  useStore.setState({ cacheQuota: null })
+  useStore.setState({ cacheQuota: IDB_LIMIT_BYTES })
   void storageQuota().then((q) => {
-    if (quotaBackend === 'idb') useStore.setState({ cacheQuota: q })
+    if (quotaBackend === 'idb') useStore.setState({ cacheQuota: q === null ? IDB_LIMIT_BYTES : Math.min(q, IDB_LIMIT_BYTES) })
   })
 }
 
