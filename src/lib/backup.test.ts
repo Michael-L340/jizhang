@@ -3,7 +3,7 @@
 // 这两件事都属于「算错了不会报错，只会安静地骗人」：备份早就停了却显示「正常」，
 // 或者缓存明明快满了进度条还剩一半。所以口径全部锁在这里。
 import { describe, expect, it } from 'vitest'
-import { backupHealth, backupLine, cacheBytes, CACHE_LIMIT_BYTES, CACHE_WARN_BYTES } from './backup'
+import { backupHealth, backupLine, cacheBytes, CACHE_LIMIT_BYTES, CACHE_WARN_RATIO } from './backup'
 import { enteredLabel, fmtIsoZh } from './date'
 
 const H = 3600_000
@@ -87,10 +87,11 @@ describe('cacheBytes', () => {
 })
 
 describe('阈值', () => {
-  it('提醒线是 5 MiB 的七成，且必须小于上限', () => {
+  it('兜底上限是 localStorage 的 5 MiB；提醒线是上限的七成，必须在 0 和 1 之间', () => {
     expect(CACHE_LIMIT_BYTES).toBe(5 * 1024 * 1024)
-    expect(CACHE_WARN_BYTES).toBe(3.5 * 1024 * 1024)
-    expect(CACHE_WARN_BYTES).toBeLessThan(CACHE_LIMIT_BYTES)
+    expect(CACHE_WARN_RATIO).toBe(0.7)
+    expect(CACHE_WARN_RATIO).toBeGreaterThan(0)
+    expect(CACHE_WARN_RATIO).toBeLessThan(1)
   })
 })
 

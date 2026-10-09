@@ -30,6 +30,7 @@
     "@types/react-dom": "^19.2.4",
     "@vite-pwa/assets-generator": "^1.0.0",
     "@vitejs/plugin-react": "^6.1.0",
+    "fake-indexeddb": "^6.2.5",
     "gh-pages": "^6.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "~6.0.2",

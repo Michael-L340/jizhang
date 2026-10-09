@@ -3,8 +3,12 @@
 // 这些场景（S3/S4/S2）以前只能在手机上手动复现：记一笔立刻切走再切回、撤销失败、
 // 缓存写满。它们全是纯数据层的时序问题，把 api.ts 换成可控的假实现就能在这里精确重放，
 // 不需要浏览器，也不需要真的联网。
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import 'fake-indexeddb/auto'
+import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
+import { CACHE_LIMIT_BYTES } from './backup'
+import { DB_NAME, LEDGER_KEY, LEGACY_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, STORE } from './cache'
 
 // ---------- 假的 api.ts ----------
 // vi.hoisted 保证这个对象在 vi.mock 提升后仍是同一个引用，resetModules 之后也不会换。
@@ -60,8 +64,101 @@ class FakeStorage {
   }
 }
 
-const CACHE_KEY = 'jz_cache_v1'
 let ls: FakeStorage
+
+// ---------- 假的 IndexedDB ----------
+// fake-indexeddb 在内存里完整实现了 IndexedDB 的语义（事务顺序、异步回调），每个用例换一个全新的库。
+// 它靠 setImmediate 推进，所以下面的假定时器**故意不假 setImmediate**，否则 await 一次 open 就永远回不来；
+// 代价是推进完假定时器之后要再 drain() 一下，让它的回调跑完。
+let putSpy: MockInstance
+
+/** 让 fake-indexeddb 的回调跑完（它走真的 setImmediate，不归假定时器管） */
+async function drain(): Promise<void> {
+  for (let i = 0; i < 40; i++) await new Promise((r) => setImmediate(r))
+}
+
+/** 越过 500ms 去抖，再让 IndexedDB 的回调跑完 */
+async function flushed(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(600)
+  await drain()
+}
+
+function openTestDb(): Promise<IDBDatabase> {
+  return new Promise((resolve, reject) => {
+    const r = indexedDB.open(DB_NAME, 1)
+    r.onupgradeneeded = () => r.result.createObjectStore(STORE)
+    r.onsuccess = () => resolve(r.result)
+    r.onerror = () => reject(r.error)
+  })
+}
+
+/** IndexedDB 里那份账本的原文；没有就是 null */
+async function idbGet(): Promise<string | null> {
+  await drain()
+  const db = await openTestDb()
+  try {
+    return await new Promise((resolve, reject) => {
+      const r = db.transaction(STORE, 'readonly').objectStore(STORE).get(LEDGER_KEY)
+      r.onsuccess = () => resolve(typeof r.result === 'string' ? r.result : null)
+      r.onerror = () => reject(r.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
+async function idbSet(json: string): Promise<void> {
+  const db = await openTestDb()
+  try {
+    await new Promise<void>((resolve, reject) => {
+      const t = db.transaction(STORE, 'readwrite')
+      t.objectStore(STORE).put(json, LEDGER_KEY)
+      t.oncomplete = () => resolve()
+      t.onerror = () => reject(t.error)
+    })
+  } finally {
+    db.close()
+  }
+}
+
+/** IndexedDB 里那份账本，解析好的 */
+async function cached(): Promise<Record<string, any>> {
+  const raw = await idbGet()
+  expect(raw).not.toBeNull()
+  return JSON.parse(raw as string) as Record<string, any>
+}
+
+/**
+ * 让 IndexedDB 的写入失败，按真实浏览器报配额满的方式：put 本身不抛，事务提交时 abort、tx.error 是 QuotaExceededError
+ * （以前这里让 put 同步抛错，done() 等 abort 的那条路就一条用例都没走到，审查 F37）
+ */
+function failWrites(): void {
+  const orig = putSpy.getMockImplementation() ?? null
+  putSpy.mockRestore()
+  const real = IDBObjectStore.prototype.put
+  putSpy = vi.spyOn(IDBObjectStore.prototype, 'put').mockImplementation(function (this: IDBObjectStore, ...args: Parameters<IDBObjectStore['put']>) {
+    const r = real.apply(this, args)
+    ;(this.transaction as unknown as { _abort: (n: string) => void })._abort('QuotaExceededError')
+    return r
+  })
+  void orig
+}
+
+/** 这条键里的待传队列（jz_outbox_v1 存的是 {at, entries}） */
+function outboxIds(): string[] {
+  const f = JSON.parse(ls.getItem(OUTBOX_KEY)!) as { entries: [string, unknown][] }
+  return f.entries.map(([id]) => id)
+}
+
+function allowWrites(): void {
+  putSpy.mockRestore()
+  putSpy = vi.spyOn(IDBObjectStore.prototype, 'put')
+}
+
+/** 换掉 indexedDB 全局：undefined = 旧浏览器没有；传对象 = 自定义的假实现 */
+function setIndexedDB(v: unknown): void {
+  Object.defineProperty(globalThis, 'indexedDB', { value: v, configurable: true, writable: true })
+}
 
 function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } {
   let resolve!: (v: T) => void
@@ -120,9 +217,12 @@ const offline = () => Object.assign(new Error('Failed to fetch'), { name: 'TypeE
 const denied = () => Object.assign(new Error('violates foreign key constraint'), { code: '23503' })
 
 beforeEach(async () => {
-  vi.useFakeTimers()
+  // 不假 setImmediate：fake-indexeddb 靠它推进（见上）
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date'] })
   ls = new FakeStorage()
   Object.defineProperty(globalThis, 'localStorage', { value: ls, configurable: true, writable: true })
+  setIndexedDB(new IDBFactory())
+  putSpy = vi.spyOn(IDBObjectStore.prototype, 'put')
 
   for (const v of Object.values(api)) if (typeof v === 'function' && 'mockReset' in v) v.mockReset()
   api.onAuthChange.mockReturnValue(() => {})
@@ -137,6 +237,7 @@ beforeEach(async () => {
 })
 
 afterEach(() => {
+  putSpy.mockRestore()
   vi.useRealTimers()
 })
 
@@ -288,89 +389,306 @@ describe('S3 失败回滚不牵连并发操作', () => {
 // ══════════════════════════════════════════════════════════════
 // S2 —— 本机缓存
 // ══════════════════════════════════════════════════════════════
-describe('S2 本机缓存', () => {
+describe('S2 本机缓存（账本在 IndexedDB）', () => {
   it('连续三次写入只落一次盘（500ms 尾部去抖）', async () => {
     api.insertTx.mockResolvedValue(undefined)
     await st().addTx(tx('t1'))
     await st().addTx(tx('t2'))
     await st().addTx(tx('t3'))
-    expect(ls.writes).toBe(0) // 去抖窗口内一次都不写
-    await vi.advanceTimersByTimeAsync(600)
-    expect(ls.writes).toBe(1)
-    expect(JSON.parse(ls.getItem(CACHE_KEY)!).transactions).toHaveLength(3)
+    await drain()
+    expect(putSpy).toHaveBeenCalledTimes(0) // 去抖窗口内一次都不写
+    await flushed()
+    expect(putSpy).toHaveBeenCalledTimes(1)
+    expect((await cached()).transactions).toHaveLength(3)
   })
 
-  it('只写数据表和时间戳，不把 auth/toast/syncing 一起写进去', async () => {
+  it('只写数据表和时间戳，不把 auth/toast/syncing/队列 一起写进去', async () => {
     st().showToast('随便一句')
     st().persist()
-    await vi.advanceTimersByTimeAsync(600)
-    expect(Object.keys(JSON.parse(ls.getItem(CACHE_KEY)!)).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'meter_readings', 'outbox', 'transactions'])
+    await flushed()
+    expect(Object.keys(await cached()).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'meter_readings', 'transactions'])
   })
 
   it('缓存占用按 UTF-16 算：(键长 + 值长) × 2', async () => {
     store.useStore.setState({ transactions: [tx('t1')] })
     st().persist()
-    await vi.advanceTimersByTimeAsync(600)
-    expect(st().cacheBytes).toBe((CACHE_KEY.length + ls.getItem(CACHE_KEY)!.length) * 2)
+    await flushed()
+    expect(st().cacheBytes).toBe((LEDGER_KEY.length + (await idbGet())!.length) * 2)
   })
 
   it('写满时标记降级并只提示一次', async () => {
-    ls.limitChars = 10
+    failWrites()
     store.useStore.setState({ transactions: [tx('t1')] })
     st().persist()
-    await vi.advanceTimersByTimeAsync(600)
+    await flushed()
     expect(st().cacheDegraded).toBe(true)
     const firstToast = st().toast
-    expect(firstToast?.msg).toContain('缓存已满')
+    expect(firstToast?.msg).toContain('缓存写不进去')
 
     st().persist()
-    await vi.advanceTimersByTimeAsync(600)
+    await flushed()
     expect(st().toast?.id).toBe(firstToast?.id) // 没有弹第二次
   })
 
   it('写通了要把降级标记清掉', async () => {
-    ls.limitChars = 10
+    failWrites()
     st().persist()
-    await vi.advanceTimersByTimeAsync(600)
+    await flushed()
     expect(st().cacheDegraded).toBe(true)
 
-    ls.limitChars = Infinity
+    allowWrites()
     st().persist()
-    await vi.advanceTimersByTimeAsync(600)
+    await flushed()
     expect(st().cacheDegraded).toBe(false)
+    expect(await idbGet()).not.toBeNull()
   })
 
-  it('退出登录要取消在途的去抖写入，缓存不能又被写回来', async () => {
+  it('队列写不进 localStorage（满了）：单独标出来，提示不能说「已存在本机」，账本写成功也不许把它清掉', async () => {
+    // 审查 F3/F35：以前和账本共用 cacheDegraded，提示当场被「已存在本机」盖掉，半秒后标记又被账本写成功清掉。
+    // 变异：offlineToast 不看 saved → 第二句红；persist 成功回调顺手清 outboxUnsaved → 第三句红
+    ls.limitChars = 10
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    expect(st().outboxUnsaved).toBe(true)
+    expect(st().toast?.msg).not.toContain('已存在本机')
+    await flushed() // 账本照样写进了 IndexedDB
+    expect(await idbGet()).not.toBeNull()
+    expect(st().outboxUnsaved).toBe(true)
+
+    ls.limitChars = Infinity
+    api.upsertTx.mockRejectedValueOnce(offline()) // 补传还是没网，但这次队列存得进了
+    await st().flushOutbox()
+    expect(st().outboxUnsaved).toBe(false)
+    expect(outboxIds()).toEqual(['t1'])
+  })
+
+  it('退出登录要取消在途的去抖写入，缓存不能又被写回来；两边的键都要删', async () => {
+    // 队列里先放一笔：jz_outbox_v1 不存在的话「删没删」根本测不出来（审查 F36）。变异：signOut 里去掉 removeOutboxDump() → 红
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t0'))
+    expect(ls.getItem(OUTBOX_KEY)).not.toBeNull()
     api.signOut.mockResolvedValueOnce(undefined)
     store.useStore.setState({ transactions: [tx('t1')] })
+    st().persist()
+    await flushed() // 先真的写进去一份
+    expect(await idbGet()).not.toBeNull()
+    ls.map.set(LEGACY_KEY, '{}')
     st().persist() // 定时器已排上
     await st().signOut()
-    await vi.advanceTimersByTimeAsync(600)
-    expect(ls.getItem(CACHE_KEY)).toBeNull()
+    await flushed()
+    expect(await idbGet()).toBeNull()
+    expect(ls.getItem(LEGACY_KEY)).toBeNull()
+    expect(ls.getItem(OUTBOX_KEY)).toBeNull()
+  })
+
+  it('退出前最后一次写入还在路上，删一定落在它后面，上一个账号的账本不能留在机器上', async () => {
+    // 变异：cache.ts 的 removeLedger 不排队（直接 await openDb 再删）→ 写入排在删之后落地，红
+    api.signOut.mockResolvedValueOnce(undefined)
+    store.useStore.setState({ transactions: [tx('t1')] })
+    st().persist()
+    await vi.advanceTimersByTimeAsync(600) // 去抖到点，写入刚出发（open 还没回来）
+    await st().signOut()
+    await drain()
+    expect(await idbGet()).toBeNull()
+    // 那次写入落地时也不许再碰 state（它写的是上一个账号的账本）。变异：persist 里去掉 gen !== cacheGen 的判断 → 红
+    expect(st().cacheBytes).toBe(0)
   })
 
   it('缓存里缺 categories 就整份作废，不能让页面拿到 undefined', async () => {
-    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
+    await idbSet(JSON.stringify({ accounts: [], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
     await st().init()
     expect(st().transactions).toEqual([])
     expect(st().categories).toEqual([])
   })
 
   it('老缓存里没有 hidden 这一列，读出来要补成 null，不能是 undefined', async () => {
-    // 变异：readCache 里去掉 `hidden: t.hidden ?? null` → 这条红。
+    // 变异：parseCache 里去掉 `hidden: t.hidden ?? null` → 这条红。
     // undefined 会顺着 editTx 走到 txToRow，PostgREST 对 undefined 字段的处理和 null 不一样，保守起见统一成 null
     const old = { ...tx('t1') } as Record<string, unknown>
     delete old.hidden
-    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [old], at: '2026-09-04T00:00:00.000Z' }))
+    await idbSet(JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [old], at: '2026-09-04T00:00:00.000Z' }))
     await st().init()
     expect(st().transactions[0].hidden).toBeNull()
   })
 
   it('缓存完整时冷启动直接用它渲染', async () => {
-    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
+    await idbSet(JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
     await st().init()
     expect(ids()).toEqual(['t1'])
     expect(st().lastSync).toBe('2026-09-04T00:00:00.000Z')
+    expect(st().cacheBytes).toBeGreaterThan(0)
+  })
+
+  it('冷启动把队列叠在缓存账本上：账本那份没来得及写的照样显示，队列里标删除的不显示', async () => {
+    // 账本和队列分开落盘，哪份新不一定。变异：init 里 transactions 直接用 cache.transactions → 红
+    await idbSet(JSON.stringify({ accounts: [], categories: [], transactions: [tx('t2')], facade_adjusts: [], meter_readings: [], at: '2026-10-08T00:00:00.000Z' }))
+    ls.map.set(OUTBOX_KEY, JSON.stringify({ at: '2026-10-08T00:00:00.000Z', entries: [['t1', tx('t1')], ['t2', '__deleted__']] }))
+    await st().init()
+    expect(ids()).toEqual(['t1'])
+    expect(st().outboxCount).toBe(2)
+  })
+
+  it('用 IndexedDB 时上限问浏览器（navigator.storage.estimate），问不到就是 null', async () => {
+    // 变异：noteBackend 不去问 storageQuota → 红
+    const nav = Object.getOwnPropertyDescriptor(globalThis, 'navigator')
+    Object.defineProperty(globalThis, 'navigator', { value: { storage: { estimate: async () => ({ quota: 123_456_789, usage: 1 }) } }, configurable: true, writable: true })
+    try {
+      await st().init()
+      await drain()
+      expect(st().cacheQuota).toBe(123_456_789)
+    } finally {
+      if (nav) Object.defineProperty(globalThis, 'navigator', nav)
+      else delete (globalThis as { navigator?: unknown }).navigator
+    }
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 缓存搬家：1.3.30 及以前整份账本（连同待传队列）在 localStorage 的 jz_cache_v1 里。
+// 升级后第一次打开要把账本接过来写进 IndexedDB、把队列写成自己的键，老的那份要等两样都稳了才删。
+// ══════════════════════════════════════════════════════════════
+describe('缓存搬家（localStorage → IndexedDB）', () => {
+  const legacy = () => ({
+    accounts: [],
+    categories: [cat('c1')],
+    transactions: [tx('t1')],
+    facade_adjusts: [],
+    meter_readings: [],
+    at: '2026-10-08T00:00:00.000Z',
+    outbox: [['t1', tx('t1')]],
+  })
+
+  it('老缓存还在 localStorage 里：账本和包在里面的队列都接过来，队列当场写成自己的键', async () => {
+    ls.map.set(LEGACY_KEY, JSON.stringify(legacy()))
+    await st().init()
+    expect(ids()).toEqual(['t1'])
+    expect(st().outboxCount).toBe(1)
+    // 变异：init 里去掉 `if (!dump.found) saveOutbox()` → 红
+    expect(JSON.parse(ls.getItem(OUTBOX_KEY)!).entries).toEqual([['t1', tx('t1')]])
+  })
+
+  it('第一次写进 IndexedDB 之后才删老缓存', async () => {
+    ls.map.set(LEGACY_KEY, JSON.stringify(legacy()))
+    await st().init()
+    expect(ls.getItem(LEGACY_KEY)).not.toBeNull() // 还没写过新的，不能删
+    st().persist()
+    await flushed()
+    expect((await cached()).transactions).toHaveLength(1)
+    expect(ls.getItem(LEGACY_KEY)).toBeNull()
+  })
+
+  it('自己的键比老缓存新：就认它（空的也算），老缓存里那份队列已经过时，不再并', async () => {
+    // 自己的键是上次读老缓存时并出来的；再并一次会把传过的旧版本又传一遍。变异：mergeOutbox 一律并 → 红
+    ls.map.set(LEGACY_KEY, JSON.stringify(legacy())) // at = 10-08
+    ls.map.set(OUTBOX_KEY, JSON.stringify({ at: '2026-10-09T00:00:00.000Z', entries: [] }))
+    await st().init()
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('回退到旧版本又升回来：旧代码在这期间离线记的（只在老缓存里）要并进队列，回退前留下的也不丢', async () => {
+    // 审查 F8/F13/F20。老缓存比自己的键新 = 旧代码后写的。
+    // 变异：mergeOutbox 只认自己的键 → t9 不在队列里，红；改成只认老缓存 → t7 丢了，红
+    ls.map.set(OUTBOX_KEY, JSON.stringify({ at: '2026-10-01T00:00:00.000Z', entries: [['t7', tx('t7')]] }))
+    ls.map.set(LEGACY_KEY, JSON.stringify({ ...legacy(), transactions: [tx('t1'), tx('t9')], outbox: [['t9', tx('t9')]], at: '2026-10-08T00:00:00.000Z' }))
+    await st().init()
+    expect(st().outboxCount).toBe(2)
+    expect(outboxIds().sort()).toEqual(['t7', 't9'])
+    // 并完、落了盘，下一次写进 IndexedDB 才删老缓存
+    st().persist()
+    await flushed()
+    expect(ls.getItem(LEGACY_KEY)).toBeNull()
+    api.upsertTx.mockResolvedValue(undefined)
+    store.useStore.setState({ auth: 'in' })
+    await st().flushOutbox()
+    expect(api.upsertTx.mock.calls.map((c) => c[0].id).sort()).toEqual(['t7', 't9'])
+  })
+
+  it('两边都有账本（上一个会话退回过 localStorage）：用 at 新的那份，不管它在哪边', async () => {
+    // 变异：readCache 一律用 IndexedDB 那份 → 第一段红；一律用 localStorage 那份 → 第二段红
+    await idbSet(JSON.stringify({ ...legacy(), transactions: [tx('old')], at: '2026-10-01T00:00:00.000Z', outbox: undefined }))
+    ls.map.set(LEGACY_KEY, JSON.stringify({ ...legacy(), transactions: [tx('new')], at: '2026-10-08T00:00:00.000Z', outbox: [] }))
+    ls.map.set(OUTBOX_KEY, JSON.stringify({ at: '2026-10-09T00:00:00.000Z', entries: [] }))
+    await st().init()
+    expect(ids()).toEqual(['new'])
+
+    await idbSet(JSON.stringify({ ...legacy(), transactions: [tx('newer')], at: '2026-10-09T00:00:00.000Z', outbox: undefined }))
+    vi.resetModules()
+    const again = await import('./store')
+    await again.useStore.getState().init()
+    expect(again.useStore.getState().transactions.map((t) => t.id)).toEqual(['newer'])
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// IndexedDB 不可用：行为必须和 1.3.30 一样（写 localStorage、5 MiB 上限），绝不能卡死或丢账
+// ══════════════════════════════════════════════════════════════
+describe('IndexedDB 不可用时退回 localStorage', () => {
+  it('没有 indexedDB（旧浏览器 / 隐私模式）：缓存照旧写 localStorage，冷启动照旧能读，上限照旧 5 MiB', async () => {
+    setIndexedDB(undefined)
+    await st().init()
+    expect(st().cacheQuota).toBe(CACHE_LIMIT_BYTES)
+    store.useStore.setState({ transactions: [tx('t1')] })
+    st().persist()
+    await flushed()
+    expect(JSON.parse(ls.getItem(LEGACY_KEY)!).transactions).toHaveLength(1)
+    expect(st().cacheDegraded).toBe(false)
+
+    vi.resetModules()
+    const again = await import('./store')
+    await again.useStore.getState().init()
+    expect(again.useStore.getState().transactions.map((t) => t.id)).toEqual(['t1'])
+  })
+
+  it('open 挂起不回调：等 OPEN_TIMEOUT_MS 就放弃，冷启动不卡死，这个会话往后都走 localStorage、不再等', async () => {
+    // Safari 出过「indexedDB.open 永远不回调」的 bug。变异：cache.ts 的 openOrGiveUp 超时后不 giveUp → 第二段红（又等了 4 秒）
+    setIndexedDB({ open: () => ({}) })
+    ls.map.set(LEGACY_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-10-08T00:00:00.000Z' }))
+    const p = st().init()
+    await vi.advanceTimersByTimeAsync(OPEN_TIMEOUT_MS + 10)
+    await p
+    expect(ids()).toEqual(['t1']) // localStorage 那份照样读到
+    expect(st().cacheQuota).toBe(CACHE_LIMIT_BYTES)
+
+    // 读失败了，同步成功之前不往本机写（IndexedDB 里那份可能更新）；同步成功之后照写，而且不用再等 4 秒
+    store.useStore.setState({ transactions: [tx('t1'), tx('t2')] })
+    st().persist()
+    await vi.advanceTimersByTimeAsync(600)
+    expect(JSON.parse(ls.getItem(LEGACY_KEY)!).transactions).toHaveLength(1)
+    api.fetchAll.mockResolvedValueOnce({ ...snap([tx('t1'), tx('t2')]), accounts: [{ id: 'acc1' }] })
+    store.useStore.setState({ auth: 'in' }) // init 里没联网，被判成了没登录
+    await st().refresh()
+    await vi.advanceTimersByTimeAsync(600)
+    expect(JSON.parse(ls.getItem(LEGACY_KEY)!).transactions).toHaveLength(2)
+  })
+
+  it('冷启动读 IndexedDB 失败：内存里那张白纸不许盖掉本机的好账本（离线点「立即上传」也不行），队列照样显示', async () => {
+    // 审查 F9/F14。变异：persist 里去掉 `if (!ledgerTrusted) return` → IndexedDB 那份被盖成空的，红
+    await idbSet(JSON.stringify({ accounts: [{ id: 'acc1' }], categories: [cat('c1')], transactions: [tx('t1')], facade_adjusts: [], meter_readings: [], at: '2026-10-08T00:00:00.000Z' }))
+    ls.map.set(OUTBOX_KEY, JSON.stringify({ at: '2026-10-08T00:00:00.000Z', entries: [['q1', tx('q1')]] }))
+    const real = IDBObjectStore.prototype.get
+    const getSpy = vi.spyOn(IDBObjectStore.prototype, 'get').mockImplementation(() => {
+      throw Object.assign(new Error('connection lost'), { name: 'UnknownError' })
+    })
+    await st().init()
+    getSpy.mockRestore()
+    void real
+    expect(ids()).toEqual(['q1']) // 队列那笔照样显示，不是一张让人以为丢了账的白纸
+    expect(st().toast?.msg).toContain('没读出来')
+    api.upsertTx.mockRejectedValueOnce(offline())
+    store.useStore.setState({ auth: 'in' }) // 本机存着会话钥匙、按登录着渲染的那种（init 里没联网判成了没登录）
+    await st().flushOutbox() // 网没真通，补传失败，finally 里会 persist
+    expect(api.upsertTx).toHaveBeenCalled()
+    await flushed()
+    expect((await cached()).transactions.map((t: Transaction) => t.id)).toEqual(['t1'])
+  })
+
+  it('两边都有账本时，没有账户的那份不许赢（哪怕它的 at 更新）', async () => {
+    // 变异：readCache 只按 at 比 → 红
+    await idbSet(JSON.stringify({ accounts: [{ id: 'acc1' }], categories: [], transactions: [tx('good')], facade_adjusts: [], meter_readings: [], at: '2026-10-01T00:00:00.000Z' }))
+    ls.map.set(LEGACY_KEY, JSON.stringify({ accounts: [], categories: [], transactions: [], at: '2026-10-09T00:00:00.000Z' }))
+    ls.map.set(OUTBOX_KEY, JSON.stringify({ at: '2026-10-09T00:00:00.000Z', entries: [] }))
+    await st().init()
+    expect(ids()).toEqual(['good'])
   })
 })
 
@@ -976,7 +1294,7 @@ describe('外页面校准记录（0010）', () => {
     expect(st().facade_adjusts.map((f) => f.id)).toEqual(['f1'])
     expect(api.insertFacadeAdjust.mock.calls[0][0]).toEqual(fa('f1'))
     await vi.advanceTimersByTimeAsync(600)
-    expect(JSON.parse(ls.getItem(CACHE_KEY)!).facade_adjusts).toEqual([fa('f1')])
+    expect((await cached()).facade_adjusts).toEqual([fa('f1')])
   })
 
   it('写失败：state 不动、返回 false、报错不带「外页面」三个字（这条 toast 会在外页面上弹）', async () => {
@@ -1005,13 +1323,13 @@ describe('外页面校准记录（0010）', () => {
   })
 
   it('同步拉回来的记录进 state；0010 之前写的缓存没有这一节，读出来是空数组不是 undefined', async () => {
-    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
+    ls.map.set(LEGACY_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
     api.hasSession.mockResolvedValue(true)
     api.fetchAll.mockResolvedValueOnce({ ...snap([tx('t1')]), facade_adjusts: [fa('f9')] })
     await st().init()
     expect(st().facade_adjusts.map((f) => f.id)).toEqual(['f9'])
     await vi.advanceTimersByTimeAsync(600)
-    expect(JSON.parse(ls.getItem(CACHE_KEY)!).facade_adjusts).toHaveLength(1)
+    expect((await cached()).facade_adjusts).toHaveLength(1)
   })
 
   it('退出登录要清掉，换个账号登进来不能看到上一个人的外页面校准', async () => {
@@ -1028,7 +1346,7 @@ describe('电表读数（0011）', () => {
     expect(st().meter_readings).toEqual([mr('m1')])
     expect(api.insertMeterReading.mock.calls[0][0]).toEqual(mr('m1'))
     await vi.advanceTimersByTimeAsync(600)
-    expect(JSON.parse(ls.getItem(CACHE_KEY)!).meter_readings).toEqual([mr('m1')])
+    expect((await cached()).meter_readings).toEqual([mr('m1')])
   })
 
   it('记一条失败（没网也一样）：state 不动、返回 false、告诉用户；没有离线队列', async () => {
@@ -1063,7 +1381,7 @@ describe('电表读数（0011）', () => {
     expect(api.deleteMeterReading).toHaveBeenCalledWith('m1')
     expect(st().meter_readings.map((m) => m.id)).toEqual(['m2'])
     await vi.advanceTimersByTimeAsync(600)
-    expect(JSON.parse(ls.getItem(CACHE_KEY)!).meter_readings.map((m: MeterReading) => m.id)).toEqual(['m2'])
+    expect((await cached()).meter_readings.map((m: MeterReading) => m.id)).toEqual(['m2'])
   })
 
   it('删失败：这条还在、返回 false、告诉用户', async () => {
@@ -1095,11 +1413,11 @@ describe('电表读数（0011）', () => {
 
   it('冷启动：缓存里的读数直接拿来渲染；0011 之前写的缓存没有这一节，读出来是空数组不是 undefined', async () => {
     // 变异：readCache 不补这一节 → 第二段拿到 undefined，红
-    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], facade_adjusts: [], meter_readings: [mr('m1')], at: '2026-10-03T00:00:00.000Z' }))
+    ls.map.set(LEGACY_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], facade_adjusts: [], meter_readings: [mr('m1')], at: '2026-10-03T00:00:00.000Z' }))
     await st().init()
     expect(st().meter_readings).toEqual([mr('m1')])
 
-    ls.map.set(CACHE_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
+    ls.map.set(LEGACY_KEY, JSON.stringify({ accounts: [], categories: [cat('c1')], transactions: [tx('t1')], at: '2026-09-04T00:00:00.000Z' }))
     vi.resetModules()
     const again = await import('./store')
     await again.useStore.getState().init()
@@ -1112,7 +1430,7 @@ describe('电表读数（0011）', () => {
     await st().init()
     expect(st().meter_readings.map((m) => m.id)).toEqual(['m9'])
     await vi.advanceTimersByTimeAsync(600)
-    expect(JSON.parse(ls.getItem(CACHE_KEY)!).meter_readings).toEqual([mr('m9')])
+    expect((await cached()).meter_readings).toEqual([mr('m9')])
   })
 
   it('退出登录要清掉，换个账号登进来不能看到上一个人的电表', async () => {
@@ -1127,7 +1445,7 @@ describe('旧版本写的缓存', () => {
   it('缺少新列的旧缓存要在入口补成 null，不能让 undefined 流进算式', async () => {
     // 加列之前的缓存长这样：账户没有 repay_day，流水没有 settles / installments
     ls.map.set(
-      CACHE_KEY,
+      LEGACY_KEY,
       JSON.stringify({
         at: '2026-09-01T00:00:00.000Z',
         accounts: [{ id: 'jd', name: '京东白条', kind: 'credit', sort: 5, is_archived: false }],
@@ -1264,10 +1582,42 @@ describe('离线记账：待上传队列', () => {
     expect(ids()).not.toContain('t1') // 留着就是一条云端永远不会有的记录
   })
 
-  it('队列写进缓存，重开 App 还在', async () => {
+  it('断网记的那笔立刻写进 jz_outbox_v1，不等 500ms 去抖：这半秒里 App 被杀掉也不丢', async () => {
+    // 变异：enqueue 里去掉 saveOutbox() → 红
     api.insertTx.mockRejectedValueOnce(offline())
     await st().addTx(tx('t1'))
-    await vi.advanceTimersByTimeAsync(600) // 缓存写入有 500ms 去抖
+    expect(outboxIds()).toEqual(['t1'])
+  })
+
+  it('补传成功后队列文件也要跟着更新，否则重开 App 又传一遍', async () => {
+    // 变异：flushOutbox 的 finally 里去掉 saveOutbox() → 红
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.upsertTx.mockResolvedValueOnce(undefined)
+    await st().flushOutbox()
+    expect(outboxIds()).toEqual([])
+  })
+
+  it('补传到一半：传完的那笔马上从本机队列里划掉，不等整轮结束（中途被杀不会再传一遍旧版本）', async () => {
+    // 审查 F19。变异：flushOutbox 循环里去掉逐笔的 saveOutbox() → 红
+    api.insertTx.mockRejectedValue(offline())
+    await st().addTx(tx('t1'))
+    await st().addTx(tx('t2'))
+    api.insertTx.mockReset()
+    const d = deferred<void>()
+    api.upsertTx.mockResolvedValueOnce(undefined).mockReturnValueOnce(d.promise)
+    const p = st().flushOutbox()
+    await vi.advanceTimersByTimeAsync(0)
+    expect(outboxIds()).toHaveLength(1) // 第一笔传完了，第二笔还在路上
+    d.resolve()
+    await p
+    expect(outboxIds()).toEqual([])
+  })
+
+  it('队列写进本机，重开 App 还在', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    await flushed()
 
     vi.resetModules()
     const again = await import('./store')
@@ -1336,11 +1686,13 @@ describe('里外页面', () => {
   it('模式绝不能进缓存——否则冷启动会停在里页面，这个开关就白做了', async () => {
     st().setMode('inner')
     st().persist()
-    await vi.advanceTimersByTimeAsync(600) // 越过 500ms 去抖
-    const raw = ls.getItem(CACHE_KEY)
+    await flushed()
+    const raw = await idbGet()
     expect(raw).toBeTruthy()
     expect(JSON.parse(raw as string)).not.toHaveProperty('mode')
     expect(raw).not.toContain('inner')
+    // localStorage 里自己的那几个键也不许带
+    for (const [k, v] of ls.map) if (k.startsWith('jz_')) expect(v).not.toContain('inner')
   })
 
   it('切走不到 60 秒再回来，还在里页面', () => {

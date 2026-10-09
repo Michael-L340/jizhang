@@ -23,11 +23,15 @@ export type BackupHealth = 'none' | 'ok' | 'stale'
 /** 超过这么久没备份就当它坏了。备份每天跑一次，48 小时 = 连着两天没跑，不是偶发抖动 */
 export const BACKUP_STALE_MS = 48 * 60 * 60 * 1000
 
-/** localStorage 的大致上限（5 MiB，按 UTF-16 字节算） */
+/**
+ * localStorage 的大致上限（5 MiB，按 UTF-16 字节算）。
+ * 账本缓存 2026-10-09 起放 IndexedDB（上限由浏览器按剩余空间给，见 cache.ts），
+ * 这个数只在 IndexedDB 不可用、退回 localStorage 时当上限用。
+ */
 export const CACHE_LIMIT_BYTES = 5 * 1024 * 1024
 
-/** 到这里就该提醒用户了：5 MiB 的七成。写满之后离线看到的会是旧账本 */
-export const CACHE_WARN_BYTES = 3.5 * 1024 * 1024
+/** 占到上限的这个比例就该提醒用户了。写满之后离线看到的会是旧账本 */
+export const CACHE_WARN_RATIO = 0.7
 
 export function backupHealth(at: string | null, now: string): BackupHealth {
   if (!at) return 'none'
@@ -61,8 +65,11 @@ function groupDigits(n: number): string {
  * 所以是 (key.length + value.length) × 2。
  *
  * 别用 `new Blob([v]).size` —— 那是 UTF-8 字节数，两个方向都错：一个 UUID（全是 ASCII）
- * 会被少算一半，一句中文备注又会被多算 50%。占用是拿来跟 5 MiB 配额比的，用错口径
+ * 会被少算一半，一句中文备注又会被多算 50%。占用是拿来跟配额比的，用错口径
  * 就会「进度条还剩一半，写入已经开始失败」。
+ *
+ * 放进 IndexedDB 的那份也按这个口径算：浏览器存字符串的方式各家不同（Chrome 全 ASCII 的按 1 字节存），
+ * 按 UTF-16 算只会偏大，宁可报多不报少。
  */
 export function cacheBytes(entries: Array<[string, string]>): number {
   let n = 0

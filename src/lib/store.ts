@@ -3,23 +3,25 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { Account, CatKind, Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
 import * as api from './api'
-import { cacheBytes, type BackupStatus } from './backup'
+import { CACHE_LIMIT_BYTES, cacheBytes, type BackupStatus } from './backup'
+import { dropLegacy, LEDGER_KEY, readLedger, readOutboxDump, removeLedger, removeOutboxDump, storageQuota, writeLedger, writeOutboxDump, type Backend } from './cache'
 import { nowIso } from './date'
 import { applyPending, DELETED, type Pending } from './pending'
 import { packOutbox, unpackOutbox, type Outbox, type OutboxDump } from './outbox'
 import { INNER_TTL_MS, type Mode } from './facade'
 
-const CACHE_KEY = 'jz_cache_v1'
-
+// 账本快照存 IndexedDB、待传队列存 localStorage，存哪、怎么兜底都在 cache.ts；这里只管内容。
 interface Cache extends Snapshot {
   at: string
-  /** 待上传队列。旧版本写的缓存没有这个键，unpackOutbox 会返回空队列 */
+  /**
+   * 1.3.30 及以前：待上传队列包在这份缓存里。现在单独存（cache.ts 的 OUTBOX_KEY），新代码写的缓存不带这个键。
+   * 所以 localStorage 那份老缓存带着它 = 旧代码写的：首次搬家，或者回退到旧版本又升回来（见 init 的 mergeLegacyOutbox）。
+   */
   outbox?: OutboxDump
 }
 
-function readCache(): Cache | null {
+function parseCache(raw: string | null): Cache | null {
   try {
-    const raw = localStorage.getItem(CACHE_KEY)
     if (!raw) return null
     const c = JSON.parse(raw) as Cache
     if (!Array.isArray(c.accounts) || !Array.isArray(c.categories) || !Array.isArray(c.transactions)) return null
@@ -40,12 +42,33 @@ function readCache(): Cache | null {
   }
 }
 
+interface CacheRead {
+  cache: Cache | null
+  raw: string | null
+  backend: Backend
+  /** IndexedDB 这次没读出来（不是「没有」）。这时 state 是白纸，不许拿它去盖本机那份 */
+  failed: boolean
+  /** localStorage 那份老缓存（不管选没选它）。它带着的 outbox 要并进队列 */
+  legacy: Cache | null
+}
+
 /**
- * 写缓存。只写数据表（Snapshot 那几张），不要把整个 store 展开进来（否则 auth/syncing/toast 也会被写）。
- * 返回占用的字节数（口径见 backup.ts 的 cacheBytes：UTF-16，键也算）。
- * 抛错交给调用方处理，不再静默吞掉。
+ * 读缓存。IndexedDB 和 localStorage 两边都可能有一份（上一个会话 IndexedDB 打不开、退回 localStorage 写的），
+ * 都在就挑 `at` 新的那份——但**没有账户的那份永远赢不了有账户的**：at 只说明什么时候写的，不说明全不全
+ * （和 refresh 里「拉回来账户是空的就不收」同一个判据）。绝不抛：读不到对 App 只是「没有缓存」。
  */
-function writeCache(s: Snapshot, outbox: Outbox): number {
+async function readCache(): Promise<CacheRead> {
+  const r = await readLedger()
+  const a = parseCache(r.idb)
+  const b = parseCache(r.local)
+  const full = (c: Cache | null) => !!c && c.accounts.length > 0
+  const bWins = !!b && (!a || (full(b) && !full(a)) || (full(b) === full(a) && Date.parse(b.at) > Date.parse(a.at)))
+  if (bWins) return { cache: b, raw: r.local, backend: r.backend, failed: r.failed, legacy: b }
+  return { cache: a, raw: r.idb, backend: r.backend, failed: r.failed, legacy: b }
+}
+
+/** 缓存里只放数据表（Snapshot 那几张）和时间戳，不要把整个 store 展开进来（否则 auth/syncing/toast/mode 也会被写） */
+function serializeCache(s: Snapshot): string {
   const c: Cache = {
     accounts: s.accounts,
     categories: s.categories,
@@ -53,11 +76,8 @@ function writeCache(s: Snapshot, outbox: Outbox): number {
     facade_adjusts: s.facade_adjusts,
     meter_readings: s.meter_readings,
     at: nowIso(),
-    outbox: packOutbox(outbox),
   }
-  const json = JSON.stringify(c)
-  localStorage.setItem(CACHE_KEY, json)
-  return cacheBytes([[CACHE_KEY, json]])
+  return JSON.stringify(c)
 }
 
 export interface Toast {
@@ -81,10 +101,17 @@ export interface State extends Snapshot {
   /** 失败了但正在自动重试——界面这时候别报红，也别弹 toast */
   syncRetrying: boolean
   toast: Toast | null
-  /** 本机缓存占用字节数（UTF-16），0 表示还没写过 */
+  /** 本机缓存占用字节数（按 UTF-16 算，偏保守），0 表示还没写过 */
   cacheBytes: number
-  /** 缓存写不进去了（配额满或被禁用），离线看到的数据可能是旧的 */
+  /** 缓存写不进去了（配额满、被禁用、IndexedDB 挂起），离线看到的数据可能是旧的 */
   cacheDegraded: boolean
+  /**
+   * 本机缓存的上限（字节）。退回 localStorage 时是固定的 5 MiB；用 IndexedDB 时是浏览器报的配额
+   * （`navigator.storage.estimate()`，按手机剩余空间给），浏览器不支持就是 null——设置页据此显示「上限随手机剩余空间」
+   */
+  cacheQuota: number | null
+  /** 待传队列存不进本机（localStorage 满了或被禁）：那几笔只在内存里，关掉 App 就没了 */
+  outboxUnsaved: boolean
   /** 每日自动备份的状态（另一个私有仓库跑的，见 backup.ts）。null = 没备份过或还没读到 */
   backup: BackupStatus | null
   /** 备份状态读失败（网络不通 / 登录过期）。和「从来没备份过」要分开显示 */
@@ -245,14 +272,74 @@ function drop(map: Map<string, number>, pending: Map<string, unknown>, id: strin
  * 写失败且不是数据被拒 —— 也就是没网、网太慢、登录过期 —— 就进待传队列。
  * 补丁表那条要一并删掉：两张表管的是同一个 id 的话，队列才是权威的那个。
  */
-function enqueue(id: string, v: Transaction | typeof DELETED): void {
+/** 返回队列存没存进本机。没存进去时调用方别说「已存在本机」 */
+function enqueue(id: string, v: Transaction | typeof DELETED): boolean {
   drop(settledTx, pendingTx, id)
   outboxTx.set(id, v)
+  return saveOutbox()
+}
+
+/** 离线写入那句 toast：队列没存进本机就不能说「已存在本机」——关掉 App 这几笔就没了 */
+function offlineToast(saved: boolean, what: string): string {
+  return saved ? `没网，${what}已存在本机，联网后自动上传` : `没网，这台设备也存不下：先别关 App，联网后会自动上传`
+}
+
+/** 队列最近一次落盘成功了没有。老缓存（里面包着一份队列）只在它为真时才许删 */
+let outboxOnDisk = true
+
+/**
+ * 队列一变就立刻落盘（同步的 localStorage），不等账本那 500ms 的去抖：
+ * 它是本机唯一一份云端没有的数据，App 在这半秒里被杀掉就是真丢账。
+ * 写不进去（配额满、被禁）单独标 outboxUnsaved，**不和账本共用 cacheDegraded**：
+ * 账本写成功会清 cacheDegraded，队列只在内存里这件事就从设置页上消失了（审查 F3）。
+ */
+function saveOutbox(): boolean {
+  try {
+    writeOutboxDump({ at: nowIso(), entries: packOutbox(outboxTx) })
+    outboxOnDisk = true
+  } catch {
+    outboxOnDisk = false
+  }
+  if (useStore.getState().outboxUnsaved !== !outboxOnDisk) useStore.setState({ outboxUnsaved: !outboxOnDisk })
+  return outboxOnDisk
+}
+
+/** 账本写不进去：标降级，只提示一次。云端数据不受影响，但离线看到的会是旧的，必须让用户知道 */
+function noteCacheFailure(): void {
+  if (useStore.getState().cacheDegraded) return
+  useStore.setState({ cacheDegraded: true })
+  useStore.getState().showToast('本机缓存写不进去，离线时看到的可能是旧数据')
+}
+
+/** 退出登录就换代：之前排上的写入落地时不许再动 state（它写的是上一个账号的账本；删除排在它后面，cache.ts 保证） */
+let cacheGen = 0
+/** 每次落盘编号：只有最后一次的结果能改 cacheDegraded / cacheBytes（先发的晚到不许覆盖后发的，审查 F16） */
+let writeSeq = 0
+/**
+ * 内存里这本账能不能拿去盖本机缓存。冷启动 IndexedDB 读失败时 state 是一张白纸，
+ * 这时写下去会把本机那份好的覆盖成空的（或者带着新的 at 在下次冷启动时赢过它，审查 F9/F14）。
+ * 读到了缓存、确实没有缓存、或者同步成功过一次，才是真的
+ */
+let ledgerTrusted = true
+
+/** 设置页显示上限用。退回 localStorage 就是固定的 5 MiB；IndexedDB 去问浏览器，问不到就是 null */
+let quotaBackend: Backend | null = null
+function noteBackend(b: Backend): void {
+  if (b === quotaBackend) return
+  quotaBackend = b
+  if (b === 'local') {
+    useStore.setState({ cacheQuota: CACHE_LIMIT_BYTES })
+    return
+  }
+  useStore.setState({ cacheQuota: null })
+  void storageQuota().then((q) => {
+    if (quotaBackend === 'idb') useStore.setState({ cacheQuota: q })
+  })
 }
 
 /** 已经在队列里的 id 的后续增删改：只改队列和界面，马上试着补传，返回 true（对用户来说已经记下了） */
 function queueWrite(id: string, v: Transaction | typeof DELETED, patch: (s: State) => Partial<State>): true {
-  enqueue(id, v)
+  if (!enqueue(id, v)) useStore.getState().showToast(offlineToast(false, ''))
   useStore.setState(patch)
   useStore.setState({ outboxCount: outboxTx.size })
   useStore.getState().persist()
@@ -314,6 +401,34 @@ export class RestoreFailed extends Error {
   }
 }
 
+/**
+ * 把磁盘上的待传队列装进内存，返回要不要马上写回 jz_outbox_v1。两个来源：
+ *   - jz_outbox_v1：新代码写的，带 at；
+ *   - localStorage 老缓存里的 outbox 字段：只有 1.3.30 及以前会写。
+ * 规则（审查 F8/F13/F20）：
+ *   - 自己的键不存在 → 第一次搬家，整份接老缓存的；
+ *   - 老缓存比自己的键新 → 回退到旧版本又升回来：旧代码在这期间离线记的账只在老缓存里。两份**并起来**，
+ *     同一笔以老缓存为准（它更新）。只在自己的键里的那几笔（回退期间旧代码看不见）也留着——
+ *     宁可补传出一笔重复的，也不能吞掉一笔；
+ *   - 否则以自己的键为准：它是上次读老缓存时并出来的，老缓存里的那份已经过时，再并会把传过的旧版本又传一遍。
+ */
+function mergeOutbox(legacy: Cache | null): boolean {
+  const dump = readOutboxDump()
+  const old = legacy && legacy.outbox !== undefined ? unpackOutbox(legacy.outbox) : null
+  const own = unpackOutbox(dump.found ? dump.entries : null)
+  let merged = own
+  let dirty = false
+  if (!dump.found) {
+    merged = old ?? new Map()
+    dirty = true
+  } else if (old && legacy && (dump.at === null || Date.parse(legacy.at) > Date.parse(dump.at))) {
+    merged = new Map([...own, ...old])
+    dirty = true
+  }
+  for (const [id, v] of merged) outboxTx.set(id, v)
+  return dirty
+}
+
 let toastSeq = 0
 let toastTimer: ReturnType<typeof setTimeout> | null = null
 let unsubAuth: (() => void) | null = null
@@ -335,31 +450,43 @@ export const useStore = create<State>((set, get) => ({
   toast: null,
   cacheBytes: 0,
   cacheDegraded: false,
+  cacheQuota: null,
+  outboxUnsaved: false,
   backup: null,
   backupFailed: false,
   outboxCount: 0,
   mode: 'outer',
 
   async init() {
-    const cache = readCache()
-    if (cache) {
-      // 队列要在拉云端之前装回来，否则第一次 refresh 会把上次没传上去的那几笔冲掉
-      for (const [id, v] of unpackOutbox(cache.outbox)) outboxTx.set(id, v)
-      set({
-        accounts: cache.accounts,
-        categories: cache.categories,
-        transactions: cache.transactions,
-        facade_adjusts: cache.facade_adjusts,
-        meter_readings: cache.meter_readings,
-        lastSync: cache.at,
-        outboxCount: outboxTx.size,
-      })
-      try {
-        set({ cacheBytes: cacheBytes([[CACHE_KEY, localStorage.getItem(CACHE_KEY) ?? '']]) })
-      } catch {
-        /* 读不到就当没有 */
-      }
+    // 读缓存是异步的（IndexedDB），但 App 这时还停在「加载中」（auth 是 loading），
+    // 不会先闪一下空账本；cache.ts 有超时，最多等 OPEN_TIMEOUT_MS
+    let read: CacheRead = { cache: null, raw: null, backend: 'local', failed: false, legacy: null }
+    try {
+      read = await readCache()
+    } catch {
+      /* 读不到就当没有 */
     }
+    const { cache, raw, backend, failed } = read
+    // 读失败（不是「没有」）：在同步成功之前，内存里这本账不许拿去盖本机那份
+    ledgerTrusted = !failed
+    // 队列要在拉云端之前装回来，否则第一次 refresh 会把上次没传上去的那几笔冲掉
+    if (mergeOutbox(read.legacy)) saveOutbox()
+    // 没读到缓存也要把队列叠上去：那几笔是云端没有的，不显示的话首页写着「N 笔还没上传」列表里却找不到
+    if (cache || outboxTx.size) {
+      set({
+        accounts: cache?.accounts ?? [],
+        categories: cache?.categories ?? [],
+        // 账本和队列分开写、各有各的落盘时间，哪份新不一定；队列是「用户改完、云端至今不知道的最新状态」，叠在最上面
+        transactions: applyPending(cache?.transactions ?? [], outboxTx),
+        facade_adjusts: cache?.facade_adjusts ?? [],
+        meter_readings: cache?.meter_readings ?? [],
+        lastSync: cache?.at ?? null,
+        cacheBytes: raw ? cacheBytes([[LEDGER_KEY, raw]]) : 0,
+      })
+    }
+    set({ outboxCount: outboxTx.size })
+    noteBackend(backend)
+    if (failed && !cache) get().showToast('本机缓存这次没读出来，联网后会恢复')
     // 本机存着会话钥匙就先按登录着渲染（缓存的账本马上能看、能记）；下面那句断网时要等 25 秒才回来
     if (api.hasStoredSession()) set({ auth: 'in' })
     const signedIn = await api.hasSession()
@@ -412,6 +539,7 @@ export const useStore = create<State>((set, get) => ({
       cancelRetry()
       retryAt = 0
       set({ ...merged, loaded: true, lastSync: nowIso(), syncFailed: false, syncError: null, syncRetrying: false })
+      ledgerTrusted = true
       get().persist()
       // 网通了，把欠的补上。不 await：补传失败不该让这次同步显示成失败
       void get().flushOutbox()
@@ -461,6 +589,8 @@ export const useStore = create<State>((set, get) => ({
           // （改的那次也没网，于是队列里换成了新版本）；无条件 delete 会把新版本一起抹掉，
           // 结果云端是旧值、界面是新值、队列空了——再也没有东西会去纠正它。
           if (outboxTx.get(id) === v) outboxTx.delete(id)
+          // 传完一笔就落一次盘：补到一半 App 被杀，下次启动不该把传过的旧版本再传一遍（会顶掉别的设备上的改动，审查 F19）
+          saveOutbox()
         } catch (e) {
           if (!api.isPermanentError(e)) break // 还是没网，后面的也别试了
           // 数据被拒：重传一万次也是同样结果，只能扔掉并告诉用户。
@@ -468,6 +598,7 @@ export const useStore = create<State>((set, get) => ({
           // 同样只删我传的那一版：新版本也许是合法的，该留给下一轮试。
           if (outboxTx.get(id) !== v) continue
           outboxTx.delete(id)
+          saveOutbox()
           if (v !== DELETED) set((st) => ({ transactions: st.transactions.filter((x) => x.id !== id) }))
           get().showToast(`有 1 笔上传被拒绝，已从本机移除：${api.friendlyError(e)}`)
         }
@@ -475,6 +606,7 @@ export const useStore = create<State>((set, get) => ({
     } finally {
       flushing = false
       set({ outboxCount: outboxTx.size })
+      saveOutbox()
       get().persist()
     }
   },
@@ -483,16 +615,27 @@ export const useStore = create<State>((set, get) => ({
     if (persistTimer) clearTimeout(persistTimer)
     persistTimer = setTimeout(() => {
       persistTimer = null
+      // 冷启动没读出缓存、又还没同步成功过：内存里是白纸，写下去会盖掉本机那份好的
+      if (!ledgerTrusted) return
       const { accounts, categories, transactions, facade_adjusts, meter_readings } = get()
-      try {
-        set({ cacheBytes: writeCache({ accounts, categories, transactions, facade_adjusts, meter_readings }, outboxTx), cacheDegraded: false })
-      } catch {
-        // 配额满或被禁用。云端数据不受影响，但离线看到的会是旧的，必须让用户知道
-        if (!get().cacheDegraded) {
-          set({ cacheDegraded: true })
-          get().showToast('本机缓存已满，离线时看到的可能是旧数据')
-        }
-      }
+      // 序列化在这里同步做（现读 state），落盘是异步的；多次写入由 cache.ts 排成一队，后写的后落地
+      const json = serializeCache({ accounts, categories, transactions, facade_adjusts, meter_readings })
+      const gen = cacheGen
+      const my = ++writeSeq
+      writeLedger(json, { dropLegacy: outboxOnDisk }).then(
+        (backend) => {
+          if (backend === null || gen !== cacheGen || my !== writeSeq) return
+          set({ cacheBytes: cacheBytes([[LEDGER_KEY, json]]), cacheDegraded: false })
+          noteBackend(backend)
+          // localStorage 被老缓存占满、队列写不进去（1.3.30 时代缓存快 5 MiB 的设备）：账本已经进了 IndexedDB、
+          // 队列在内存里，老缓存可以删了腾地方，再存一次队列
+          if (backend === 'idb' && !outboxOnDisk) void dropLegacy().then(() => saveOutbox())
+        },
+        () => {
+          if (gen !== cacheGen || my !== writeSeq) return
+          noteCacheFailure()
+        },
+      )
     }, 500)
   },
 
@@ -534,22 +677,28 @@ export const useStore = create<State>((set, get) => ({
     // 推进号码，让还在飞的那次 loadBackupStatus 回来时自己作废，
     // 否则下面刚清掉的 backup 会被它写回来
     backupSeq++
+    // 换代：已经排上、还没落地的那次写入回来时不许再碰 state；cache.ts 的队列保证删一定落在它后面
+    cacheGen++
+    // 队列也要清：换个账号登进来，把上一个账号的记录补传过去是灾难。
+    // 代价是退出登录会丢掉还没传上去的那几笔，所以退出前要拦一下（见 Settings.tsx）。
+    outboxTx.clear()
+    removeOutboxDump()
+    outboxOnDisk = true
+    ledgerTrusted = true
     try {
-      localStorage.removeItem(CACHE_KEY)
       // 搜索词、筛选、上次用的账户这些也是这个账号的痕迹，一起清。只删自己前缀的键，同一个域名下还住着交易日志
       for (const k of Object.keys(localStorage)) if (/^jz_(ledger_|entry_memory|repay_from|stats_)/.test(k)) localStorage.removeItem(k)
     } catch {
       /* ignore */
     }
-    // 队列也要清：换个账号登进来，把上一个账号的记录补传过去是灾难。
-    // 代价是退出登录会丢掉还没传上去的那几笔，所以退出前要拦一下（见 Settings.tsx）。
-    outboxTx.clear()
+    // 不 await：删不掉不该让退出登录失败，顺序由 cache.ts 的队列保证
+    void removeLedger()
     // 纯粹是不留垃圾：定时器真响了 refresh() 也会因为 auth 不是 'in' 当场早退，
     // 所以这两行**测不出来**（写过一条用例，加不加都绿，按规矩删了）。留着是为了
     // 退出登录之后别有个定时器还挂在那儿。
     cancelRetry()
     retryAt = 0
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0 })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0, outboxUnsaved: false })
   },
 
   /**
@@ -581,10 +730,10 @@ export const useStore = create<State>((set, get) => ({
       }
       // 没网：这笔留在界面上，进待传队列，联网后自动补。
       // 返回 true 是故意的——对用户来说这笔账**已经记下了**，页面该照常收尾。
-      enqueue(t.id, t)
+      const saved = enqueue(t.id, t)
       set({ outboxCount: outboxTx.size })
       get().persist()
-      get().showToast('没网，已存在本机，联网后自动上传')
+      get().showToast(offlineToast(saved, ''))
       return true
     }
   },
@@ -610,10 +759,10 @@ export const useStore = create<State>((set, get) => ({
       }
       // 没网：改完的样子留在界面上，队列里存最终状态。
       // 这条本来就在队列里（断网时记的）也没关系——一个 id 只有一条，直接覆盖。
-      enqueue(t.id, t)
+      const saved = enqueue(t.id, t)
       set({ outboxCount: outboxTx.size })
       get().persist()
-      get().showToast('没网，改动已存在本机，联网后自动上传')
+      get().showToast(offlineToast(saved, '改动'))
       return true
     }
   },
@@ -641,10 +790,10 @@ export const useStore = create<State>((set, get) => ({
       // 没网：界面上就当删了，队列里记一条「删除」。
       // 就算这笔本来也没传上去过（断网记的、断网又删的），补传时 delete 一个
       // 云端不存在的 id 是安全的空操作，不用额外记「它到底进没进过云端」。
-      enqueue(id, DELETED)
+      const saved = enqueue(id, DELETED)
       set({ outboxCount: outboxTx.size })
       get().persist()
-      get().showToast('没网，删除已存在本机，联网后自动上传')
+      get().showToast(offlineToast(saved, '删除'))
       return true
     }
   },

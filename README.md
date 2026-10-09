@@ -53,7 +53,8 @@ src/
 ├── lib/
 │   ├── supabase.ts           客户端单例，只允许 api.ts import
 │   ├── api.ts                ★唯一接触 Supabase 的文件，换后端只改这里
-│   ├── store.ts              zustand，乐观更新 + localStorage 缓存
+│   ├── store.ts              zustand，乐观更新 + 本机缓存
+│   ├── cache.ts              本机缓存的存储层：账本在 IndexedDB、待传队列在 localStorage，打不开 / 挂起的兜底（有单测）
 │   ├── compute.ts            余额与统计的纯函数（有单测）
 │   ├── money.ts              元↔分 唯一转换点
 │   ├── date.ts               北京时间日期工具

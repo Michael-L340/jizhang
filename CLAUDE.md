@@ -11,6 +11,7 @@
 - `src/components/*` → 只能 import `lib/`、`types.ts`。
 - `src/lib/store.ts` 是唯一调用 `lib/api.ts` 的地方；`lib/api.ts` 是唯一 import `lib/supabase.ts` 的地方。
 - `lib/compute.ts`、`lib/money.ts`、`lib/date.ts`、`lib/csv.ts`、`lib/chart.ts` 是纯函数，不依赖 store / api。
+- `lib/cache.ts`（本机缓存的存储层）只许 `store.ts` import，页面要缓存占用就读 store 的 `cacheBytes` / `cacheQuota`。
 - 加一个新页面 = 新建 `pages/X.tsx` + 在 `App.tsx` 路由表加一行 + 需要的话在 `components/TabBar.tsx` 加一项。别的文件不动。
 
 ## 数据约定
@@ -23,6 +24,7 @@
 - **待传队列里的 id 的后续增删改只改队列**（`store.ts` 的 `queueWrite`，2026-10-09 审出来的）：云端还没有这一行，直接发 update / delete 命中 0 行不报错、当成功，队列里的旧版本却还在，下次同步被打回旧值、补传再把旧值写进云端。补传成功的每一笔也要像普通写入一样登记在途补丁再 settle：online 事件同时触发补传和同步，不登记就会被那次同步冲掉。
 - **断网冷启动不能卡在登录页**：`api.hasSession` 换不到 token 但本机还存着 `sb-*-auth-token` 就算登录着（离线态）；`init` 先按 `hasStoredSession()` 把缓存的账本亮出来，再等 getSession（断网要 25 秒）。
 - **`fetchAll` 拉回来账户是空的、而本地明明有 → 当失败处理，绝不能收下。** supabase-js 在 session 失效时**不报错**，而是拿 anon key 发请求（`_getAccessToken` 的兜底 `?? supabaseKey`），RLS 一挡返回「零行、无错误」。收下的话界面清空、`persist()` 还会把本机缓存一起覆盖成空的，全程零报错。账户表永远不该是空的（`0001` 就预置了四个）；第一次装 App 时本地本来就空，那种空快照照收。
+- **账本缓存在 IndexedDB（`jz-cache` 库，`lib/cache.ts`，只许 `store.ts` import），待传队列单独在 localStorage 的 `jz_outbox_v1`（`{at, entries}`）**（2026-10-09 起；之前整份在 localStorage 的 `jz_cache_v1`，整个域名只有 5 MiB、还要和交易日志分）。规矩：① 队列一变就同步落盘（`saveOutbox`，补传时逐笔落），不等账本那 500ms 去抖；存不进去单独标 `outboxUnsaved`，**不和账本共用 `cacheDegraded`**，离线那句 toast 不许说「已存在本机」。冷启动把队列叠在缓存账本上（没读到账本也叠）。② 读写删连开门、连退回 localStorage 全部排在 `cache.ts` 的 `serial` 里，完成顺序 = 调用顺序；超时的操作作废（事务 abort、不再落笔）。连接类错误扔掉旧连接重开**一次**再试（Safari 后台回收后报「Connection … lost」），配额满不重试。冷启动整次读最多 `OPEN_TIMEOUT_MS`，写最多 `WRITE_TIMEOUT_MS`，超时这个会话往后都走 localStorage。③ **读失败 ≠ 没有**（`readLedger` 的 `failed`）：读失败时 `ledgerTrusted` 为假，同步成功之前 `persist` 不写——白纸会盖掉本机那份好的。两边都有账本时按 `at` 挑，但没有账户的那份永远赢不了有账户的。④ 老缓存 `jz_cache_v1` 只在写进 IndexedDB 成功、**而且队列最近一次落盘成功**（`outboxOnDisk`）之后才删。队列合并见 `store.ts` 的 `mergeOutbox`：老缓存带 `outbox` 字段（只有旧代码会写）且比 `jz_outbox_v1` 新 → 两份并起来、同一笔以老缓存为准；否则以自己的键为准。⑤ 退出登录先同步写待删记号 `jz_cache_wipe`、删 localStorage 那份，IndexedDB 那份排队删；删成功或之后写成功才清记号，记号在时冷启动不认 IndexedDB 那份并再删。`persist` 的落地回调核 `cacheGen` 和 `writeSeq`，只有最后一次写入能改 state。⑥ 回退到 1.3.30 及以前：旧代码只读 `jz_cache_v1`，看不见 IndexedDB 和 `jz_outbox_v1`。**回退前和升回来前，每台设备都先点「立即上传」把队列清空**；没清空的后果：回退前没传的那几笔回退期间看不见、升回来会补传（可能和回退期间重记的变成两笔）；回退期间离线记的，升回来会被并进队列补传（`mergeOutbox`）。⑦ 测试用 fake-indexeddb，假定时器**不许假 setImmediate**（它靠这个推进），推进完定时器要 `drain()`；配额满按真实浏览器的报法模拟（事务提交时 abort，`failWrites`），别让 put 同步抛。
 - 写入失败分两类，别只写「失败就回滚」：`api.isPermanentError` 为真（`23xxx`/`42xxx` 错误码）才回滚，其余（没网、超时、登录过期）进 `lib/outbox.ts` 的待上传队列，联网后补传。默认可重传——误判成永久失败是当场丢账，误判成网络问题只是队列里卡一条、用户看得见。
 - 白条账户 `kind = 'credit'`（京东白条、花呗、拼多多、美团月付），余额为负 = 欠款。**下单记支出**（账户选白条，支出算在下单那个月）、**平台扣款记转账**（银行 → 白条）、利息单独记支出。还款不预排流水。
 - **到期日 = 下单日之后最近的那个还款日**（`accounts.repay_day`，京东 17、花呗和美团 1）。还款日当天下单算下一个月；填 31 时短月落到月末。`installments` 的第 k 期 = 第 1 期往后推 k−1 个月。`repay_day` 为空 = 没有固定还款日（拼多多先用后付逐笔扣），这种账户不排期，只要没被勾选结清就一直算欠着。
@@ -51,7 +53,7 @@
 ## 数据库迁移
 - 只新增 `supabase/migrations/000N_*.sql`，**不改旧文件**。
 - **迁移只加可空列，永远不删列、不改名、不改类型**。改了类型不报错但静默算错（元→分那次实测差 100 倍）。真要废弃一列就让它留在库里不管，在 `types.ts` 里加注释（`Account.kind` 就是这么处理的）。
-- **加一列要同时改四处**，其中一处在私有仓库 `Michael-L340/jizhang-backup`：`api.ts` 的列常量与映射、`csv.ts` + `validate.ts`、`restore.dbtest.ts`、`backup.mjs` 的 `SELECT_*` **和** `toAccount`/`toTransaction`/`toFacadeAdjust`。外加 `store.ts` 的 `readCache` 要把新列补成 `null`。漏改的后果全是静默的。**云端迁移和推 `backup.mjs` 要挨着做。**
+- **加一列要同时改四处**，其中一处在私有仓库 `Michael-L340/jizhang-backup`：`api.ts` 的列常量与映射、`csv.ts` + `validate.ts`、`restore.dbtest.ts`、`backup.mjs` 的 `SELECT_*` **和** `toAccount`/`toTransaction`/`toFacadeAdjust`。外加 `store.ts` 的 `parseCache` 要把新列补成 `null`。漏改的后果全是静默的。**云端迁移和推 `backup.mjs` 要挨着做。**
 - **加一张表**（0010 的 `facade_adjusts`、0011 的 `meter_readings` 是先例）除了上面四处，还要：`wipeAll` 按外键方向排删除顺序、`importAll` 按外键方向排写入顺序、`Snapshot` / 缓存 / `signOut` / 在途补丁都带上它、`backup.mjs` 的抓取顺序（被引用的表后抓）。回退旧版本时旧代码看不见新表——所以「假数据」（外页面校准记录）宁可单独一张表，也不往 `transactions` 加一列：加列的话旧代码会把它当真流水算进里页面，静默算错。
 - **每个读写请求前先 `assertSession()`**（api.ts，2026-10-08）：supabase-js 在 session 没了时不报错、拿 anon key 发请求——读回来空的、删除被 RLS 过滤成 0 行也算成功、插入吃到 42501。`fetchAll` 拉完还要再验一次（中途掉了后半截是空的）。**42501 不算永久失败**（`isPermanentError`）：它是「没登上」，当成数据被拒的话待传队列会把离线记的账删掉。校准记录和电表读数按 id 接着取（keyset），流水仍是 offset + 主键 tiebreaker。电表读数的新增是按 id 的 upsert、id 在弹层打开时就定下，保存报失败再点一次不会变成两条。退出登录用 `scope: 'local'`（global 会把交易日志和别的设备一起踢下线），服务端那步失败就自己删本机的 `sb-*-auth-token`。
 - **合并导入只插入云端没有的 id**（`importAll(snap, { onlyNew: true })` → `ignoreDuplicates`）：postgrest 的 upsert 是整行覆盖、校验层把缺失列补成 null，合并一份老备份会把 hidden / repay_day / defer_after_repay 清掉、把备份之后藏起来的记录放回外页面。整库恢复和回滚照旧按 id 覆盖。回滚只覆盖不删，文案不能说「没有丢东西」。

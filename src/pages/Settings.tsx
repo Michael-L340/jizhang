@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
 import { Sheet } from '../components/Sheet'
 import { changePassword, friendlyError } from '../lib/api'
-import { backupHealth, backupLine, CACHE_LIMIT_BYTES, CACHE_WARN_BYTES } from '../lib/backup'
+import { backupHealth, backupLine, CACHE_WARN_RATIO } from '../lib/backup'
 import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta, shareOrDownload, STALE_EXPORT_WARNING } from '../lib/csv'
 import { fmtIsoZh, nowIso, today } from '../lib/date'
 import { fmtReading, sortReadings } from '../lib/meter'
@@ -49,6 +49,8 @@ export function Settings() {
   const loaded = useStore((st) => st.loaded)
   const cacheBytes = useStore((st) => st.cacheBytes)
   const cacheDegraded = useStore((st) => st.cacheDegraded)
+  const cacheQuota = useStore((st) => st.cacheQuota)
+  const outboxUnsaved = useStore((st) => st.outboxUnsaved)
   const backup = useStore((st) => st.backup)
   const backupFailed = useStore((st) => st.backupFailed)
   const outboxCount = useStore((st) => st.outboxCount)
@@ -219,21 +221,26 @@ export function Settings() {
     }
   }
 
-  const cachePct = Math.min(100, Math.round((cacheBytes / CACHE_LIMIT_BYTES) * 100))
-  const cacheWarn = cacheDegraded || cacheBytes > CACHE_WARN_BYTES
+  // 上限不一定知道（IndexedDB 的配额要问浏览器，老浏览器问不到）：知道才算百分比、画进度条，不知道就只报占了多少
+  const cachePct = cacheQuota ? Math.min(100, Math.round((cacheBytes / cacheQuota) * 100)) : null
+  const cacheWarn = cacheDegraded || (cacheQuota !== null && cacheBytes > cacheQuota * CACHE_WARN_RATIO)
+  // 还没写过（0）就画一道杠：光秃秃一个「0」看着像坏了
+  const cacheCell = cacheBytes <= 0 ? '—' : cachePct === null ? fmtBytes(cacheBytes) : cachePct < 1 ? '<1%' : `${cachePct}%`
   const backupTone = !backupChecked || backupFailed || health === 'none' ? 'muted' : health === 'stale' ? 'warn' : 'ok'
   const backupText = !backupChecked ? '读取中…' : backupFailed ? '读不到' : health === 'ok' ? '正常' : health === 'stale' ? '好像停了' : '未启用'
   // 状态卡下面那一行：有问题说问题，没问题就报一句上次备份
-  const statusNote = syncFailed
+  const statusNote = outboxUnsaved && outboxCount > 0
+    ? `有 ${outboxCount} 笔还没上传，也没能存进这台设备：先别关 App，联网后会自动上传。`
+    : syncFailed
     ? syncRetrying
       ? '连接不上，正在自动重试（2 秒 / 6 秒 / 15 秒各一次），不用管它。'
       : `最近一次同步失败${syncError ? `：${syncError}` : ''}，点「同步」再试。`
     : backupChecked && backupFailed
       ? '读不到备份状态：网络不通或登录过期，点上面那一格重试。'
       : cacheDegraded
-        ? `缓存已满（${fmtBytes(cacheBytes)}），离线时看到的可能是旧数据，云端不受影响。`
+        ? '本机缓存写不进去，离线时看到的可能是旧数据，云端不受影响。'
         : cacheWarn
-          ? `缓存快满了（${fmtBytes(cacheBytes)}），没网时看到的可能是旧账本，云端不受影响。`
+          ? `缓存快满了（${fmtBytes(cacheBytes)} / ${fmtBytes(cacheQuota ?? 0)}），没网时看到的可能是旧账本，云端不受影响。`
           : backupChecked
             ? backupLine(backup, nowIso())
             : ''
@@ -281,16 +288,20 @@ export function Settings() {
           </button>
           <div className="rounded-xl bg-bg px-2.5 py-2">
             <span className="block text-[10.5px] text-muted">本机缓存</span>
-            <span className={`block num text-[13px] font-semibold ${cacheWarn ? 'text-expense' : ''}`}>{cachePct}%</span>
-            <span className="block h-1 rounded-full bg-line overflow-hidden mt-1">
-              <span className="block h-full rounded-full" style={{ width: `${cachePct}%`, background: cacheDegraded ? 'var(--color-expense)' : cacheWarn ? 'var(--color-adjust)' : 'var(--color-brand-ink)' }} />
-            </span>
+            <span className={`block num text-[13px] font-semibold ${cacheWarn ? 'text-expense' : ''}`}>{cacheCell}</span>
+            {cachePct === null ? null : (
+              <span className="block h-1 rounded-full bg-line overflow-hidden mt-1">
+                {/* 占了就至少画 1%，否则刚换到 IndexedDB 那几十 GB 的上限下这根条永远是空的，看着像坏了 */}
+                <span className="block h-full rounded-full" style={{ width: `${cacheBytes > 0 ? Math.max(1, cachePct) : 0}%`, background: cacheDegraded ? 'var(--color-expense)' : cacheWarn ? 'var(--color-adjust)' : 'var(--color-brand-ink)' }} />
+              </span>
+            )}
           </div>
         </div>
-        {statusNote ? <div className={`text-[11px] mt-2 ${syncFailed || cacheWarn || (backupChecked && backupFailed) ? 'text-expense' : backupTone === 'warn' ? 'text-adjust' : 'text-muted'}`}>{statusNote}</div> : null}
+        {statusNote ? <div className={`text-[11px] mt-2 ${(outboxUnsaved && outboxCount > 0) || syncFailed || cacheWarn || (backupChecked && backupFailed) ? 'text-expense' : backupTone === 'warn' ? 'text-adjust' : 'text-muted'}`}>{statusNote}</div> : null}
         {/* 核对备份和恢复结果时要拿这两个数去对，别只留百分比 */}
         <div className="text-[11px] text-muted mt-1 num">
-          共 {csvSnapshot.transactions.length} 条记录 · 缓存 {fmtBytes(cacheBytes)} / {fmtBytes(CACHE_LIMIT_BYTES)}
+          共 {csvSnapshot.transactions.length} 条记录 · 缓存 {fmtBytes(cacheBytes)}
+          {cacheQuota !== null ? ` / ${fmtBytes(cacheQuota)}` : '（上限由浏览器按设备容量给）'}
         </div>
       </div>
 
@@ -476,7 +487,9 @@ function fmtBytes(n: number): string {
   if (n <= 0) return '0'
   if (n < 1024) return `${n} B`
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} KB`
-  return `${(n / 1024 / 1024).toFixed(2)} MB`
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(2)} MB`
+  // IndexedDB 的配额动辄几十 GB
+  return `${(n / 1024 / 1024 / 1024).toFixed(1)} GB`
 }
 
 function Dot({ tone }: { tone: 'ok' | 'warn' | 'bad' | 'muted' }) {
