@@ -28,7 +28,7 @@ function tx(date: string, type: Transaction['type'], yuan: number, account_id: s
   seq++
   return {
     id: `c${seq}`, date, type, amount: Math.round(yuan * 100), account_id, to_account_id: null, category_id: null, note: null,
-    installments: null, settles: null, hidden: null, created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, seq)).toISOString(), ...over,
+    installments: null, settles: null, hidden: null, is_offset: null, created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, seq)).toISOString(), ...over,
   }
 }
 const buy = (date: string, yuan: number, acc: string, over: Partial<Transaction> = {}) => tx(date, 'expense', yuan, acc, over)

@@ -17,7 +17,7 @@ function tx(p: Partial<Transaction> = {}): Transaction {
     note: null,
     installments: null,
     settles: null,
-    hidden: null,
+    hidden: null, is_offset: null,
     created_at: '2026-09-05T00:00:00.000Z',
     ...p,
   }

@@ -5,7 +5,7 @@ import { AccountIcon } from '../components/AccountIcon'
 import { ChipGroup } from '../components/ChipGroup'
 import { DatePicker } from '../components/DatePicker'
 import { Keypad } from '../components/Keypad'
-import { childOrderByUse, installmentPlan, paidThisCycle, pickCategoryId, splitAccounts } from '../lib/compute'
+import { categoryKindOf, childOrderByUse, installmentPlan, paidThisCycle, pickCategoryId, splitAccounts } from '../lib/compute'
 import { fmtDateRel, nowIso, today } from '../lib/date'
 import { loadLocal, saveLocal, useOnline } from '../lib/hooks'
 import { newId } from '../lib/id'
@@ -149,6 +149,8 @@ export function Entry() {
   const [note, setNote] = useState('')
   // 「外面不显示」：只在里页面出现，外页面连开关都没有（那边不能有任何提示里外存在的东西）
   const [hidden, setHidden] = useState(false)
+  // 0012「抵消」：勾上后分类从另一边选（收入挂支出分类、支出挂收入分类），见 compute.netFlow
+  const [offset, setOffset] = useState(false)
   // 白条分期：只在「支出 + 账户是白条」时出现并生效
   const [inst, setInst] = useState('1')
   const [customInst, setCustomInst] = useState('')
@@ -191,6 +193,7 @@ export function Entry() {
     setDate(copying ? today() : source.date)
     setNote(source.note ?? '')
     setHidden(!copying && Boolean(source.hidden))
+    setOffset(source.is_offset === true)
     setMore(Boolean(source.note) || (!copying && source.date !== today()))
     if (source.installments) {
       const n = String(source.installments)
@@ -288,9 +291,9 @@ export function Entry() {
       setAdding(false)
       return
     }
-    const created = type === 'income' ? await addCategory('income', null, name) : parentId ? await addCategory('expense', parentId, name) : null
+    const created = catSide === 'income' ? await addCategory('income', null, name) : parentId ? await addCategory('expense', parentId, name) : null
     if (created) {
-      if (type === 'income') setIncomeCatId(created.id)
+      if (catSide === 'income') setIncomeCatId(created.id)
       else setChildId(created.id)
     }
     setNewName('')
@@ -298,6 +301,8 @@ export function Entry() {
   }
 
   // 负号只有校准才有：编辑一条负校准改成支出时，负号没处去掉，会一直报「请输入金额」
+  // 分类选哪一边：普通收支看类型，勾了抵消看另一边。转账、校准是 null
+  const catSide = categoryKindOf({ type, is_offset: offset })
   const cents = (parseYuan(amount) ?? 0) * (type === 'adjust' && neg ? -1 : 1)
   const onCredit = type === 'expense' && accountId !== null && credits.some((c) => c.id === accountId)
   const instN = inst === 'custom' ? Number(customInst) : Number(inst)
@@ -316,10 +321,10 @@ export function Entry() {
 
   function validate(): string | null {
     if (type !== 'adjust' && cents <= 0) return '请输入金额'
-    if (type === 'expense' && !parentId) return '请选择用途'
+    if (catSide === 'expense' && !parentId) return '请选择用途'
 
-    if (type === 'expense' && children.length > 0 && !childId) return '请选择二级分类'
-    if (type === 'income' && !incomeCatId) return '请选择收入分类'
+    if (catSide === 'expense' && children.length > 0 && !childId) return '请选择二级分类'
+    if (catSide === 'income' && !incomeCatId) return '请选择收入分类'
     if (type === 'transfer' && (!fromId || !toId)) return '请选择账户'
     if (type === 'transfer' && fromId === toId) return '转出和转入账户不能相同'
     if (onCredit && !instOk) return `分期期数要是 1 到 ${INST_MAX} 的整数`
@@ -352,13 +357,13 @@ export function Entry() {
       amount: type === 'adjust' ? cents : Math.abs(cents),
       account_id: type === 'transfer' ? (fromId as string) : accountId,
       to_account_id: type === 'transfer' ? toId : null,
-      category_id: type === 'expense' ? childId ?? parentId : type === 'income' ? incomeCatId : null,
+      category_id: catSide === 'expense' ? childId ?? parentId : catSide === 'income' ? incomeCatId : null,
       note: note.trim() || null,
       installments: onCredit ? instN : null,
       // 结清关系在账户页那个面板里改，这一页不显示它。这里必须原样带回去——
       // 写 null 的话，从流水点开一笔还款只改了个金额，勾过的结清就被悄悄抹掉了
       settles: editing?.settles ?? null,
-      hidden: hidden && !involvesCredit ? true : null,
+      hidden: hidden && !involvesCredit ? true : null, is_offset: offset && catSide !== null ? true : null,
       created_at: editing?.created_at ?? nowIso(),
     }
     const ok = editing ? await editTx(tx) : await addTx(tx)
@@ -386,11 +391,12 @@ export function Entry() {
       return
     }
     const catName =
-      type === 'expense'
+      (offset && catSide ? '抵消 · ' : '') +
+      (catSide === 'expense'
         ? [parents.find((p) => p.id === parentId)?.name, children.find((c) => c.id === childId)?.name].filter(Boolean).join('/')
-        : type === 'income'
+        : catSide === 'income'
           ? incomeCats.find((c) => c.id === incomeCatId)?.name ?? ''
-          : '转账'
+          : '转账')
     const accName = accounts.find((a) => a.id === (type === 'transfer' ? fromId : accountId))?.name ?? '未指定账户'
     showToast(`已记 ¥${fmtYuan(Math.abs(cents))} · ${catName} · ${accName}`, async () => {
       const removed = await removeTx(tx.id)
@@ -449,6 +455,8 @@ export function Entry() {
                 className={`px-4 py-1.5 rounded-full text-sm ${type === o.id ? 'bg-ink text-white' : 'text-muted'}`}
                 onClick={() => {
                   setType(o.id)
+                  // 换了类型，「抵消」的意思跟着反过来，别带过去
+                  if (o.id !== type) setOffset(false)
                   setAdding(false)
                 }}
               >
@@ -475,7 +483,27 @@ export function Entry() {
 
         {!online ? <div className="text-xs text-expense text-center mb-2">当前离线，暂不能记账</div> : null}
 
-        {type === 'expense' ? (
+        {type === 'expense' || type === 'income' ? (
+          <label className={`flex items-start gap-2.5 rounded-xl border px-3 py-2 mb-3 ${offset ? 'bg-brand-soft border-brand' : 'bg-card border-line'}`}>
+            <input
+              type="checkbox"
+              className="mt-0.5 w-[18px] h-[18px] accent-brand-ink shrink-0"
+              checked={offset}
+              onChange={(e) => {
+                setOffset(e.target.checked)
+                setAdding(false)
+              }}
+            />
+            <span className="min-w-0">
+              <span className="block text-sm">{type === 'income' ? '抵消支出（比如退款）' : '抵消收入（比如帮人垫付）'}</span>
+              <span className="block text-[11px] text-muted">
+                {type === 'income' ? '不算收入，从下面选的支出分类里扣' : '不算支出，从下面选的收入分类里扣'}
+              </span>
+            </span>
+          </label>
+        ) : null}
+
+        {catSide === 'expense' ? (
           <>
             <ChipGroup options={parents.map((p) => ({ id: p.id, label: p.name, icon: p.icon }))} value={parentId} onChange={pickParent} className="mb-2" />
             <div className="rounded-xl bg-card border border-line p-2 mb-3">
@@ -492,7 +520,7 @@ export function Entry() {
           </>
         ) : null}
 
-        {type === 'income' ? (
+        {catSide === 'income' ? (
           <div className="rounded-xl bg-card border border-line p-2 mb-3">
             <ChipGroup
               options={incomeCats.map((c) => ({ id: c.id, label: c.name }))}

@@ -20,6 +20,7 @@
 - `transfer` 和 `adjust` 永远不进收入/支出统计（`compute.ts` 里的 `isFlow`）。
 - 账户余额 = Σ收入 − Σ支出 + Σ转入 − Σ转出 + Σ校准，没有初始余额字段。
 - 分类只归档（`is_archived`）不删除。
+- **「抵消」（`transactions.is_offset`，0012，2026-10-09）**：勾上的收入不算收入、从它所选的**支出**分类里扣（退款）；勾上的支出不算支出、从所选的**收入**分类里扣（垫付）。所以这种记录的分类是另一边的（0012 改了 `tx_category_kind_guard`，`validate.ts` 用 `categoryKindOf`）。统计口径 = `compute.netFlow` 换成另一边的负数，**余额不变**，所以 `outerBook` 两种模式都整本换（`netBook`），算钱的地方照吃 outerBook 就自动是抵消后的数；吃列表的小计（`groupByDay`、`searchSummary`）自己过 `netFlow`。换过的 amount 是负的：只看「一笔多大」的图（金额分布、大额、记账天数、固定开销、常去的地方）跳过 amount ≤ 0，饼图 / 版图 / 桑基 / 雷达不画净额 ≤ 0 的块（`positiveAgg`）。**白条账单要原始流水**，`creditBill` 入口 `rawFlow` 换回来（白条上的退款照旧当还款）。不涉及里外页面，两边都显示「抵支出 / 抵收入」小标签。
 - **同步失败要自动重试**（`store.ts` 的 `RETRY_DELAYS_MS`，2/6/15 秒三档）。切回前台、冷启动的第一下请求最容易失败（手机刚唤醒网络没就绪，而 JWT 一小时到期、supabase-js 提前 90 秒就当它过期，隔久一点打开必然要先换一次 token）。以前失败就到此为止，全 App 只有「切回前台 / online / 手动点」三个触发点，第一下失败就一直红着。重试期间界面只标 `syncRetrying`（焦糖色「正在自动重试」），三档都失败才报红；`syncFailed` 照旧一失败就置起来——导出可信度看它，宁可保守。明确断网（`navigator.onLine === false`）不空转重试。
 - **待传队列里的 id 的后续增删改只改队列**（`store.ts` 的 `queueWrite`，2026-10-09 审出来的）：云端还没有这一行，直接发 update / delete 命中 0 行不报错、当成功，队列里的旧版本却还在，下次同步被打回旧值、补传再把旧值写进云端。补传成功的每一笔也要像普通写入一样登记在途补丁再 settle：online 事件同时触发补传和同步，不登记就会被那次同步冲掉。
 - **断网冷启动不能卡在登录页**：`api.hasSession` 换不到 token 但本机还存着 `sb-*-auth-token` 就算登录着（离线态）；`init` 先按 `hasStoredSession()` 把缓存的账本亮出来，再等 getSession（断网要 25 秒）。

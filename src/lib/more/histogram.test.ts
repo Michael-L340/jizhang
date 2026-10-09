@@ -26,7 +26,7 @@ function tx(date: string, amount: number, over: Partial<Transaction> = {}): Tran
     note: null,
     installments: null,
     settles: null,
-    hidden: null,
+    hidden: null, is_offset: null,
     created_at: new Date(Date.UTC(2026, 8, 1, 0, 0, seq)).toISOString(),
     ...over,
   }

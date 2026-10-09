@@ -39,7 +39,7 @@ function tx(date: string, type: Transaction['type'], yuan: number, account_id: s
   seq++
   return {
     id: `f${seq}`, date, type, amount: Math.round(yuan * 100), account_id, to_account_id: null, category_id: null, note: null,
-    installments: null, settles: null, hidden: null, created_at: '2026-06-01T00:00:00.000Z', ...over,
+    installments: null, settles: null, hidden: null, is_offset: null, created_at: '2026-06-01T00:00:00.000Z', ...over,
   }
 }
 const spend = (date: string, yuan: number, category_id: string | null, account_id: string | null) => tx(date, 'expense', yuan, account_id, { category_id })

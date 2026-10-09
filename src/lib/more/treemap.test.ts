@@ -38,7 +38,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount' | 'dat
   seq++
   return {
     id: `m${seq}`, account_id: 'boc', to_account_id: null, category_id: null, note: null,
-    installments: null, settles: null, hidden: null, created_at: '2026-09-01T00:00:00.000Z', ...p,
+    installments: null, settles: null, hidden: null, is_offset: null, created_at: '2026-09-01T00:00:00.000Z', ...p,
   }
 }
 const Y = (yuan: number) => Math.round(yuan * 100)

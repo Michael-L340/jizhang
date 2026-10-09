@@ -62,7 +62,7 @@ export function sampleTxs(seed = 7): Transaction[] {
     const late = r() < 0.15 ? Math.floor(r() * 4) + 1 : 0
     out.push({
       id: `s${n}`, date, type, amount, account_id, to_account_id: null, category_id: null, note: null,
-      installments: null, settles: null, hidden: null,
+      installments: null, settles: null, hidden: null, is_offset: null,
       created_at: enteredAt(addDays(date, late), 7 + Math.floor(r() * 16), Math.floor(r() * 60)),
       ...over,
     })

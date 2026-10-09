@@ -55,7 +55,8 @@ export interface PlaceWord {
 export function placeWords(txs: Transaction[], start: string, end: string): PlaceWord[] {
   const acc = new Map<string, { count: number; cents: number; forms: Map<string, number> }>()
   for (const t of txs) {
-    if (t.type !== 'expense' || t.date < start || t.date > end) continue
+    // 「抵消」换过来的那笔是负的（compute.netFlow）：退款的备注不是又去了一次
+    if (t.type !== 'expense' || t.amount <= 0 || t.date < start || t.date > end) continue
     for (const { key, text } of wordsOf(t.note)) {
       let e = acc.get(key)
       if (!e) {

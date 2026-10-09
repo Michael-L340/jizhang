@@ -16,7 +16,7 @@
 //
 // 只有余额和曲线被修饰：分类统计、月收支、储蓄率、白条、导入导出全是真的（校准从来不进收支统计）。
 // 白条不参与（用户 2026-09-07 定）：欠款金额两边一样，它的真实校准照旧算、照旧列。
-import { isCredit } from './compute'
+import { isCredit, netBook } from './compute'
 import type { Account, FacadeAdjust, Transaction } from '../types'
 import { balances } from './compute'
 
@@ -56,7 +56,7 @@ export function facadeAsTx(f: FacadeAdjust): Transaction {
     note: null,
     installments: null,
     settles: null,
-    hidden: null,
+    hidden: null, is_offset: null,
     created_at: f.created_at,
   }
 }
@@ -91,11 +91,12 @@ export function outerList(txs: Transaction[], accounts: Account[], mode: Mode): 
  *
  * 「外面隐藏」的记录在外模式下**当不存在**——2026-09-16 第一版做成「只藏列表那一行、钱照算」，
  * 首页「本月支出 5,000」、流水页顶上「4,700」，两套账本必然对不上，当天推翻。
- * 里模式原样返回同一个数组。
+ * 里模式原样返回（有「抵消」的记录时整本换成统计口径，见 compute.netFlow）。
  */
 export function outerBook(txs: Transaction[], accounts: Account[], fadj: FacadeAdjust[], mode: Mode): Transaction[] {
-  if (mode === 'inner') return txs
-  const base = stripForOuter(txs, accounts)
+  // 两种模式都换成「抵消」后的统计口径（compute.netFlow）：余额不变，收入支出不再各自虚高
+  if (mode === 'inner') return netBook(txs)
+  const base = netBook(stripForOuter(txs, accounts))
   return fadj.length ? [...base, ...fadj.map(facadeAsTx)] : base
 }
 

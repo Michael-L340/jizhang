@@ -1,10 +1,45 @@
 // 所有余额与统计的纯函数。不依赖任何其他模块（date.ts 除外），方便单测。
-import type { Account, Category, Transaction, TxType } from '../types'
+import type { Account, Category, CatKind, Transaction, TxType } from '../types'
 import { addDays, dayInMonth, lastMonths, monthOf, monthRange, shiftMonth, today } from './date'
 
 /** 收支统计只看这两种类型；transfer / adjust 永远不进收支 */
 export function isFlow(t: Transaction): t is Transaction & { type: 'expense' | 'income' } {
   return t.type === 'expense' || t.type === 'income'
+}
+
+/**
+ * 「抵消」（0012，用户 2026-10-09）：勾上的收入不算收入、从它所选的支出分类里扣（退款）；
+ * 勾上的支出不算支出、从它所选的收入分类里扣（垫付）。
+ *
+ * 统计口径 = 换成另一边的负数：收入 +299 抵消 → 支出 −299（分类本来就是支出分类）。
+ * 这么换**余额不变**（applyTx：+299 和 −(−299) 一样），所以 facade.outerBook 两种模式都整本换，
+ * 余额、曲线、账户页「本月 ±」照吃不误；收入、支出、饼图、趋势、进阶分析自动都是抵消后的数。
+ * 换过的那笔 amount 是负的；只看「一笔多大」的图（大额、金额分布、记账天数）要跳过 amount ≤ 0 的。
+ *
+ * 只换 amount > 0 的，所以换两次和换一次一样（原始流水的收支金额一定是正的）。
+ * 白条账单要的是原始流水，creditBill 入口用 rawFlow 换回来。
+ */
+export function netFlow(t: Transaction): Transaction {
+  if (t.is_offset !== true || !isFlow(t) || t.amount <= 0) return t
+  return { ...t, type: t.type === 'income' ? 'expense' : 'income', amount: -t.amount }
+}
+
+/** netFlow 的反操作：换过的那笔换回原始的样子。原始流水原样返回 */
+export function rawFlow(t: Transaction): Transaction {
+  if (t.is_offset !== true || !isFlow(t) || t.amount >= 0) return t
+  return { ...t, type: t.type === 'income' ? 'expense' : 'income', amount: -t.amount }
+}
+
+/** 整本换成统计口径。没有抵消的记录时原样返回同一个数组 */
+export function netBook(txs: Transaction[]): Transaction[] {
+  return txs.some((t) => netFlow(t) !== t) ? txs.map(netFlow) : txs
+}
+
+/** 这一笔该挂哪一边的分类：普通收支 = 自己的类型，抵消的那笔 = 另一边。转账、校准没有分类 */
+export function categoryKindOf(t: Pick<Transaction, 'type' | 'is_offset'>): CatKind | null {
+  if (t.type !== 'expense' && t.type !== 'income') return null
+  if (t.is_offset !== true) return t.type
+  return t.type === 'income' ? 'expense' : 'income'
 }
 
 export function inMonth(t: Transaction, ym: string): boolean {
@@ -130,6 +165,15 @@ export function byCategory(
   const list = [...agg.values()]
   for (const a of list) a.children.sort((x, y) => y.amount - x.amount)
   return list.sort((x, y) => y.amount - x.amount)
+}
+
+/**
+ * 饼图只画正的：「抵消」能让某一类当月净额 ≤ 0（上个月买、这个月退，这个月这类没再花钱），
+ * 饼图画不了负的一块。二级同理。总额照旧是抵消后的净额，所以这种月份各块之和会比总额多一点，这是接受的
+ */
+export function positiveAgg(list: CatAgg[]): CatAgg[] {
+  if (list.every((a) => a.amount > 0 && a.children.every((c) => c.amount > 0))) return list
+  return list.filter((a) => a.amount > 0).map((a) => ({ ...a, children: a.children.filter((c) => c.amount > 0) }))
 }
 
 /** 某月每天的累计支出，返回长度 = 当月天数（未来的日子为 null） */
@@ -375,7 +419,8 @@ export function groupByDay(txs: Transaction[]): { date: string; items: Transacti
     const items = map.get(date)!.sort((a, b) => (a.created_at < b.created_at ? 1 : -1))
     let expense = 0
     let income = 0
-    for (const t of items) {
+    for (const raw of items) {
+      const t = netFlow(raw) // 每天小计按抵消后算，列表那一行照旧显示原样
       if (t.type === 'expense') expense += t.amount
       if (t.type === 'income') income += t.amount
     }
@@ -652,7 +697,9 @@ export interface CreditBill {
  * @param ignoreRepayId 正在修改的那笔还款。它的金额和它结清的订单都当作不存在，
  * 否则改勾选时那几单根本不显示、金额也预填不对。
  */
-export function creditBill(txs: Transaction[], acc: Account, todayStr: string, ignoreRepayId?: string): CreditBill {
+export function creditBill(book: Transaction[], acc: Account, todayStr: string, ignoreRepayId?: string): CreditBill {
+  // 进阶分析传进来的是 outerBook（抵消的已经换成另一边的负数），账单要原始流水：白条上的退款照旧当还款
+  const txs = book.some((t) => rawFlow(t) !== t) ? book.map(rawFlow) : book
   const settled = settledIds(txs, ignoreRepayId, acc.id)
   const dueDate = currentDueDate(todayStr, acc.repay_day)
   // 结清金额只算这个白条上的支出（同上）

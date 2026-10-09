@@ -34,7 +34,7 @@ function tx(date: string, type: Transaction['type'], amount: number, account_id:
   seq++
   return {
     id: `t${seq}`, date, type, amount, account_id, to_account_id: null, category_id, note: null,
-    installments: null, settles: null, hidden: null, created_at: new Date(Date.UTC(2026, 8, 1, 0, 0, seq)).toISOString(), ...over,
+    installments: null, settles: null, hidden: null, is_offset: null, created_at: new Date(Date.UTC(2026, 8, 1, 0, 0, seq)).toISOString(), ...over,
   }
 }
 

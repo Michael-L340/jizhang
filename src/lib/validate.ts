@@ -17,6 +17,7 @@
 // 举着手机看着这句话决定下一步怎么办的。只报第一个错，报一串没人看得完。
 import type { Account, CatKind, Category, FacadeAdjust, MeterReading, Snapshot, Transaction, TxType } from '../types'
 import { TX_TYPE_LABEL } from '../types'
+import { categoryKindOf } from './compute'
 
 const KIND_LABEL: Record<CatKind, string> = { expense: '支出', income: '收入' }
 const TX_TYPES = ['expense', 'income', 'transfer', 'adjust']
@@ -178,6 +179,13 @@ function hiddenOf(v: unknown, fail: Fail): boolean | null {
   return v as boolean
 }
 
+/** 0012：「抵消」。旧备份没有这一列，按 null 处理 */
+function offsetOf(v: unknown, fail: Fail): boolean | null {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'boolean') fail(`的「抵消」不对（读到 ${JSON.stringify(v)}），只能是 true、false 或留空`)
+  return v as boolean
+}
+
 /**
  * 0007：里外页面的对外余额偏移量（整数「分」，可正可负）。旧备份没有这一列，按 null 处理。
  * 这个函数是显式构造 Account 的那一步——漏了它，备份文件里明明有这一列，
@@ -242,6 +250,7 @@ function readTransaction(v: unknown, i: number): Transaction {
     installments: inst as number | null,
     settles: settlesOf(r.settles, fail),
     hidden: hiddenOf(r.hidden, fail),
+    is_offset: offsetOf(r.is_offset, fail),
     created_at: r.created_at as string,
   }
 }
@@ -339,6 +348,7 @@ function checkTransactions(tx: Transaction[], accounts: Account[], categories: C
     const label = TX_TYPE_LABEL[t.type]
     if (ids.has(t.id)) fail(`的 id 和前面某一条流水重复了（${t.id}）`)
     ids.add(t.id)
+    if (t.is_offset === true && t.type !== 'expense' && t.type !== 'income') fail(`是${label}，却勾了「抵消」。只有收入和支出能抵消`)
 
     // tx_shape（0002 版）：每种类型该填哪几个字段，是 check 约束逐字写死的
     if (t.type === 'expense' || t.type === 'income') {
@@ -363,8 +373,8 @@ function checkTransactions(tx: Transaction[], accounts: Account[], categories: C
     if (t.category_id !== null) {
       const c = catById.get(t.category_id)
       if (!c) fail(`用的分类在这个文件里找不到（id=${t.category_id}），恢复时会被外键拒绝`)
-      // tx_category_kind_guard：分类的 kind 必须等于流水的 type
-      if (c.kind !== t.type) fail(`是${label}，却记在「${c.name}」这个${KIND_LABEL[c.kind]}分类上，类型对不上`)
+      // tx_category_kind_guard：分类的 kind 必须等于流水的 type；抵消的那笔反过来（0012）
+      if (c.kind !== categoryKindOf(t)) fail(`是${label}，却记在「${c.name}」这个${KIND_LABEL[c.kind]}分类上，类型对不上`)
     }
   })
 }

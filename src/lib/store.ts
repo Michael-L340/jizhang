@@ -31,7 +31,7 @@ function parseCache(raw: string | null): Cache | null {
     return {
       ...c,
       accounts: c.accounts.map((a) => ({ ...a, repay_day: a.repay_day ?? null, facade_offset: a.facade_offset ?? null, defer_after_repay: a.defer_after_repay ?? null })),
-      transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null, hidden: t.hidden ?? null })),
+      transactions: c.transactions.map((t) => ({ ...t, installments: t.installments ?? null, settles: t.settles ?? null, hidden: t.hidden ?? null, is_offset: t.is_offset ?? null })),
       // 0010 之前写的缓存没有这一节。补成空数组就行：下一次同步会拉到云端的
       facade_adjusts: Array.isArray(c.facade_adjusts) ? c.facade_adjusts : [],
       // 0011 之前写的缓存没有电表读数，同上

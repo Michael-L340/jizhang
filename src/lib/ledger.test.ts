@@ -13,7 +13,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'type' | 'amount' | 'dat
   seq++
   return {
     id: `l${seq}`, account_id: 'wx', to_account_id: null, category_id: null, note: null,
-    installments: null, settles: null, hidden: null, created_at: `${p.date}T04:00:00.000Z`, ...p,
+    installments: null, settles: null, hidden: null, is_offset: null, created_at: `${p.date}T04:00:00.000Z`, ...p,
   }
 }
 

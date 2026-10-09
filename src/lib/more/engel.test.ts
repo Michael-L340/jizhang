@@ -31,7 +31,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'amount' | 'date'>): Tra
   seq++
   return {
     id: `e${seq}`, type: 'expense', account_id: 'boc', to_account_id: null, category_id: null, note: null,
-    installments: null, settles: null, hidden: null, created_at: `${p.date}T04:00:00.000Z`, ...p,
+    installments: null, settles: null, hidden: null, is_offset: null, created_at: `${p.date}T04:00:00.000Z`, ...p,
   }
 }
 const spend = (date: string, yuan: number, category_id: string | null) => tx({ date, amount: Math.round(yuan * 100), category_id })

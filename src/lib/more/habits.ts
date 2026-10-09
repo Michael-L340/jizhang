@@ -56,7 +56,7 @@ export function zeroSpendDays(txs: Transaction[], ym: string, today: string): { 
   const last = end > today ? today : end
   if (first === null || last < start) return { days: 0, of: 0 }
   const spent = new Set<string>()
-  for (const t of txs) if (t.type === 'expense' && t.date >= start && t.date <= last) spent.add(t.date)
+  for (const t of txs) if (t.type === 'expense' && t.amount > 0 && t.date >= start && t.date <= last) spent.add(t.date)
   const of = daysBetween(start, last) + 1
   return { days: of - spent.size, of }
 }

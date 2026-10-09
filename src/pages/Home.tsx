@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { AccountIcon, accountTint } from '../components/AccountIcon'
 import { TxRow } from '../components/TxRow'
 import { TxSwipe } from '../components/TxSwipe'
-import { balances, byCategory, debtOf, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
+import { balances, byCategory, debtOf, positiveAgg, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { outerBook, outerList } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
@@ -49,7 +49,7 @@ export function Home() {
   const overpaid = useMemo(() => credits.reduce((s, a) => s + Math.max(0, bal[a.id] ?? 0), 0), [credits, bal])
   // 「接下来要还的钱」：各白条各按自己的还款日算本期，加起来。各家还款日不同，这是合计不是同一天
   const dueTotal = useMemo(() => [...dueNow(txs, credits, today()).values()].reduce((s, v) => s + v, 0), [txs, credits])
-  const agg = useMemo(() => byCategory(otxs, cats, ym, 'expense'), [otxs, cats, ym])
+  const agg = useMemo(() => positiveAgg(byCategory(otxs, cats, ym, 'expense')), [otxs, cats, ym])
   // 和统计页共用 categoryColor：分类颜色跟着名字走，不跟名次走。
   // 以前这里是一串写死的颜色按名次发，同一个分类在两页颜色不一样，对着看会错乱；
   // 而且那串还是 09-05 换暖色主题之前的冷色。
@@ -65,7 +65,7 @@ export function Home() {
       if (t.date !== td) continue
       if (t.type === 'expense') {
         expense += t.amount
-        count++
+        if (t.amount > 0) count++ // 抵消换过来的那笔是负的，不是一笔开销
       } else if (t.type === 'income') {
         income += t.amount
       }

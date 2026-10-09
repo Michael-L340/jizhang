@@ -136,7 +136,7 @@ describe('钱的流向的标签（真画出来量）：四张白条 + 现金 + �
   ]
   let n = 0
   const t = (amount: number, account_id: string | null, category_id: string): Transaction => ({
-    id: `k${++n}`, date: '2026-09-05', type: 'expense', amount, account_id, to_account_id: null, category_id, note: null, installments: null, settles: null, hidden: null, created_at: '2026-09-05T00:00:00.000Z',
+    id: `k${++n}`, date: '2026-09-05', type: 'expense', amount, account_id, to_account_id: null, category_id, note: null, installments: null, settles: null, hidden: null, is_offset: null, created_at: '2026-09-05T00:00:00.000Z',
   })
   const txs = [
     t(350000, 'boc', 'rent'), t(9000, 'cmb', 'lunch'), t(8000, 'wx', 'dinner'), t(6000, 'zfb', 'snack'), t(1500, 'cash', 'fruit'), t(2500, 'jd', 'digi'), t(1800, 'hb', 'cloth'),

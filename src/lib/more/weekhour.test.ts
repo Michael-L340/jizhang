@@ -21,7 +21,7 @@ function tx(date: string, amount: number, createdAt: string, over: Partial<Trans
     note: null,
     installments: null,
     settles: null,
-    hidden: null,
+    hidden: null, is_offset: null,
     created_at: createdAt,
     ...over,
   }

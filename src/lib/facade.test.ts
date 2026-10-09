@@ -40,7 +40,7 @@ const tx = (id: string, date: string, type: Transaction['type'], amount: number,
   note: null,
   installments: null,
   settles: null,
-  hidden: null,
+  hidden: null, is_offset: null,
   created_at: `${date}T00:00:0${id.length}.000Z`,
 })
 

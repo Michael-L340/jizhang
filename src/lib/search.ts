@@ -1,6 +1,7 @@
 // 流水搜索。纯函数，不依赖 store / api / DOM。
 import type { Transaction } from '../types'
 import { fmtYuan } from './money'
+import { netFlow } from './compute'
 
 /** 把一笔流水身上所有「能被搜到」的文字拼成一条。名字由调用方提供，这里不认识 store。 */
 export interface SearchNames {
@@ -49,7 +50,8 @@ export function searchTx(txs: Transaction[], query: string, names: SearchNames):
 export function searchSummary(txs: Transaction[]): { income: number; expense: number; count: number } {
   let income = 0
   let expense = 0
-  for (const t of txs) {
+  for (const raw of txs) {
+    const t = netFlow(raw) // 小计按「抵消」后算，和每天小计一个口径
     if (t.type === 'income') income += t.amount
     else if (t.type === 'expense') expense += t.amount
   }

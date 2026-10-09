@@ -25,7 +25,7 @@ function tx(date: string, type: Transaction['type'], amount: number, account_id:
   seq++
   return {
     id: `t${seq}`, date, type, amount, account_id, to_account_id: null, category_id: null, note: null,
-    installments: null, settles: null, hidden: null, created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, seq)).toISOString(), ...over,
+    installments: null, settles: null, hidden: null, is_offset: null, created_at: new Date(Date.UTC(2026, 0, 1, 0, 0, seq)).toISOString(), ...over,
   }
 }
 const repay = (date: string, amount: number, to: string, over: Partial<Transaction> = {}) => tx(date, 'transfer', amount, 'boc', { to_account_id: to, ...over })

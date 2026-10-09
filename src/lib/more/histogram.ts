@@ -39,7 +39,7 @@ export function histogramOf(txs: Transaction[], start: string, end: string): His
   const cents = BUCKETS.map(() => 0)
   const spent: Transaction[] = []
   for (const t of txs) {
-    if (t.type !== 'expense' || t.date < start || t.date > end) continue
+    if (t.type !== 'expense' || t.amount <= 0 || t.date < start || t.date > end) continue // 「抵消」换过来的那笔是负的（compute.netFlow），不是一笔开销
     const b = bucketOf(t.amount)
     count[b] += 1
     cents[b] += t.amount

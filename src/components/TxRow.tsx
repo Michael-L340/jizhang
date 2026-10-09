@@ -71,6 +71,9 @@ export function TxRow({ tx, accounts, categories, onClick, showDate }: Props) {
           {d.title}
           {/* 「外面隐藏」的记号。外页面的账本里根本没有这种行（facade.outerTxs），所以它只会出现在里页面 */}
           {tx.hidden ? <span className="ml-1.5 align-[1px] text-[10px] text-muted border border-line rounded px-1">隐</span> : null}
+          {tx.is_offset && (tx.type === 'income' || tx.type === 'expense') ? (
+            <span className="ml-1.5 align-[1px] text-[10px] text-brand-ink border border-brand rounded px-1">{tx.type === 'income' ? '抵支出' : '抵收入'}</span>
+          ) : null}
         </span>
         <span className="block truncate text-xs text-muted">
           {showDate ? `${showDate} · ` : ''}

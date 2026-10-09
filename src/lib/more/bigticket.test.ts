@@ -40,7 +40,7 @@ function tx(p: Partial<Transaction> & Pick<Transaction, 'amount' | 'date'>): Tra
     note: null,
     installments: null,
     settles: null,
-    hidden: null,
+    hidden: null, is_offset: null,
     created_at: `${p.date}T04:00:00.000Z`,
     ...p,
   }

@@ -129,7 +129,7 @@ export function findFixed(txs: Transaction[], cats: Category[], accounts: Accoun
   const known = new Set(cats.map((c) => c.id))
   const groups = new Map<string, { categoryId: string; accountId: string | null } & FixedGroup>()
   for (const t of txs) {
-    if (t.type !== 'expense') continue
+    if (t.type !== 'expense' || t.amount <= 0) continue // 「抵消」换过来的那笔是负的（compute.netFlow），不是一笔开销
     const i = at.get(monthOf(t.date))
     if (i === undefined) continue
     const categoryId = t.category_id && known.has(t.category_id) ? t.category_id : UNCATEGORIZED_ID

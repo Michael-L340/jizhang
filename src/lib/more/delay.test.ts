@@ -13,7 +13,7 @@ function tx(date: string, createdAt: string, over: Partial<Transaction> = {}): T
   seq++
   return {
     id: `d${seq}`, date, type: 'expense', amount: 1000, account_id: 'wx', to_account_id: null, category_id: null,
-    note: null, installments: null, settles: null, hidden: null, created_at: createdAt, ...over,
+    note: null, installments: null, settles: null, hidden: null, is_offset: null, created_at: createdAt, ...over,
   }
 }
 /** 北京时间 date 那天 hh:mm 的 UTC ISO 串（北京 = UTC+8） */

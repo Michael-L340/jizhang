@@ -113,14 +113,15 @@ export function sankeyChart(inp: MoreInput): MoreChart {
 
   if (total <= 0) return { ...base, option: null, empty: '这段时间没有支出' }
 
-  const accList = [...accs.values()].sort(byAmount)
-  const parList = [...pars.values()].sort(byAmount)
+  // 「抵消」是负的支出（compute.netFlow），某个账户 / 大类 / 二级的净额可能 ≤ 0：桑基画不了负的流，这些节点和流都不画
+  const accList = [...accs.values()].filter((a) => a.amount > 0).sort(byAmount)
+  const parList = [...pars.values()].filter((p) => p.amount > 0).sort(byAmount)
   const parRank = new Map(parList.map((p, i) => [p.id, i]))
   // 颜色和统计页饼图一个口径：categoryColor(名字, 名次)，名次按金额
   const parColor = new Map(parList.map((p, i) => [p.id, categoryColor(p.full, i)]))
 
   // 二级按金额取前 SANKEY_MAX_SUBS 个，剩下的并成一个「其余」
-  const subRanked = [...subs.values()].sort(byAmount)
+  const subRanked = [...subs.values()].filter((s) => s.amount > 0 && parRank.has(s.parentId)).sort(byAmount)
   const kept = subRanked.slice(0, SANKEY_MAX_SUBS)
   const merged = subRanked.slice(SANKEY_MAX_SUBS)
   const keptIds = new Set(kept.map((s) => s.id))
@@ -158,12 +159,13 @@ export function sankeyChart(inp: MoreInput): MoreChart {
   for (const a of accList) {
     for (const p of parList) {
       const v = accToPar.get(a.id + SEP + p.id)
-      if (v) links.push({ source: a.id, target: p.id, value: v })
+      if (v && v > 0) links.push({ source: a.id, target: p.id, value: v })
     }
   }
   const restByPar = new Map<string, number>()
   for (const [k, v] of parToSub) {
     const [parId, subId] = k.split(SEP)
+    if (v <= 0 || !parRank.has(parId)) continue
     if (keptIds.has(subId)) links.push({ source: parId, target: subId, value: v })
     else add(restByPar, parId, v)
   }

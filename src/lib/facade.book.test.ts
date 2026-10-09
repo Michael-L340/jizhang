@@ -39,7 +39,7 @@ const tx = (date: string, type: Transaction['type'], amount: number, account: Ac
   note: null,
   installments: null,
   settles: null,
-  hidden: null,
+  hidden: null, is_offset: null,
   created_at: `${date}T00:00:00.${String(txSeq).padStart(3, '0')}Z`,
   ...over,
 })

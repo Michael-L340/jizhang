@@ -21,6 +21,7 @@ import mig0008 from '../../supabase/migrations/0008_defer_after_repay.sql?raw'
 import mig0009 from '../../supabase/migrations/0009_hidden_transaction.sql?raw'
 import mig0010 from '../../supabase/migrations/0010_facade_adjusts.sql?raw'
 import mig0011 from '../../supabase/migrations/0011_meter_readings.sql?raw'
+import mig0012 from '../../supabase/migrations/0012_offset_transaction.sql?raw'
 import migrateSql from '../../scripts/migrate-facade.sql?raw'
 import type { Account, Snapshot, Transaction } from '../types'
 import { migrateFacade } from './facade'
@@ -50,6 +51,7 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0009)
   await db.exec(mig0010)
   await db.exec(mig0011)
+  await db.exec(mig0012)
   return db
 }
 
@@ -71,7 +73,7 @@ async function exportBackup(db: PGlite): Promise<Snap> {
   return {
     accounts: await q(db, 'select id,name,kind,sort,is_archived,repay_day,facade_offset,defer_after_repay from accounts'),
     categories: await q(db, 'select id,kind,parent_id,name,icon,sort,is_archived,note from categories'),
-    transactions: (await q(db, 'select id,date::text as date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,created_at from transactions')).map((t) => ({
+    transactions: (await q(db, 'select id,date::text as date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,is_offset,created_at from transactions')).map((t) => ({
       ...t,
       amount: centsFromDb(t.amount as string),
     })),
@@ -117,9 +119,9 @@ async function importRefs(db: PGlite, snap: Snap): Promise<void> {
 
 async function insertTx(db: PGlite, t: Row): Promise<void> {
   await db.query(
-    `insert into transactions (id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
-     on conflict (id) do update set date=excluded.date,type=excluded.type,amount=excluded.amount,account_id=excluded.account_id,to_account_id=excluded.to_account_id,category_id=excluded.category_id,note=excluded.note,installments=excluded.installments,settles=excluded.settles,hidden=excluded.hidden`,
-    [t.id, t.date, t.type, centsToDb(t.amount as number), t.account_id, t.to_account_id, t.category_id, t.note, t.installments ?? null, t.settles ?? null, t.hidden ?? null, t.created_at],
+    `insert into transactions (id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,is_offset,created_at) values ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+     on conflict (id) do update set date=excluded.date,type=excluded.type,amount=excluded.amount,account_id=excluded.account_id,to_account_id=excluded.to_account_id,category_id=excluded.category_id,note=excluded.note,installments=excluded.installments,settles=excluded.settles,hidden=excluded.hidden,is_offset=excluded.is_offset`,
+    [t.id, t.date, t.type, centsToDb(t.amount as number), t.account_id, t.to_account_id, t.category_id, t.note, t.installments ?? null, t.settles ?? null, t.hidden ?? null, t.is_offset ?? null, t.created_at],
   )
 }
 
@@ -317,6 +319,19 @@ describe('导入时数据库自己的防线', () => {
     await expect(
       db.query('insert into transactions (date,type,amount,account_id,category_id) values ($1,$2,$3,$4,$5)', ['2026-09-01', 'expense', '10.00', wx, salary]),
     ).rejects.toThrow(/不匹配/)
+  })
+  it('0012：勾了抵消的那笔分类在另一边才收，普通收支照旧拒收反向分类', async () => {
+    const db = await freshDb()
+    const wx = (await q(db, "select id from accounts where name='微信'"))[0].id
+    const salary = (await q(db, "select id from categories where name='工资/实习'"))[0].id
+    const food = (await q(db, "select id from categories where kind='expense' limit 1"))[0].id
+    const ins = (type: string, cat: unknown, off: boolean | null) =>
+      db.query('insert into transactions (date,type,amount,account_id,category_id,is_offset) values ($1,$2,$3,$4,$5,$6)', ['2026-10-09', type, '10.00', wx, cat, off])
+    await ins('income', food, true) // 退款：收入挂支出分类
+    await ins('expense', salary, true) // 垫付：支出挂收入分类
+    await expect(ins('income', salary, true)).rejects.toThrow(/不匹配/) // 勾了抵消却挂自己那边
+    await expect(ins('income', food, false)).rejects.toThrow(/不匹配/)
+    await expect(ins('income', food, null)).rejects.toThrow(/不匹配/)
   })
 
   it('转账两边是同一个账户会被 check 约束拒绝', async () => {

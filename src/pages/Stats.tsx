@@ -5,7 +5,7 @@ import { CatIcon } from '../components/CatIcon'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
-import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
+import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, positiveAgg, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
 import { axisLabels, endDot, gridTopFor, legendRows, shortLabels } from '../lib/chart'
@@ -61,7 +61,7 @@ export function Stats() {
   // 月份、收支、时间范围都是用户为了看某段趋势刚挑的，一起清掉反而烦人。
   useTabReset(() => setDrill(null))
 
-  const agg = useMemo(() => byCategory(otxs, cats, ym, kind), [otxs, cats, ym, kind])
+  const agg = useMemo(() => positiveAgg(byCategory(otxs, cats, ym, kind)), [otxs, cats, ym, kind])
   const rootColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
 
   const drillIdx = drill ? agg.findIndex((a) => a.id === drill) : -1

@@ -81,9 +81,10 @@ export function treeOf(inp: Pick<MoreInput, 'txs' | 'cats' | 'start' | 'end'>): 
   }
   // 颜色和统计页饼图一个口径：一级 categoryColor(名字, 按金额的名次)；二级 childShade(一级色, 二级的 sort)。
   // 「未细分」就用一级自己的颜色：它就是「这个大类本身」，和几个二级的深浅都分得开
-  return [...roots.values()].sort(byCents).map((r, i) => {
+  // 「抵消」能让某一类净额 ≤ 0（上个月买、这个月退），版图画不了负的块，和饼图一样不画（compute.positiveAgg）
+  return [...roots.values()].filter((r) => r.cents > 0).sort(byCents).map((r, i) => {
     const color = categoryColor(r.name, i)
-    const subs = [...r.subs.values()].sort(byCents)
+    const subs = [...r.subs.values()].filter((s) => s.cents > 0).sort(byCents)
     const onlyDirect = subs.length === 1 && subs[0].id === `${r.id}:none`
     return {
       id: r.id,

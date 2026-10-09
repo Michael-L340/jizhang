@@ -161,7 +161,7 @@ export function Accounts() {
       note: note.trim() || '余额校准',
       installments: null,
       settles: null,
-      hidden: null,
+      hidden: null, is_offset: null,
       created_at: nowIso(),
     })
     // 真实校准外页面看不见，所以「对外显示」那一条按外页面现在显示的数算差额，和上面那笔无关；
@@ -336,7 +336,7 @@ export function Accounts() {
       note: '还款',
       installments: null,
       settles: settlesOfPicked(),
-      hidden: null,
+      hidden: null, is_offset: null,
       created_at: nowIso(),
     }
     const ok = await addTx(tx)

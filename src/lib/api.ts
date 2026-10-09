@@ -17,10 +17,11 @@ interface TxRow {
   installments: number | null
   settles: string[] | null
   hidden: boolean | null
+  is_offset: boolean | null
   created_at: string
 }
 
-const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,created_at'
+const TX_COLS = 'id,date,type,amount,account_id,to_account_id,category_id,note,installments,settles,hidden,is_offset,created_at'
 const ACC_COLS = 'id,name,kind,sort,is_archived,repay_day,facade_offset,defer_after_repay'
 const CAT_COLS = 'id,kind,parent_id,name,icon,sort,is_archived,note'
 /** 0010：外页面校准记录。cents 在库里就是整数「分」（bigint），不过元↔分换算 */
@@ -55,7 +56,7 @@ function rowToMr(r: MrRow): MeterReading {
 }
 
 function rowToTx(r: TxRow): Transaction {
-  return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null, installments: r.installments ?? null, settles: r.settles ?? null, hidden: r.hidden ?? null }
+  return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null, installments: r.installments ?? null, settles: r.settles ?? null, hidden: r.hidden ?? null, is_offset: r.is_offset ?? null }
 }
 
 function txToRow(t: Transaction): TxRow {
@@ -71,6 +72,7 @@ function txToRow(t: Transaction): TxRow {
     installments: t.installments,
     settles: t.settles,
     hidden: t.hidden,
+    is_offset: t.is_offset ?? null,
     created_at: t.created_at,
   }
 }

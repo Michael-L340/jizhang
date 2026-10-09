@@ -38,7 +38,8 @@ export function radarChart(inp: MoreInput): MoreChart {
   // 二级算进它的一级、transfer / adjust / 收入不算：全交给 byCategory，和统计页饼图同一个口径
   const valuesOf = (ym: string) => {
     const m = new Map(byCategory(inp.txs, inp.cats, ym, 'expense').map((a) => [a.id, a.amount]))
-    return axes.map((c) => m.get(c.id) ?? 0)
+    // 「抵消」能让某一类净额为负，雷达图从 0 画起，负的按 0
+    return axes.map((c) => Math.max(0, m.get(c.id) ?? 0))
   }
   const cur = valuesOf(inp.ym)
   const prev = valuesOf(prevYm)

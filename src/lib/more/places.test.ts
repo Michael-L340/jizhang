@@ -17,7 +17,7 @@ function tx(date: string, yuan: number, note: string | null, over: Partial<Trans
   seq++
   return {
     id: `p${seq}`, date, type: 'expense', amount: Math.round(yuan * 100), account_id: 'wx', to_account_id: null,
-    category_id: null, note, installments: null, settles: null, hidden: null, created_at: `${date}T04:00:00.000Z`, ...over,
+    category_id: null, note, installments: null, settles: null, hidden: null, is_offset: null, created_at: `${date}T04:00:00.000Z`, ...over,
   }
 }
 const inputOf = (txs: Transaction[], start = '2026-09-01', end = '2026-09-28'): MoreInput => ({

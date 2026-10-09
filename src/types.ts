@@ -74,6 +74,12 @@ export interface Transaction {
    * 涉及白条账户的记录不打这个记号（白条不参与里外）。null / false = 正常显示。
    */
   hidden: boolean | null
+  /**
+   * 0012：「抵消」。收入勾上 = 不算收入、从所选的**支出**分类里扣（退款）；支出勾上 = 不算支出、
+   * 从所选的**收入**分类里扣（垫付）。所以这种记录的 category_id 是另一边的分类。
+   * 余额照常（钱确实进出了）。统计一律走 compute.netFlow 换算，别自己判。null / false = 普通收支。
+   */
+  is_offset: boolean | null
   created_at: string // ISO
 }
 
