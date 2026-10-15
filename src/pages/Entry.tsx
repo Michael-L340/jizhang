@@ -7,7 +7,7 @@ import { DatePicker } from '../components/DatePicker'
 import { Keypad } from '../components/Keypad'
 import { categoryKindOf, childOrderByUse, installmentPlan, paidThisCycle, pickCategoryId, splitAccounts } from '../lib/compute'
 import { fmtDateRel, nowIso, today } from '../lib/date'
-import { loadLocal, saveLocal, useOnline } from '../lib/hooks'
+import { loadLocal, saveLocal } from '../lib/hooks'
 import { newId } from '../lib/id'
 import { fmtYuan, parseYuan } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -121,7 +121,6 @@ export function Entry() {
   const addCategory = useStore((s) => s.addCategory)
   const showToast = useStore((s) => s.showToast)
   const mode = useStore((s) => s.mode)
-  const online = useOnline()
 
   const editing = useMemo(() => (editId ? txs.find((t) => t.id === editId) ?? null : null), [txs, editId])
   // 回填的来源：编辑态是那条记录本身，「再记一笔」是被复制的那条
@@ -345,10 +344,6 @@ export function Entry() {
       showToast(err)
       return
     }
-    if (!online) {
-      showToast('当前离线，暂不能记账')
-      return
-    }
     setBusy(true)
     const tx: Transaction = {
       id: editing?.id ?? newId(),
@@ -481,7 +476,6 @@ export function Entry() {
           </span>
         </div>
 
-        {!online ? <div className="text-xs text-expense text-center mb-2">当前离线，暂不能记账</div> : null}
 
         {/* 「抵消」亮着时分类是另一边的，上面只留一行标题说明在扣哪边（开关本身在底下那排胶囊里） */}
         {offset && catSide ? <div className="text-xs text-muted mb-1">{catSide === 'expense' ? '从哪类支出里扣' : '从哪类收入里扣'}</div> : null}
@@ -616,7 +610,7 @@ export function Entry() {
         />
       </div>
 
-      <Keypad onInput={(k) => setAmount((a) => nextAmount(a, k))} onSave={save} saveLabel={editing ? '更新' : '保存'} disabled={busy || !online} />
+      <Keypad onInput={(k) => setAmount((a) => nextAmount(a, k))} onSave={save} saveLabel={editing ? '更新' : '保存'} disabled={busy} />
     </div>
   )
 }

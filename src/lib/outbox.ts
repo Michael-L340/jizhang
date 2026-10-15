@@ -10,15 +10,17 @@
 // 断网时先记一笔再改两次再删掉，队列里始终只有这一个 id 的一条，补传时按最终状态
 // upsert 或 delete 即可，不用回放顺序，重复执行也不会出错（两个操作都是幂等的）。
 
-import type { Transaction } from '../types'
+import type { MeterReading, Transaction } from '../types'
 import { DELETED, type Pending } from './pending'
 
 export type Outbox = Pending<Transaction>
+/** 电表读数的待传队列（2026-10-15 起）：和流水同一套，单独一个键存（见 store.ts 的 saveMrOutbox） */
+export type MrOutbox = Pending<MeterReading>
 
 /** 存进 localStorage 的形状。Map 不能直接 JSON 序列化 */
 export type OutboxDump = [string, Transaction | typeof DELETED][]
 
-export function packOutbox(o: Outbox): OutboxDump {
+export function packOutbox<T>(o: Pending<T>): [string, T | typeof DELETED][] {
   return [...o.entries()]
 }
 
@@ -28,7 +30,16 @@ export function packOutbox(o: Outbox): OutboxDump {
  * 绝不能让一条坏数据把整个队列带走，那才是真的丢账。
  */
 export function unpackOutbox(raw: unknown): Outbox {
-  const out: Outbox = new Map()
+  return unpackWith(raw, isTxLike)
+}
+
+/** 电表读数的队列，规矩同上 */
+export function unpackMrOutbox(raw: unknown): MrOutbox {
+  return unpackWith(raw, isMrLike)
+}
+
+function unpackWith<T extends { id: string }>(raw: unknown, ok: (v: unknown) => v is T): Pending<T> {
+  const out: Pending<T> = new Map()
   if (!Array.isArray(raw)) return out
   for (const e of raw) {
     if (!Array.isArray(e) || e.length !== 2) continue
@@ -39,7 +50,7 @@ export function unpackOutbox(raw: unknown): Outbox {
       continue
     }
     // id 对不上的直接丢：键和记录里的 id 必须一致，否则补传时会把别人覆盖掉
-    if (isTxLike(v) && v.id === id) out.set(id, v)
+    if (ok(v) && v.id === id) out.set(id, v)
   }
   return out
 }
@@ -49,4 +60,10 @@ function isTxLike(v: unknown): v is Transaction {
   if (typeof v !== 'object' || v === null) return false
   const t = v as Partial<Transaction>
   return typeof t.id === 'string' && typeof t.date === 'string' && typeof t.type === 'string' && typeof t.amount === 'number'
+}
+
+function isMrLike(v: unknown): v is MeterReading {
+  if (typeof v !== 'object' || v === null) return false
+  const r = v as Partial<MeterReading>
+  return typeof r.id === 'string' && typeof r.read_at === 'string' && Number.isInteger(r.centi_kwh) && typeof r.created_at === 'string'
 }

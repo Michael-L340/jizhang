@@ -8,7 +8,7 @@ import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
 import type { Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
 import { CACHE_LIMIT_BYTES, IDB_LIMIT_BYTES } from './backup'
-import { DB_NAME, LEDGER_KEY, LEGACY_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, STORE } from './cache'
+import { DB_NAME, LEDGER_KEY, LEGACY_KEY, MR_OUTBOX_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, STORE } from './cache'
 
 // ---------- 假的 api.ts ----------
 // vi.hoisted 保证这个对象在 vi.mock 提升后仍是同一个引用，resetModules 之后也不会换。
@@ -1362,9 +1362,9 @@ describe('电表读数（0011）', () => {
     expect((await cached()).meter_readings).toEqual([mr('m1')])
   })
 
-  it('记一条失败（没网也一样）：state 不动、返回 false、告诉用户；没有离线队列', async () => {
-    // 变异：catch 里也 set 进 state → 红
-    api.insertMeterReading.mockRejectedValueOnce(offline())
+  it('记一条被服务器拒了：state 不动、返回 false、告诉用户，不进队列', async () => {
+    // 变异：catch 里不分永久失败、一律进队列 → 红
+    api.insertMeterReading.mockRejectedValueOnce(denied())
     expect(await st().addMeterReading(mr('m1'))).toBe(false)
     expect(st().meter_readings).toEqual([])
     expect(st().toast?.msg).toMatch(/记录读数失败/)
@@ -1397,10 +1397,10 @@ describe('电表读数（0011）', () => {
     expect((await cached()).meter_readings.map((m: MeterReading) => m.id)).toEqual(['m2'])
   })
 
-  it('删失败：这条还在、返回 false、告诉用户', async () => {
+  it('删被服务器拒了：这条还在、返回 false、告诉用户', async () => {
     // 变异：先从 state 拿掉、失败也不放回 → 红
     store.useStore.setState({ meter_readings: [mr('m1')] })
-    api.deleteMeterReading.mockRejectedValueOnce(offline())
+    api.deleteMeterReading.mockRejectedValueOnce(denied())
     expect(await st().removeMeterReading('m1')).toBe(false)
     expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
     expect(st().toast?.msg).toMatch(/删除读数失败/)
@@ -1751,3 +1751,120 @@ describe('里外页面', () => {
     expect(st().mode).toBe('outer')
   })
 })
+
+// ══════════════════════════════════════════════════════════════
+// 2026-10-15：电表读数断网也能记（用户：「和记账一样」），手机明确断网时记账、读数都不发请求直接进队列
+// ══════════════════════════════════════════════════════════════
+describe('电表读数：待上传队列', () => {
+  const setOnline = (on: boolean) => Object.defineProperty(navigator, 'onLine', { get: () => on, configurable: true })
+  afterEach(() => Reflect.deleteProperty(navigator, 'onLine'))
+
+  it('没网记一条：留在列表里、进队列、落盘、返回 true；联网补传后队列清空', async () => {
+    // 变异：addMeterReading 的 catch 回到「报失败、返回 false」→ 红
+    api.insertMeterReading.mockRejectedValueOnce(offline())
+    expect(await st().addMeterReading(mr('m1'))).toBe(true)
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+    expect(st().outboxCount).toBe(1)
+    expect(st().toast?.msg).toMatch(/已存在本机/)
+    expect(JSON.parse(ls.map.get(MR_OUTBOX_KEY)!).entries[0][0]).toBe('m1')
+    api.insertMeterReading.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.insertMeterReading).toHaveBeenLastCalledWith(mr('m1'))
+    expect(st().outboxCount).toBe(0)
+    expect(ls.map.has(MR_OUTBOX_KEY)).toBe(false)
+  })
+
+  it('同步回来的快照里没有它：队列里的读数不会被冲掉', async () => {
+    // 变异：refresh 合并时读数不叠 outboxMr → 红
+    api.insertMeterReading.mockRejectedValue(offline())
+    await st().addMeterReading(mr('m1'))
+    api.fetchAll.mockResolvedValueOnce(snap())
+    await st().refresh()
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+  })
+
+  it('冷启动：读数队列从本机装回来、叠在缓存上、算进「N 笔没上传」', async () => {
+    // 变异：init 不读 MR_OUTBOX_KEY → 红
+    ls.map.set(MR_OUTBOX_KEY, JSON.stringify({ at: '2026-10-15T00:00:00.000Z', entries: [['m1', mr('m1')], ['bad', { id: 'bad' }]] }))
+    await st().init()
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+    expect(st().outboxCount).toBe(1)
+  })
+
+  it('队列里的读数再删：不发删除请求，队列换成「已删」，补传时删一次', async () => {
+    // 变异：去掉 removeMeterReading 开头的 outboxMr.has 分支 → 直接调 deleteMeterReading，红
+    api.insertMeterReading.mockRejectedValue(offline())
+    await st().addMeterReading(mr('m1'))
+    api.deleteMeterReading.mockRejectedValueOnce(offline())
+    expect(await st().removeMeterReading('m1')).toBe(true)
+    expect(api.deleteMeterReading).toHaveBeenCalledTimes(1) // queueMr 马上试的那一次补传
+    expect(st().meter_readings).toEqual([])
+    expect(st().outboxCount).toBe(1)
+    api.deleteMeterReading.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.deleteMeterReading).toHaveBeenLastCalledWith('m1')
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('队列里的读数在有网时删掉：不能删完了队列里还留着它，下次补传又传上去（复活）', async () => {
+    // 变异：去掉 removeMeterReading 开头的 outboxMr.has 分支 → 云端删了个不存在的 id 当成功，队列里的 m1 补传时复活，红
+    api.insertMeterReading.mockRejectedValueOnce(offline())
+    await st().addMeterReading(mr('m1'))
+    api.deleteMeterReading.mockResolvedValue(undefined)
+    api.insertMeterReading.mockResolvedValue(undefined)
+    await st().removeMeterReading('m1')
+    await st().flushOutbox()
+    expect(api.insertMeterReading).toHaveBeenCalledTimes(1) // 只有最开始没网的那一次
+    expect(st().outboxCount).toBe(0)
+    expect(st().meter_readings).toEqual([])
+  })
+
+  it('补传时被服务器拒：从队列和列表里拿掉并提示', async () => {
+    api.insertMeterReading.mockRejectedValueOnce(offline())
+    await st().addMeterReading(mr('m1'))
+    api.insertMeterReading.mockRejectedValueOnce(denied())
+    await st().flushOutbox()
+    expect(st().outboxCount).toBe(0)
+    expect(st().meter_readings).toEqual([])
+    expect(st().toast?.msg).toMatch(/读数上传被拒绝/)
+  })
+
+  it('流水那边还没网（补传中途停了）：读数也别再试', async () => {
+    // 变异：tx 循环 break 后读数照样逐条试 → insertMeterReading 多调一次，红
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.insertMeterReading.mockRejectedValueOnce(offline())
+    await st().addMeterReading(mr('m1'))
+    api.upsertTx.mockRejectedValueOnce(offline())
+    await st().flushOutbox()
+    expect(api.insertMeterReading).toHaveBeenCalledTimes(1)
+    expect(st().outboxCount).toBe(2)
+  })
+
+  it('手机明确断网：记账、改账、删账、记读数都不发请求，直接进队列', async () => {
+    // 变异：去掉任一处 offlineNow() 判断 → 对应的 api 被调用，红
+    setOnline(false)
+    expect(await st().addTx(tx('t1'))).toBe(true)
+    store.useStore.setState({ transactions: [...st().transactions, tx('t2')] })
+    expect(await st().editTx(tx('t2', { amount: 5 }))).toBe(true)
+    expect(await st().removeTx('t2')).toBe(true)
+    expect(await st().addMeterReading(mr('m1'))).toBe(true)
+    expect(api.insertTx).not.toHaveBeenCalled()
+    expect(api.updateTx).not.toHaveBeenCalled()
+    expect(api.deleteTx).not.toHaveBeenCalled()
+    expect(api.insertMeterReading).not.toHaveBeenCalled()
+    expect(st().outboxCount).toBe(3)
+    await st().flushOutbox() // 断网时补传也不试
+    expect(api.upsertTx).not.toHaveBeenCalled()
+  })
+
+  it('退出登录：读数队列一起清掉', async () => {
+    api.insertMeterReading.mockRejectedValueOnce(offline())
+    await st().addMeterReading(mr('m1'))
+    api.signOut.mockResolvedValue(undefined)
+    await st().signOut()
+    expect(ls.map.has(MR_OUTBOX_KEY)).toBe(false)
+    expect(st().outboxCount).toBe(0)
+  })
+})
+

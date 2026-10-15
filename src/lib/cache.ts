@@ -24,6 +24,8 @@ export const LEDGER_KEY = 'ledger'
 /** 1.3.30 及以前：整份账本（连同待传队列）在 localStorage 的这个键里。现在只在搬家、回退和兜底时用 */
 export const LEGACY_KEY = 'jz_cache_v1'
 export const OUTBOX_KEY = 'jz_outbox_v1'
+/** 电表读数的待传队列（2026-10-15）。单独一个键：回退到旧版本时旧代码不认识它，不会把它当坏数据连流水的队列一起写坏 */
+export const MR_OUTBOX_KEY = 'jz_outbox_mr_v1'
 /**
  * 退出登录时同步写下的「待删」记号。IndexedDB 的删除是异步的，可能删不掉（挂起、页面马上被关）；
  * 记号在，下次冷启动就不认 IndexedDB 那份、再删一次。删成功、或之后有一次写入成功（同一个键被盖掉）才清
@@ -362,10 +364,10 @@ export interface OutboxRead {
   entries: unknown
 }
 
-export function readOutboxDump(): OutboxRead {
+export function readOutboxDump(key: string = OUTBOX_KEY): OutboxRead {
   let s: string | null
   try {
-    s = localStorage.getItem(OUTBOX_KEY)
+    s = localStorage.getItem(key)
   } catch {
     return { found: false, at: null, entries: null }
   }
@@ -381,12 +383,12 @@ export function readOutboxDump(): OutboxRead {
 }
 
 /** 抛错（配额满、被禁）交给调用方 */
-export function writeOutboxDump(f: OutboxFile): void {
-  localStorage.setItem(OUTBOX_KEY, JSON.stringify(f))
+export function writeOutboxDump(f: OutboxFile, key: string = OUTBOX_KEY): void {
+  localStorage.setItem(key, JSON.stringify(f))
 }
 
-export function removeOutboxDump(): void {
-  removeLocal(OUTBOX_KEY)
+export function removeOutboxDump(key: string = OUTBOX_KEY): void {
+  removeLocal(key)
 }
 
 /** 浏览器给这个域名的存储配额（字节）。不支持 estimate 的（iOS 17 之前）就是 null，设置页据此只报占了多少 */
