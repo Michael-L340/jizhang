@@ -20,6 +20,8 @@ const BY_NAME: { test: (n: string) => boolean; color: string }[] = [
   // 意外开支原来的玫红和它撞，改成雾蓝
   { test: (n) => n.includes('娱乐') || n.includes('游戏'), color: '#c4466a' },
   { test: (n) => n.includes('意外'), color: '#4573c4' },
+  // 2026-10-16 新大类「恋爱」。粉色系里唯一放得下的位置：离娱乐（343°）刚好 32°、刚出紫色禁区（> 310°）。#bf40a8 差 0.01° 不够 32°，别为了好记改回去
+  { test: (n) => n.includes('恋爱'), color: '#c040a9' },
   { test: (n) => n.includes('工资') || n.includes('实习'), color: '#1f9d55' },
   { test: (n) => n.includes('生活费'), color: '#2f6fed' },
   { test: (n) => n.includes('奖学金'), color: '#f5a524' },

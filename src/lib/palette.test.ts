@@ -12,7 +12,7 @@ function dist(a: string, b: string): number {
 
 /** 现行的五个一级支出色，下面的不变量都要在它们身上成立 */
 const ROOTS = ['#c7820a', '#408632', '#17979b', '#c4466a', '#4573c4']
-const EXPENSE_ROOTS = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支']
+const EXPENSE_ROOTS = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支', '恋爱']
 
 /**
  * 主题色一律从 index.css 的 @theme 现读，不要在这里抄一份。
@@ -112,7 +112,7 @@ describe('流水行里二级分类的底色', () => {
 })
 
 describe('一级支出分类的配色约束', () => {
-  it('五个色相两两至少差 32°——差少了，两边的二级分类会互相撞', () => {
+  it('各个大类的色相两两至少差 32°——差少了，两边的二级分类会互相撞', () => {
     // childColors 把色相往左右各摆 16°，每个大类要独占 32°（2026-10-09 去掉紫色后从 28° / 56° 收窄）。
     const hs = EXPENSE_ROOTS.map((n) => hexToHsl(categoryColor(n))[0]).sort((a, b) => a - b)
     for (let i = 0; i < hs.length; i++) {
@@ -243,7 +243,7 @@ describe('点进大类后的饼：由深到浅', () => {
   })
 
   it('不再有紫色：一级分类和备用色的色相都不落在 250°–310°', () => {
-    const names = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支', '理财收益', ...Array.from({ length: 9 }, (_, i) => `新分类${i}`)]
+    const names = ['日常餐饮', '经常生活开支', '非经常生活消费', '娱乐消费', '意外开支', '恋爱', '理财收益', ...Array.from({ length: 9 }, (_, i) => `新分类${i}`)]
     names.forEach((n, i) => {
       const [h, s] = hexToHsl(categoryColor(n, i))
       if (s > 0.2) expect(h < 250 || h > 310, `${n} 是紫色`).toBe(true)
