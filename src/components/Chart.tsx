@@ -2,11 +2,11 @@
 import { useEffect, useRef } from 'react'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart, PieChart } from 'echarts/charts'
-import { GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
+import { DataZoomInsideComponent, DataZoomSliderComponent, GridComponent, LegendComponent, TooltipComponent } from 'echarts/components'
 import { CanvasRenderer } from 'echarts/renderers'
 import { categoryAxisOf, itemTapStep, type ArmedTap, type TapItem } from '../lib/tap'
 
-echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, CanvasRenderer])
+echarts.use([PieChart, BarChart, LineChart, GridComponent, LegendComponent, TooltipComponent, DataZoomSliderComponent, DataZoomInsideComponent, CanvasRenderer])
 
 export type ChartOption = echarts.EChartsCoreOption
 export interface ChartClick {
@@ -40,9 +40,15 @@ interface Props {
    * 离得远、点中了别的图形就改看那一个（规则见 lib/tap.ts，和 onAxisClick 一样不限时）。
    */
   onItemTap?: (dataIndex: number, seriesIndex: number) => void
+  /**
+   * 用户拖了缩放条 / 两指缩放之后回调，给的是看的那段占整条轴的百分比（0–100）。
+   * 返回一份局部 option 就合并进去（换刻度疏密之类），不会把缩放打回去。
+   * 页面自己 setOption（option 换了）不触发它。
+   */
+  onZoom?: (startPct: number, endPct: number) => ChartOption | void
 }
 
-export default function Chart({ option, height = 240, onClick, onAxisClick, onItemTap }: Props) {
+export default function Chart({ option, height = 240, onClick, onAxisClick, onItemTap, onZoom }: Props) {
   const ref = useRef<HTMLDivElement>(null)
   const inst = useRef<echarts.ECharts | null>(null)
   const clickRef = useRef(onClick)
@@ -51,6 +57,8 @@ export default function Chart({ option, height = 240, onClick, onAxisClick, onIt
   axisClickRef.current = onAxisClick
   const itemTapRef = useRef(onItemTap)
   itemTapRef.current = onItemTap
+  const zoomRef = useRef(onZoom)
+  zoomRef.current = onZoom
   // onItemTap 第一下选中的图形和点的位置；null = 还没点过
   const itemArmedRef = useRef<ArmedTap | null>(null)
   // 这一下点中的数据图形。ECharts 的 click 事件排在 zrender 的 click 之后才发（zrEventfulCallAtLast），
@@ -109,6 +117,16 @@ export default function Chart({ option, height = 240, onClick, onAxisClick, onIt
       armedRef.current = i
       // 触屏上 zrender 的 click 之后提示框未必留得住，显式喊一次最稳
       chart.dispatchAction({ type: 'showTip', seriesIndex: 0, dataIndex: i })
+    })
+    chart.on('datazoom', (p) => {
+      const fn = zoomRef.current
+      if (!fn) return
+      // 拖缩放条：start / end 在事件上；图上两指缩放：在 batch[0] 里
+      const q = p as { start?: number; end?: number; batch?: { start?: number; end?: number }[] }
+      const z = q.batch?.[0] ?? q
+      if (typeof z.start !== 'number' || typeof z.end !== 'number') return
+      const patch = fn(z.start, z.end)
+      if (patch) chart.setOption(patch)
     })
     const ro = new ResizeObserver(() => chart.resize())
     ro.observe(el)

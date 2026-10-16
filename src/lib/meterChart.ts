@@ -72,8 +72,12 @@ const bjTime = (ms: number) => {
 /**
  * 什么时候最费电：每一段读数的平均速度画成台阶（这段时间里每小时几度）。
  * 两段之间断开（中间有一段读数倒退被跳过了）就断开画，不连成一条斜线。
+ *
+ * 横轴是有记录以来的全部（since = 第一次读数），一打开只看最后 view 那一段；
+ * 底下一根拖动条，两头拖着看任意一段（用户 2026-10-16 选的「乙」，「区间为什么不能是有记录以来」）。
+ * 拖完日期刻度的疏密由页面在 datazoom 事件里换（rateMarks），这里给的是打开时那一段的。
  */
-export function rateOption(steps: { from: number; to: number; start: number; perHour: number }[], since: number, until: number) {
+export function rateOption(steps: { from: number; to: number; start: number; perHour: number }[], since: number, until: number, viewFrom: number = since) {
   const pts: ([number, number] | [number, null])[] = []
   for (let i = 0; i < steps.length; i++) {
     const s = steps[i]
@@ -82,12 +86,10 @@ export function rateOption(steps: { from: number; to: number; start: number; per
     // 和上一段接着的起点往右挪 1 毫秒：提示框按最近的点找段，点在一段左半边时最近的点才是这段的起点，不是上一段的终点
     pts.push([joined ? s.from + 1 : s.from, s.perHour], [s.to, s.perHour])
   }
-  const dayMarks: number[] = []
-  // 每天零点（北京时间）一条竖的分隔线：用 x 轴的刻度来画
-  for (let t = Math.ceil((since + 8 * 3600_000) / 86400_000) * 86400_000 - 8 * 3600_000; t <= until; t += 86400_000) dayMarks.push(t)
+  const dayMarks = rateMarks(since, until, Math.max(since, viewFrom), until)
   return {
     animationDuration: 500,
-    grid: { left: 4, right: 10, top: 22, bottom: 0, containLabel: true },
+    grid: { left: 4, right: 10, top: 22, bottom: 40, containLabel: true },
     tooltip: {
       trigger: 'axis',
       confine: true,
@@ -96,7 +98,7 @@ export function rateOption(steps: { from: number; to: number; start: number; per
         if (t === undefined) return ''
         const s = steps.find((x) => x.from <= t && t <= x.to)
         if (!s) return `${bjTime(t)}<br/>这段没有读数`
-        // 写这段真正的起点（start），不是被 3 天窗口截掉的那个点；「一共」也按整段算
+        // 写这段真正的起点（start）；「一共」也按整段算
         return `${bjTime(s.start)} – ${bjTime(s.to)}<br/><b>每小时 ${s.perHour.toFixed(2)} 度</b><br/><span style="opacity:.7">这段一共 ${((s.perHour * (s.to - s.start)) / 3600_000).toFixed(1)} 度</span>`
       },
     },
@@ -106,16 +108,31 @@ export function rateOption(steps: { from: number; to: number; start: number; per
       max: until,
       ...AXIS,
       splitLine: { show: true, ...SPLIT },
-      axisLabel: {
-        ...AXIS.axisLabel,
-        customValues: dayMarks,
-        formatter: (v: number) => {
-          const d = new Date(v + 8 * 3600_000)
-          return `${d.getUTCMonth() + 1}.${d.getUTCDate()}`
-        },
-      },
+      axisLabel: { ...AXIS.axisLabel, customValues: dayMarks, formatter: bjDay },
       axisTick: { show: false, customValues: dayMarks },
     },
+    dataZoom: [
+      {
+        type: 'slider',
+        xAxisIndex: 0,
+        startValue: Math.max(since, viewFrom),
+        endValue: until,
+        height: 20,
+        bottom: 6,
+        brushSelect: false,
+        // 两头的日期写在把手旁边；中间那根「整段平移」的把手手机上太容易误碰，不要
+        moveHandleSize: 0,
+        labelFormatter: (v: number) => bjDay(v),
+        textStyle: { color: CHART.label, fontSize: 10 },
+        borderColor: CHART.axis,
+        fillerColor: 'rgba(47,111,237,0.10)',
+        handleStyle: { color: CHART.balance, borderColor: CHART.balance },
+        dataBackground: { lineStyle: { color: CHART.label, opacity: 0.4 }, areaStyle: { color: CHART.label, opacity: 0.08 } },
+        selectedDataBackground: { lineStyle: { color: CHART.balance, opacity: 0.6 }, areaStyle: { color: CHART.balance, opacity: 0.12 } },
+      },
+      // 图上两指缩放、拖着平移
+      { type: 'inside', xAxisIndex: 0 },
+    ],
     // 单位在卡片副标题上（「每小时几度」）；轴名写在左上角时刻度数字窄的话会被画布切掉一截
     yAxis: { type: 'value', axisLabel: { color: CHART.label, fontSize: 10 }, splitLine: SPLIT },
     series: [
@@ -131,6 +148,33 @@ export function rateOption(steps: { from: number; to: number; start: number; per
       },
     ],
   }
+}
+
+const DAY = 86400_000
+const BJ = 8 * 3600_000
+
+/** 「什么时候最费电」标题旁的三档：打开时看最近几天 */
+export const RATE_SPANS = [3, 7, 30] as const
+export type RateSpan = (typeof RATE_SPANS)[number]
+
+/** 北京时间的「10.6」 */
+function bjDay(v: number): string {
+  const d = new Date(v + BJ)
+  return `${d.getUTCMonth() + 1}.${d.getUTCDate()}`
+}
+
+/**
+ * 「什么时候最费电」横轴上的日期刻度（北京时间零点，每个刻度一条竖线）。
+ * 看得越宽隔得越开：3 天每天一个，一周隔一天，再宽隔三天、一周、两周、一个月左右。
+ * 隔几天按「从 1970 年起第几天」取余，不按看的起点数：拖着平移时刻度不跟着跳。
+ * 刻度铺满 min..max 整条轴（拖动时那段之外的也在，只是画不到）。
+ */
+export function rateMarks(min: number, max: number, viewFrom: number, viewTo: number): number[] {
+  const days = (viewTo - viewFrom) / DAY
+  const every = days <= 4 ? 1 : days <= 8 ? 2 : days <= 16 ? 3 : days <= 40 ? 7 : days <= 100 ? 14 : 30
+  const out: number[] = []
+  for (let t = Math.ceil((min + BJ) / DAY) * DAY - BJ; t <= max; t += DAY) if (Math.round((t + BJ) / DAY) % every === 0) out.push(t)
+  return out
 }
 
 /**

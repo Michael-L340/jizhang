@@ -3,14 +3,14 @@
 import { readFileSync } from 'node:fs'
 import * as echarts from 'echarts/core'
 import { BarChart, LineChart } from 'echarts/charts'
-import { GridComponent, TooltipComponent } from 'echarts/components'
+import { DataZoomInsideComponent, DataZoomSliderComponent, GridComponent, TooltipComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
 import { dailyUsage, hourProfile, parseReading, peakHours, rateSteps, summarize, weekdayProfile } from './meter'
-import { dailyOption, hourOption, rateOption, weekdayOption } from './meterChart'
+import { dailyOption, hourOption, rateMarks, rateOption, weekdayOption } from './meterChart'
 
-echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, SVGRenderer])
+echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, DataZoomSliderComponent, DataZoomInsideComponent, SVGRenderer])
 
 const R = (bj: string, value: string): MeterReading => {
   const iso = new Date(`${bj.replace(' ', 'T')}:00+08:00`).toISOString()
@@ -63,6 +63,34 @@ describe('用电记录的图', () => {
     const svg = render(rateOption(rateSteps(RS, since), since, NOW.getTime()))
     expect(svg).toContain('<svg')
     for (const d of ['10.1', '10.2', '10.3']) expect(svg).toContain(`>${d}<`)
+  })
+
+  it('什么时候最费电：横轴是有记录以来，打开只看最后几天，底下有拖动条（用户 2026-10-16 选「乙」）', () => {
+    // 变异：dataZoom 的 startValue 写成 since（打开就是全部）→ 红；xAxis 锁死 min = viewFrom（拖不回更早）→ 红
+    const first = NOW.getTime() - 20 * 86400_000
+    const view = NOW.getTime() - 3 * 86400_000
+    const o = rateOption(rateSteps(RS, first), first, NOW.getTime(), view) as { xAxis: { min: number; max: number }; dataZoom: { type: string; startValue?: number; endValue?: number }[] }
+    expect(o.xAxis.min).toBe(first)
+    expect(o.dataZoom[0]).toMatchObject({ type: 'slider', startValue: view, endValue: NOW.getTime() })
+    expect(o.dataZoom[1].type).toBe('inside')
+    // 选的天数比记录还长：从第一次读数开始，不留一截空白
+    const short = rateOption([], first, NOW.getTime(), first - 30 * 86400_000) as { dataZoom: { startValue: number }[] }
+    expect(short.dataZoom[0].startValue).toBe(first)
+    expect(render(o)).toContain('<svg')
+  })
+
+  it('日期刻度：看得越宽隔得越开，都在北京时间零点；拖着平移时刻度不跳', () => {
+    // 变异：隔几天按看的起点数（不按 1970 年起第几天取余）→ 平移一天后刻度整体错开，红
+    const D = 86400_000
+    const min = Date.parse('2026-08-01T00:00:00+08:00')
+    const max = Date.parse('2026-10-16T12:00:00+08:00')
+    const gap = (m: number[]) => (m[1] - m[0]) / D
+    expect(gap(rateMarks(min, max, max - 3 * D, max))).toBe(1)
+    expect(gap(rateMarks(min, max, max - 7 * D, max))).toBe(2)
+    expect(gap(rateMarks(min, max, max - 30 * D, max))).toBe(7)
+    expect(gap(rateMarks(min, max, min, max))).toBe(14)
+    for (const t of rateMarks(min, max, max - 30 * D, max)) expect(new Date(t + 8 * 3600_000).getUTCHours()).toBe(0)
+    expect(rateMarks(min, max, max - 31 * D, max - D)).toEqual(rateMarks(min, max, max - 30 * D, max))
   })
 
   it('一天里几点最费电：24 根柱子画得出来，明显最高的几根深色、其余浅色', () => {

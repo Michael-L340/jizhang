@@ -1,6 +1,7 @@
 import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { HelpTip } from '../components/HelpTip'
+import { usePersistedState } from '../lib/hooks'
 import { Sheet } from '../components/Sheet'
 import { fmtIsoZh, nowIso } from '../lib/date'
 import { newId } from '../lib/id'
@@ -31,7 +32,7 @@ import {
   weekdayLead,
   weekdayProfile,
 } from '../lib/meter'
-import { dailyOption, hourOption, rateOption, weekdayOption } from '../lib/meterChart'
+import { dailyOption, hourOption, RATE_SPANS, rateMarks, rateOption, weekdayOption, type RateSpan } from '../lib/meterChart'
 import { fmtYuan } from '../lib/money'
 import { useStore } from '../lib/store'
 import type { MeterReading } from '../types'
@@ -79,8 +80,26 @@ export function Power() {
   const sum = useMemo(() => summarize(readings, now), [readings, now])
   const todayYmd = beijingDayOf(now.getTime())
   const days = useMemo(() => dailyUsage(readings, beijingDayOf(now.getTime() - 29 * DAY_MS), todayYmd), [readings, now, todayYmd])
-  const since = now.getTime() - 3 * DAY_MS
-  const steps = useMemo(() => rateSteps(readings, since), [readings, since])
+  // 什么时候最费电：横轴是有记录以来，打开看最近 span 天（3 / 7 / 30，记住上次选的）；拖了条子就哪档都不亮，点一档回到最近那段
+  const [spanRaw, setSpan] = usePersistedState<RateSpan>('jz_power_rateSpan', 3)
+  const span: RateSpan = RATE_SPANS.includes(spanRaw) ? spanRaw : 3
+  const [zoomed, setZoomed] = useState(false)
+  const [zoomReset, setZoomReset] = useState(0)
+  const first = sorted.length ? Date.parse(sorted[0].read_at) : now.getTime() - span * DAY_MS
+  const until = Math.max(now.getTime(), last ? Date.parse(last.read_at) : 0)
+  const steps = useMemo(() => rateSteps(readings, first), [readings, first])
+  // zoomReset 进依赖：同一档再点一下也要换一份 option，把拖开的那段打回去
+  const rateOpt = useMemo(() => rateOption(steps, first, until, until - span * DAY_MS), [steps, first, until, span, zoomReset])
+  const pickSpan = (d: RateSpan) => {
+    setSpan(d)
+    setZoomed(false)
+    setZoomReset((k) => k + 1)
+  }
+  const onRateZoom = (s: number, e: number) => {
+    setZoomed(true)
+    const m = rateMarks(first, until, first + ((until - first) * s) / 100, first + ((until - first) * e) / 100)
+    return { xAxis: { axisLabel: { customValues: m }, axisTick: { customValues: m } } }
+  }
   // 一天里几点最费电：最近 30 天
   const slots = useMemo(() => hourProfile(readings, now.getTime() - 30 * DAY_MS, now.getTime()), [readings, now])
   const topHours = useMemo(() => peakHours(slots), [slots])
@@ -224,22 +243,35 @@ export function Power() {
           </div>
 
           <div className="card p-4 mt-3">
-            <div className="flex items-baseline justify-between mb-1">
+            <div className="flex items-center justify-between gap-2">
               <span className="font-semibold">什么时候最费电</span>
-              <span className="flex items-center gap-2 text-[11px] text-muted">
-                最近 3 天 · 每小时几度
-                <HelpTip title="什么时候最费电">
-                  <p>每一段 = 两次读数之间平均每小时用几度。一天记得越多，这条线越细。</p>
-                  <p>高的那几段一般是空调、热水器开着的时候。</p>
-                </HelpTip>
-              </span>
+              <div className="inline-flex rounded-full bg-card border border-line p-0.5">
+                {RATE_SPANS.map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    className={`px-2.5 py-0.5 rounded-full text-xs ${!zoomed && span === d ? 'bg-ink text-white' : 'text-muted'}`}
+                    onClick={() => pickSpan(d)}
+                  >
+                    {d} 天
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="flex items-center gap-2 text-[11px] text-muted mt-1 mb-1">
+              每小时几度
+              <HelpTip title="什么时候最费电">
+                <p>每一段 = 两次读数之间平均每小时用几度。一天记得越多，这条线越细。</p>
+                <p>高的那几段一般是空调、热水器开着的时候。</p>
+                <p>拖底下条子的两头，能看有记录以来的任意一段；点 3 天 / 7 天 / 30 天回到最近那段。</p>
+              </HelpTip>
             </div>
             {steps.length ? (
-              <Suspense fallback={<div style={{ height: 170 }} />}>
-                <Chart option={rateOption(steps, since, Math.max(now.getTime(), last ? Date.parse(last.read_at) : 0))} height={170} />
+              <Suspense fallback={<div style={{ height: 210 }} />}>
+                <Chart option={rateOpt} height={210} onZoom={onRateZoom} />
               </Suspense>
             ) : (
-              <div className="text-sm text-muted py-8 text-center">最近 3 天记了两次以上才画得出来</div>
+              <div className="text-sm text-muted py-8 text-center">记了两次以上才画得出来</div>
             )}
           </div>
 
