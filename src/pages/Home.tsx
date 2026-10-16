@@ -7,6 +7,7 @@ import { balances, byCategory, debtOf, positiveAgg, dueNow, monthSummary, sortTx
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { outerBook, outerList } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
+import { fmtKwh, summarize } from '../lib/meter'
 import { fmtYuan } from '../lib/money'
 import { categoryColor } from '../lib/palette'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -38,6 +39,8 @@ export function Home() {
 
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(otxs, ym), [otxs, ym])
+  const readings = useStore((s) => s.meter_readings)
+  const power = useMemo(() => (readings.length ? summarize(readings, new Date()) : null), [readings])
   // 余额直接是那本账加出来的：外页面下就是修饰过的数；白条两边一样，所以下面算欠款照样用它
   const bal = useMemo(() => balances(otxs, accounts), [otxs, accounts])
   // 外页面的流水列表不带校准行（真实的和外页面的都不带）；只有下面那个「最近流水」用它
@@ -91,6 +94,9 @@ export function Home() {
     }),
     [agg, pieColors],
   )
+
+  // 首页用电入口那一行的字：近 7 天日均、本月预计（没有预计就写本月已用）
+  const powerText = power ? `日均 ${power.avg7 === null ? '—' : fmtKwh(power.avg7)} 度 · 本月约 ${Math.round((power.projected ?? power.month) / 100)} 度` : '记一次读数'
 
   return (
     <div className="px-4 pb-6">
@@ -179,6 +185,13 @@ export function Home() {
             {sum.savingRate === null ? <span className="text-muted">本月没有收入</span> : `${(sum.savingRate * 100).toFixed(1)}%`}
           </span>
         </div>
+        {/* 用电入口（用户 2026-10-16 选「甲」、放「储蓄率之下」）：和储蓄率一个样子，点进用电页。用电和里外页面无关，两边一样 */}
+        <Link to="/power" className="mt-2 flex justify-between items-baseline text-sm">
+          <span className="text-muted">⚡ 用电</span>
+          <span className="num">
+            {powerText} <span className="text-muted">›</span>
+          </span>
+        </Link>
       </div>
 
       <div className="card p-4 mb-3">
