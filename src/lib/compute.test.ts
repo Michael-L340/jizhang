@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { Account, Category, Transaction } from '../types'
-import { applyTx, creditBill, currentDueDate, dueDateOf, dueNow, groupByDue, previewRepay, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse as order, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
+import { applyTx, creditBill, currentDueDate, dueDateOf, dueNow, groupByDue, previewRepay, settledIds, balanceShares, balanceSeries, balances, bucketKeys, byCategory, dailyCumulative, debtOf, firstFlowDate, groupByDay, installmentPlan, lastCheck, monthByAccount, monthSummary, monthTotals, monthlySeries, pickCategoryId, childOrderByUse as order, rootOrderByUse, seriesByCategory, seriesTotals, sortTxs, splitAccounts, totalOf, UNCATEGORIZED_ID, UNCATEGORIZED_NAME } from './compute'
 import { addDays, dayInMonth, daysInMonth, lastMonths, monthRange, shiftMonth, today } from './date'
 import { calcDelta, centsFromDb, centsToDb, fmtYuan, parseYuan } from './money'
 
@@ -342,6 +342,34 @@ describe('二级分类的排序：按最近 30 天用得多少，不是按最近
   it('别的大类下的记录不影响这个大类的排序', () => {
     const rows = [...mk('game', 99), ...mk('dinner', 1)]
     expect(childOrderByUse(rows, cats, 'food').map((c) => c.name)).toEqual(['晚餐', '午餐'])
+  })
+})
+
+describe('记一笔页的支出大类也按最近 30 天用得多少排（2026-10-16）', () => {
+  const mk = (cat: string, n: number, day = '2026-09-01') =>
+    Array.from({ length: n }, () => tx({ type: 'expense', amount: 100, account_id: 'wx', category_id: cat, date: day }))
+  const TODAY = '2026-09-10'
+  const names = (rows: Transaction[], c: Category[] = cats) => rootOrderByUse(rows, c, TODAY).map((x) => x.name)
+
+  it('记在二级上的算它的大类：游戏 2 笔比午餐 1 笔多，娱乐排到前面', () => {
+    // 变异：keyOf 不换成大类（直接用 category_id）→ 二级上的记录一笔都不算，按原顺序，红
+    expect(names([...mk('game', 2), ...mk('lunch', 1)])).toEqual(['娱乐消费', '日常餐饮'])
+  })
+
+  it('直接记在大类上的也算', () => {
+    expect(names(mk('fun', 1))).toEqual(['娱乐消费', '日常餐饮'])
+  })
+
+  it('只数最近 30 天；一次没用过的按分类管理页的顺序', () => {
+    // 变异：去掉窗口 → 两年前的 500 笔午餐把日常餐饮压在第一，红
+    expect(names([...mk('lunch', 500, '2024-03-01'), ...mk('game', 1)])).toEqual(['娱乐消费', '日常餐饮'])
+    expect(names([])).toEqual(['日常餐饮', '娱乐消费'])
+  })
+
+  it('只有支出大类，没有收入分类和归档的大类', () => {
+    const withArchived = [...cats, { id: 'old', kind: 'expense' as const, parent_id: null, name: '旧大类', icon: null, sort: 0, is_archived: true, note: null }]
+    expect(names(mk('old', 9), withArchived)).toEqual(['日常餐饮', '娱乐消费'])
+    expect(names(mk('salary', 9))).toEqual(['日常餐饮', '娱乐消费'])
   })
 })
 

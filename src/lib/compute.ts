@@ -374,17 +374,34 @@ export const USE_WINDOW_DAYS = 30
 
 export function childOrderByUse(txs: Transaction[], cats: Category[], parentId: string, todayStr: string = today()): Category[] {
   const children = cats.filter((c) => c.parent_id === parentId && !c.is_archived)
+  return orderByUse(txs, children, (id) => id, todayStr)
+}
+
+/**
+ * 记一笔页顶上那排支出大类，规矩和 childOrderByUse 一样（用户 2026-10-16：「那一级大类，排序还是可以变动吧」）。
+ * 记在二级上的那笔算它的大类，直接记在大类上的也算。分类管理页、统计页的顺序不跟着变。
+ */
+export function rootOrderByUse(txs: Transaction[], cats: Category[], todayStr: string = today()): Category[] {
+  const roots = cats.filter((c) => c.kind === 'expense' && !c.parent_id && !c.is_archived)
+  const parentOf = new Map(cats.map((c) => [c.id, c.parent_id ?? c.id]))
+  return orderByUse(txs, roots, (id) => parentOf.get(id), todayStr)
+}
+
+/** 按最近 30 天的次数排 list；keyOf 把一笔的 category_id 换成 list 里的 id（换不到就不算） */
+function orderByUse(txs: Transaction[], list: Category[], keyOf: (categoryId: string) => string | undefined, todayStr: string): Category[] {
   const uses = new Map<string, number>()
   const lastUse = new Map<string, string>()
   const from = addDays(todayStr, -USE_WINDOW_DAYS)
   for (const t of txs) {
     if (!t.category_id || t.date < from) continue
-    uses.set(t.category_id, (uses.get(t.category_id) ?? 0) + 1)
+    const id = keyOf(t.category_id)
+    if (!id) continue
+    uses.set(id, (uses.get(id) ?? 0) + 1)
     const key = `${t.date}T${t.created_at}`
-    const prev = lastUse.get(t.category_id)
-    if (!prev || key > prev) lastUse.set(t.category_id, key)
+    const prev = lastUse.get(id)
+    if (!prev || key > prev) lastUse.set(id, key)
   }
-  return children.sort((a, b) => {
+  return list.sort((a, b) => {
     const na = uses.get(a.id) ?? 0
     const nb = uses.get(b.id) ?? 0
     if (na !== nb) return nb - na
