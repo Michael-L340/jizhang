@@ -90,6 +90,6 @@ npm test         # vitest
 npm run deploy   # check + test + 版本号第三位 +1 并打 tag + 构建 + 发布到 gh-pages + 推 main
 ```
 
-`npm run deploy` 先跑 `npm version patch`：把 `package.json` 的第三位 +1、生成一条 `vX.Y.Z` 提交和同名 tag（要求工作区干净，所以先 commit 再 deploy），再用 `VITE_BASE=/jizhang/` 构建（Pages 子路径），最后把 main 和 tag 一起推到 GitHub。发布后 GitHub CDN 可能缓存几分钟。验证是否上线：比对本地 `dist/assets/index-*.js` 的文件名和线上 `index.html` 引用的是否一致。
+`npm run deploy` 先跑 `npm version patch`：把 `package.json` 的第三位 +1、生成一条 `vX.Y.Z` 提交和同名 tag（要求工作区干净，所以先 commit 再 deploy），再用 `VITE_BASE=/jizhang/` 构建（Pages 子路径），最后把 main 和 tag 一起推到 GitHub。gh-pages 分支带 `--no-history`：每次发布强推一条没有父提交的新提交，不攒旧的打包产物（攒了 106 次占掉仓库一半多，2026-10-16 改）；要旧版本就从对应 tag 重新构建，实测 v1.4.6 重建出来和当时线上那份逐文件相同。发布后 GitHub CDN 可能缓存几分钟。验证是否上线：比对本地 `dist/assets/index-*.js` 的文件名和线上 `index.html` 引用的是否一致。
 
 数据库改动：新增 `supabase/migrations/000N_*.sql`，**不改旧文件**。执行方式二选一：Supabase 控制台 SQL Editor 粘贴，或用 Management API（需要用户临时生成 `sbp_` 令牌，用完删）。
