@@ -187,7 +187,7 @@ export function Home() {
         </div>
         {/* 用电入口（用户 2026-10-16 选「甲」、放「储蓄率之下」）：和储蓄率一个样子，点进用电页。用电和里外页面无关，两边一样 */}
         <Link to="/power" className="mt-2 flex justify-between items-baseline text-sm">
-          <span className="text-muted">⚡ 用电</span>
+          <span className="text-muted">用电</span>
           <span className="num">
             {powerText} <span className="text-muted">›</span>
           </span>
