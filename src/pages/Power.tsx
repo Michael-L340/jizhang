@@ -28,14 +28,19 @@ import {
   sortReadings,
   spreadOf,
   summarize,
+  bucketAverage,
+  NOTE_MAX,
+  noteIdFor,
+  usageBuckets,
   WEEKDAY_NAMES,
+  type UsageUnit,
   weekdayLead,
   weekdayProfile,
 } from '../lib/meter'
-import { dailyOption, hourOption, RATE_SPANS, rateMarks, rateOption, weekdayOption, type RateSpan } from '../lib/meterChart'
+import { bucketOption, dailyOption, hourOption, RATE_SPANS, rateMarks, rateOption, weekdayOption, type RateSpan } from '../lib/meterChart'
 import { fmtYuan } from '../lib/money'
 import { useStore } from '../lib/store'
-import type { MeterReading } from '../types'
+import type { MeterNote, MeterReading } from '../types'
 
 const Chart = lazy(() => import('../components/Chart'))
 
@@ -117,6 +122,17 @@ export function Power() {
   const hourSpread = spreadOf(slots.map((x) => x.perHour))
   const wdSpread = spreadOf(wdays.map((x) => x.perDay))
   const wdMinDays = Math.min(...wdays.filter((x) => x.perDay !== null).map((x) => x.days))
+  // 每天用了多少度：日 / 周 / 月（记住上次选的），点两下写备注（只在「日」里）
+  const [unitRaw, setUnit] = usePersistedState<UsageUnit>('jz_power_usageUnit', 'day')
+  const unit: UsageUnit = unitRaw === 'week' || unitRaw === 'month' ? unitRaw : 'day'
+  const notesRaw = useStore((s) => s.meter_notes)
+  const notes = useMemo(() => new Map(notesRaw.map((n) => [n.day, n.note])), [notesRaw])
+  const buckets = useMemo(() => (unit === 'day' ? [] : usageBuckets(readings, unit, todayYmd)), [readings, unit, todayYmd])
+  const usageOpt = useMemo(
+    () => (unit === 'day' ? dailyOption(days, sum.avg7, sum.avgDays, notes) : bucketOption(buckets, unit, bucketAverage(buckets), notes)),
+    [unit, days, sum.avg7, sum.avgDays, notes, buckets],
+  )
+  const [noteDay, setNoteDay] = useState<string | null>(null)
   const daysAny = days.some((d) => d.coveredHours > 0)
   // 列表里每条读数旁边写「比上一次多几度」：按到达这条的那一段查
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
@@ -193,22 +209,30 @@ export function Power() {
           </div>
 
           <div className="card p-4 mt-3">
-            <div className="flex items-baseline justify-between mb-1">
+            <div className="flex items-center justify-between gap-2">
               <span className="font-semibold">每天用了多少度</span>
-              <span className="flex items-center gap-2 text-[11px] text-muted">
-                最近 30 天
-                <HelpTip title="每天用了多少度">
-                  <p>读数不用在零点记：两次读数之间用的电按时间平均分到每一天。</p>
-                  <p>浅色的柱子是那天还没算全（比如今天）。</p>
-                </HelpTip>
-              </span>
+              <div className="inline-flex rounded-full bg-card border border-line p-0.5">
+                {(['day', 'week', 'month'] as const).map((u) => (
+                  <button key={u} type="button" className={`px-2.5 py-0.5 rounded-full text-xs ${unit === u ? 'bg-ink text-white' : 'text-muted'}`} onClick={() => setUnit(u)}>
+                    {u === 'day' ? '日' : u === 'week' ? '周' : '月'}
+                  </button>
+                ))}
+              </div>
             </div>
-            {daysAny ? (
+            <div className="flex items-center gap-2 text-[11px] text-muted mt-1 mb-1">
+              {unit === 'day' ? '最近 30 天' : unit === 'week' ? '最近 12 周 · 周一到周日' : '最近 12 个月'}
+              <HelpTip title="每天用了多少度">
+                <p>读数不用在零点记：两次读数之间用的电按时间平均分到每一天。</p>
+                <p>浅色的柱子是还没算全的那段（比如今天、这周）。</p>
+                <p>「日」里点一下柱子看数，再点一下写备注（比如「没开空调」），写了的柱顶有个小点；周、月里只看备注。</p>
+              </HelpTip>
+            </div>
+            {daysAny || buckets.some((b) => b.coveredHours > 0) ? (
               <Suspense fallback={<div style={{ height: 180 }} />}>
-                <Chart option={dailyOption(days, sum.avg7, sum.avgDays)} height={180} />
+                <Chart option={usageOpt} height={180} onAxisClick={unit === 'day' ? (i) => days[i] && days[i].coveredHours > 0 && setNoteDay(days[i].date) : undefined} />
               </Suspense>
             ) : (
-              <div className="text-sm text-muted py-8 text-center">最近 30 天没有读数</div>
+              <div className="text-sm text-muted py-8 text-center">还没有读数</div>
             )}
           </div>
 
@@ -368,6 +392,7 @@ export function Power() {
 
       <PriceSheet open={priceOpen} price={price} onClose={() => setPriceOpen(false)} onSave={(v) => (savePrice(v), setPriceOpen(false))} />
 
+      {noteDay ? <NoteSheet day={noteDay} current={notesRaw.find((n) => n.day === noteDay) ?? null} onClose={() => setNoteDay(null)} /> : null}
       <Sheet open={picked !== null} onClose={() => setPicked(null)} title="这条读数">
         {picked ? (
           <>
@@ -525,3 +550,70 @@ function PriceSheet({ open, price, onClose, onSave }: { open: boolean; price: nu
     </Sheet>
   )
 }
+
+/** 备注弹层里点一下就填上的几个常用说法 */
+const NOTE_SUGGESTIONS = ['没开空调', '开了空调', '不在家', '洗衣服', '热水器开着']
+
+/** 一天的用电备注：写 / 改 / 删。id 由日期推出，同一天写几次都是同一条 */
+function NoteSheet({ day, current, onClose }: { day: string; current: MeterNote | null; onClose: () => void }) {
+  const saveMeterNote = useStore((s) => s.saveMeterNote)
+  const removeMeterNote = useStore((s) => s.removeMeterNote)
+  const [text, setText] = useState(current?.note ?? '')
+  const [busy, setBusy] = useState(false)
+  const v = text.trim()
+  const tooLong = [...v].length > NOTE_MAX
+  const title = `${Number(day.slice(5, 7))}月${Number(day.slice(8, 10))}日的备注`
+  async function save() {
+    if (busy || tooLong) return
+    setBusy(true)
+    // 清空再保存 = 删掉
+    const ok = v
+      ? await saveMeterNote({ id: noteIdFor(day), day, note: v, created_at: current?.created_at ?? nowIso() })
+      : current
+        ? await removeMeterNote(current.id)
+        : true
+    setBusy(false)
+    if (ok) onClose()
+  }
+  return (
+    <Sheet open onClose={onClose} title={title}>
+      <input
+        autoFocus
+        className="w-full mt-3 px-3 py-2.5 rounded-xl border border-line bg-bg text-[15px] outline-none"
+        placeholder="比如：没开空调"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && void save()}
+      />
+      <div className="flex flex-wrap gap-1.5 mt-2.5">
+        {NOTE_SUGGESTIONS.map((s) => (
+          <button key={s} type="button" className="chip text-xs" style={{ padding: '4px 10px' }} onClick={() => setText(s)}>
+            {s}
+          </button>
+        ))}
+      </div>
+      {tooLong ? <div className="text-xs text-expense mt-2">最多 {NOTE_MAX} 个字</div> : null}
+      <div className="flex gap-2 mt-4">
+        {current ? (
+          <button
+            type="button"
+            disabled={busy}
+            className="flex-1 chip text-center text-expense"
+            onClick={async () => {
+              setBusy(true)
+              const ok = await removeMeterNote(current.id)
+              setBusy(false)
+              if (ok) onClose()
+            }}
+          >
+            删除备注
+          </button>
+        ) : null}
+        <button type="button" disabled={busy || tooLong} className={`flex-1 py-3 rounded-xl font-semibold ${busy || tooLong ? 'bg-bg text-muted' : 'bg-brand text-on-brand'}`} onClick={() => void save()}>
+          保存
+        </button>
+      </div>
+    </Sheet>
+  )
+}
+

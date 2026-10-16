@@ -1,6 +1,6 @@
 // ★ 全项目唯一接触 Supabase 的文件。换数据库只改这里。
 // 对外只暴露业务函数；金额在这里完成 分 ↔ numeric 的转换。
-import type { Account, Category, CatKind, FacadeAdjust, MeterReading, Snapshot, Transaction, TxType } from '../types'
+import type { Account, Category, CatKind, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction, TxType } from '../types'
 import type { BackupStatus } from './backup'
 import { centsFromDb, centsToDb } from './money'
 import { supabase } from './supabase'
@@ -54,6 +54,9 @@ interface MrRow {
 function rowToMr(r: MrRow): MeterReading {
   return { id: r.id, read_at: r.read_at, centi_kwh: Number(r.centi_kwh), created_at: r.created_at }
 }
+
+/** 0013：用电每日备注。day 是 date 列，PostgREST 给回来就是 YYYY-MM-DD，原样收 */
+const MN_COLS = 'id,day,note,created_at'
 
 function rowToTx(r: TxRow): Transaction {
   return { ...r, amount: centsFromDb(r.amount), note: r.note ?? null, account_id: r.account_id ?? null, to_account_id: r.to_account_id ?? null, category_id: r.category_id ?? null, installments: r.installments ?? null, settles: r.settles ?? null, hidden: r.hidden ?? null, is_offset: r.is_offset ?? null }
@@ -202,9 +205,20 @@ export async function fetchAll(signal?: AbortSignal): Promise<Snapshot> {
     if (data.length < PAGE) break
     after = (data[data.length - 1] as MrRow).id
   }
+  // 每日备注一年最多 366 条，照样按 id 翻页
+  const meter_notes: MeterNote[] = []
+  for (let after = ''; ; ) {
+    // 第一页不加 gt：id 是 uuid，`id > ''` 会被数据库拒（v1.3.28）
+    const q = supabase.from('meter_notes').select(MN_COLS).order('id').limit(PAGE)
+    const { data, error } = await withSignal(after ? q.gt('id', after) : q)
+    if (error) throw error
+    meter_notes.push(...(data as MeterNote[]))
+    if (data.length < PAGE) break
+    after = (data[data.length - 1] as MeterNote).id
+  }
   // 拉的过程中登录态掉了的话，后半截是拿 anon key 拉的、是空的：整份都不能要
   await assertSession()
-  return { accounts: a.data as Account[], categories: c.data as Category[], transactions, facade_adjusts, meter_readings }
+  return { accounts: a.data as Account[], categories: c.data as Category[], transactions, facade_adjusts, meter_readings, meter_notes }
 }
 
 // ---------- 流水 ----------
@@ -272,6 +286,30 @@ export async function deleteMeterReading(id: string): Promise<void> {
   if (error) throw error
 }
 
+// ---------- 用电每日备注（0013） ----------
+
+/** 整批写备注（按 id 覆盖）：导入、恢复失败时写回 */
+export async function upsertMeterNotes(rows: MeterNote[], up: { onConflict: string; ignoreDuplicates?: boolean } = { onConflict: 'id' }): Promise<void> {
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await supabase.from('meter_notes').upsert(rows.slice(i, i + 500), up)
+    if (error) throw error
+  }
+}
+
+/** 写一天的备注。id 由日期推出，同一天写几次都是覆盖同一行 */
+export async function saveMeterNote(n: MeterNote): Promise<void> {
+  await assertSession()
+  const { error } = await supabase.from('meter_notes').upsert(n, { onConflict: 'id' })
+  if (error) throw error
+}
+
+/** 删一天的备注。云端没有这行是空操作、不报错 */
+export async function deleteMeterNote(id: string): Promise<void> {
+  await assertSession()
+  const { error } = await supabase.from('meter_notes').delete().eq('id', id)
+  if (error) throw error
+}
+
 // ---------- 分类 ----------
 
 export async function addCategory(input: { kind: CatKind; parent_id: string | null; name: string; sort: number }): Promise<Category> {
@@ -303,6 +341,7 @@ export async function updateAccount(id: string, patch: Partial<Pick<Account, 'na
  * 顺序不能反（以下都由 npm run test:db 在真的 Postgres 上实测过）：
  * - meter_readings（0011）和别的表没有外键，放哪儿都删得掉；它排第一句，
  *   所以 step === 'meter_readings' 就是「第一句就失败，云端一行没动」。
+ * - meter_notes（0013）也没有外键，排第二句（别抢第一句：store 靠 'meter_readings' 认「一行没动」）。
  * - facade_adjusts.account_id 是 on delete restrict，必须在删账户之前删。
  * - transactions.account_id / category_id 都是 on delete restrict，先删账户或分类会被拒绝。
  * - categories.parent_id 也是 restrict，只删一级、留着二级同样会被拒绝。
@@ -323,6 +362,8 @@ export async function wipeAll(): Promise<void> {
   }
   const mr = await supabase.from('meter_readings').delete().not('id', 'is', null)
   if (mr.error) wipeFailed('meter_readings', mr.error)
+  const mn = await supabase.from('meter_notes').delete().not('id', 'is', null)
+  if (mn.error) wipeFailed('meter_notes', mn.error)
   const fa = await supabase.from('facade_adjusts').delete().not('id', 'is', null)
   if (fa.error) wipeFailed('facade_adjusts', fa.error)
   const tx = await supabase.from('transactions').delete().not('id', 'is', null)
@@ -342,7 +383,7 @@ export async function wipeAll(): Promise<void> {
  * 这六个删除不是一个事务，别的 step 都意味着已经删掉了一部分——
  * 包括 'facade_adjusts'：0011 之前它是第一句，现在它失败时电表读数已经删掉了，要回滚。
  */
-export type WipeStep = 'meter_readings' | 'facade_adjusts' | 'transactions' | 'child_categories' | 'root_categories' | 'accounts'
+export type WipeStep = 'meter_readings' | 'meter_notes' | 'facade_adjusts' | 'transactions' | 'child_categories' | 'root_categories' | 'accounts'
 export interface WipeFailure extends Error {
   step: WipeStep
 }
@@ -377,6 +418,7 @@ export async function importAll(snap: Snapshot, opts: { onlyNew?: boolean } = {}
   }
   // 电表读数和谁都没有外键，放哪儿都行；centi_kwh 本来就是整数，不过换算
   await upsertMeterReadings(snap.meter_readings, up)
+  await upsertMeterNotes(snap.meter_notes, up)
   const parents = snap.categories.filter((c) => !c.parent_id)
   const children = snap.categories.filter((c) => c.parent_id)
   const p = await supabase.from('categories').upsert(parents, up)

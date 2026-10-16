@@ -7,8 +7,8 @@ import { DataZoomInsideComponent, DataZoomSliderComponent, GridComponent, Toolti
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
-import { dailyUsage, hourProfile, parseReading, peakHours, rateSteps, summarize, weekdayProfile } from './meter'
-import { dailyOption, hourOption, rateMarks, rateOption, weekdayOption } from './meterChart'
+import { bucketAverage, dailyUsage, hourProfile, parseReading, peakHours, rateSteps, summarize, usageBuckets, weekdayProfile } from './meter'
+import { bucketOption, dailyOption, hourOption, rateMarks, rateOption, weekdayOption } from './meterChart'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, DataZoomSliderComponent, DataZoomInsideComponent, SVGRenderer])
 
@@ -181,3 +181,45 @@ describe('提示框的措辞和找段', () => {
     expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('一共 6.0 度')
   })
 })
+
+describe('每天用了多少度：备注和周 / 月（2026-10-16）', () => {
+  const rs = Array.from({ length: 12 }, (_, i) => R(`2026-10-${String(4 + i).padStart(2, '0')} 20:00`, (3000 + 4 * i).toFixed(1)))
+  type Opt = { tooltip: { formatter: (ps: { dataIndex: number }[]) => string }; series: { label?: { formatter: (p: { dataIndex: number }) => string } }[] }
+
+  it('日：写了备注的那天提示框里有备注、柱顶一个点；备注里的尖括号不当 HTML', () => {
+    // 变异：提示框不过 esc → 「<b>」原样进去，红
+    const days = dailyUsage(rs, '2026-10-05', '2026-10-09')
+    const notes = new Map([['2026-10-07', '没开空调<b>']])
+    const o = dailyOption(days, 400, 7, notes) as unknown as Opt
+    const i = days.findIndex((d) => d.date === '2026-10-07')
+    expect(o.tooltip.formatter([{ dataIndex: i }])).toContain('备注：没开空调&lt;b&gt;')
+    expect(o.tooltip.formatter([{ dataIndex: i }])).toContain('再点一下改备注')
+    expect(o.tooltip.formatter([{ dataIndex: 0 }])).toContain('再点一下写备注')
+    expect(o.series[0].label!.formatter({ dataIndex: i })).toBe('●')
+    expect(o.series[0].label!.formatter({ dataIndex: 0 })).toBe('')
+    expect(render(o)).toContain('<svg')
+  })
+
+  it('周：一根一周，提示框写起止、合计、日均，列出这周的备注；没记满的浅色', () => {
+    // 变异：提示框不列这周的备注 → 红
+    const bs = usageBuckets(rs, 'week', '2026-10-16')
+    const o = bucketOption(bs, 'week', bucketAverage(bs), new Map([['2026-10-07', '没开空调']])) as unknown as Opt & { series: { data: { itemStyle: { opacity: number } }[] }[] }
+    const tip = o.tooltip.formatter([{ dataIndex: 1 }])
+    expect(tip).toContain('10.5–10.11')
+    expect(tip).toContain('28.0 度')
+    expect(tip).toContain('日均 4.0 度')
+    expect(tip).toContain('10.7 没开空调')
+    expect(o.series[0].label!.formatter({ dataIndex: 1 })).toBe('●')
+    expect(o.series[0].data.map((d) => d.itemStyle.opacity)).toEqual([0.4, 1, 0.4])
+    expect(render(o)).toContain('<svg')
+  })
+
+  it('月：横轴写「10月」，提示框写「2026年10月」', () => {
+    const bs = usageBuckets(rs, 'month', '2026-10-16')
+    const o = bucketOption(bs, 'month', bucketAverage(bs)) as unknown as Opt & { xAxis: { data: string[] } }
+    expect(o.xAxis.data).toEqual(['10月'])
+    expect(o.tooltip.formatter([{ dataIndex: 0 }])).toContain('2026年10月')
+    expect(render(o)).toContain('<svg')
+  })
+})
+

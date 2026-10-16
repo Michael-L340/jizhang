@@ -5,7 +5,7 @@
 // 按时间平均摊到这段时间里的每一刻：读数不用在零点记，一段跨了午夜就按钟点切开分给两天。
 // 后一次比前一次还小（输错了、换了表）的那一段不算用电：宁可少算一段，也不能算出负的或一下子几千度。
 import type { MeterReading } from '../types'
-import { fmtIsoTimeZh } from './date'
+import { addDays, fmtIsoTimeZh } from './date'
 
 const HOUR_MS = 3600_000
 const DAY_MS = 24 * HOUR_MS
@@ -434,5 +434,92 @@ export function rateSteps(rs: MeterReading[], since: number): { from: number; to
     .filter((iv) => Date.parse(iv.to.read_at) > since && Date.parse(iv.to.read_at) - Date.parse(iv.from.read_at) >= MIN_STEP_MS)
     .map((iv) => ({ from: Math.max(since, Date.parse(iv.from.read_at)), to: Date.parse(iv.to.read_at), start: Date.parse(iv.from.read_at), perHour: iv.perHour / 100 }))
 }
+
+// ── 每天用了多少度：按周 / 按月（2026-10-16 用户：「能不能切换频率，日/周/月」） ──
+
+export type UsageUnit = 'day' | 'week' | 'month'
+
+export interface UsageBucket {
+  /** 这一段的第一天（周一 / 1 号），北京日期 */
+  from: string
+  /** 这一段的最后一天（周日 / 月末） */
+  to: string
+  /** 这一段用了多少（0.01 度）= 每天之和 */
+  used: number
+  /** 被读数盖住了多少小时 */
+  coveredHours: number
+  /** 这一段一共多少小时（7 × 24 / 当月天数 × 24）。coveredHours 比它少 = 没记满，画浅色 */
+  spanHours: number
+  /** 这一段里的每一天（列提示框里的备注用） */
+  days: string[]
+}
+
+/** 星期几：周一 = 0 … 周日 = 6（北京日期，按 UTC 零点算不受时区影响） */
+function mondayOf(ymd: string): string {
+  const dow = (new Date(`${ymd}T00:00:00Z`).getUTCDay() + 6) % 7
+  return addDays(ymd, -dow)
+}
+
+/**
+ * 最近 count 周（周一到周日）/ count 个月，每段用了多少。今天所在的那段在最后（还没过完，算没记满）。
+ * 最前面一次读数都没盖到的那几段去掉（至少留一段）：刚开始记的头几个月，别画一排空位。
+ */
+export function usageBuckets(rs: MeterReading[], unit: 'week' | 'month', todayYmd: string, count = 12): UsageBucket[] {
+  const starts: string[] = []
+  if (unit === 'week') {
+    const mon = mondayOf(todayYmd)
+    for (let i = count - 1; i >= 0; i--) starts.push(addDays(mon, -7 * i))
+  } else {
+    const [y, m] = todayYmd.split('-').map(Number)
+    for (let i = count - 1; i >= 0; i--) {
+      const k = y * 12 + (m - 1) - i
+      starts.push(`${Math.floor(k / 12)}-${String((k % 12) + 1).padStart(2, '0')}-01`)
+    }
+  }
+  const endOf = (from: string) => (unit === 'week' ? addDays(from, 6) : addDays(addMonthStart(from), -1))
+  const last = endOf(starts[starts.length - 1])
+  const byDay = new Map(dailyUsage(rs, starts[0], last).map((d) => [d.date, d]))
+  const out = starts.map((from) => {
+    const to = endOf(from)
+    const days: string[] = []
+    for (let d = from; d <= to; d = addDays(d, 1)) days.push(d)
+    let used = 0
+    let coveredHours = 0
+    for (const d of days) {
+      const u = byDay.get(d)
+      if (!u) continue
+      used += u.used
+      coveredHours += u.coveredHours
+    }
+    return { from, to, used, coveredHours, spanHours: days.length * 24, days }
+  })
+  const firstSeen = out.findIndex((b) => b.coveredHours > 0)
+  return firstSeen <= 0 ? out : out.slice(Math.min(firstSeen, out.length - 1))
+}
+
+/** 下个月 1 号 */
+function addMonthStart(from: string): string {
+  const [y, m] = from.split('-').map(Number)
+  return m === 12 ? `${y + 1}-01-01` : `${y}-${String(m + 1).padStart(2, '0')}-01`
+}
+
+/** 记满了的那几段平均每段多少（0.01 度）；一段都没记满就 null（「周均」「月均」那条虚线） */
+export function bucketAverage(bs: UsageBucket[]): number | null {
+  const full = bs.filter((b) => b.coveredHours >= b.spanHours - 1e-6)
+  return full.length ? full.reduce((n, b) => n + b.used, 0) / full.length : null
+}
+
+// ── 每日备注（0013） ──
+
+/**
+ * 一天的备注的 id：由日期推出，两台手机给同一天写备注是同一个 id，按 id 覆盖，不会出两条。
+ * 「6d6e6f74」是 mnot 的十六进制，最后 12 位是 0000YYYYMMDD，是一个合法的 UUID。
+ */
+export function noteIdFor(day: string): string {
+  return `6d6e6f74-0000-4000-8000-0000${day.replace(/-/g, '')}`
+}
+
+/** 备注最多几个字（数据库 check (char_length(note) between 1 and 100)） */
+export const NOTE_MAX = 100
 
 export { dayOf as beijingDayOf, dayStart as beijingDayStart, DAY_MS, HOUR_MS }

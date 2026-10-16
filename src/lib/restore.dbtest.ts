@@ -22,6 +22,7 @@ import mig0009 from '../../supabase/migrations/0009_hidden_transaction.sql?raw'
 import mig0010 from '../../supabase/migrations/0010_facade_adjusts.sql?raw'
 import mig0011 from '../../supabase/migrations/0011_meter_readings.sql?raw'
 import mig0012 from '../../supabase/migrations/0012_offset_transaction.sql?raw'
+import mig0013 from '../../supabase/migrations/0013_meter_notes.sql?raw'
 import migrateSql from '../../scripts/migrate-facade.sql?raw'
 import type { Account, Snapshot, Transaction } from '../types'
 import { migrateFacade } from './facade'
@@ -52,6 +53,7 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0010)
   await db.exec(mig0011)
   await db.exec(mig0012)
+  await db.exec(mig0013)
   return db
 }
 
@@ -66,6 +68,8 @@ interface Snap {
   facade_adjusts: Row[]
   /** 0011。可缺：老的调用点只喂四张表，和 importAll 里 `?? []` 一个意思 */
   meter_readings?: Row[]
+  /** 0013。可缺，同上 */
+  meter_notes?: Row[]
 }
 
 /** 对应 csv.ts 的 buildJson：库里存的是「元」，备份文件里是整数「分」 */
@@ -81,6 +85,8 @@ async function exportBackup(db: PGlite): Promise<Snap> {
     facade_adjusts: (await q(db, 'select id,account_id,date::text as date,cents,created_at from facade_adjusts')).map((f) => ({ ...f, cents: Number(f.cents) })),
     // 0011：centi_kwh 是整数「0.01 度」（bigint），同样收成 number，不换算；按 id 升序和 api.ts、备份脚本一致
     meter_readings: (await q(db, 'select id,read_at,centi_kwh,created_at from meter_readings order by id')).map((m) => ({ ...m, centi_kwh: Number(m.centi_kwh) })),
+    // 0013：day 是 date 列，按字符串取（PostgREST 也是给 YYYY-MM-DD）
+    meter_notes: await q(db, 'select id,day::text as day,note,created_at from meter_notes order by id'),
   }
 }
 
@@ -105,6 +111,13 @@ async function importRefs(db: PGlite, snap: Snap): Promise<void> {
       `insert into meter_readings (id,read_at,centi_kwh,created_at) values ($1,$2,$3,$4)
        on conflict (id) do update set read_at=excluded.read_at,centi_kwh=excluded.centi_kwh`,
       [m.id, m.read_at, m.centi_kwh, m.created_at],
+    )
+  }
+  for (const n of snap.meter_notes ?? []) {
+    await db.query(
+      `insert into meter_notes (id,day,note,created_at) values ($1,$2,$3,$4)
+       on conflict (id) do update set day=excluded.day,note=excluded.note`,
+      [n.id, n.day, n.note, n.created_at],
     )
   }
   const ordered = [...snap.categories.filter((c) => !c.parent_id), ...snap.categories.filter((c) => c.parent_id)]
@@ -143,6 +156,7 @@ async function importFailingAtBatch(db: PGlite, snap: Snap, failAt: number, batc
 /** 对应 api.ts 的 wipeAll：电表读数 → 外页面校准记录 → 流水 → 二级分类 → 一级分类 → 账户 */
 async function wipeAll(db: PGlite): Promise<void> {
   await db.exec('delete from meter_readings where id is not null')
+  await db.exec('delete from meter_notes where id is not null')
   await db.exec('delete from facade_adjusts where id is not null')
   await db.exec('delete from transactions where id is not null')
   await db.exec('delete from categories where parent_id is not null')
@@ -173,6 +187,9 @@ async function seed(db: PGlite): Promise<void> {
   // 0011：电表读数，一条带 +08:00 的（用户在北京时间记的）、一条 UTC 的
   await db.query('insert into meter_readings (read_at,centi_kwh) values ($1,$2)', ['2026-10-02 21:40:00+08:00', 338540])
   await db.query('insert into meter_readings (read_at,centi_kwh) values ($1,$2)', ['2026-10-03T13:40:00Z', 339340])
+  // 0013：用电备注，id 由日期推出（App 的 noteIdFor）；带 emoji 的那条按字符数算
+  await db.query('insert into meter_notes (id,day,note) values ($1,$2,$3)', ['6d6e6f74-0000-4000-8000-000020261007', '2026-10-07', '没开空调'])
+  await db.query('insert into meter_notes (id,day,note) values ($1,$2,$3)', ['6d6e6f74-0000-4000-8000-000020261008', '2026-10-08', '😀'.repeat(100)])
 }
 
 const byId = (rows: Row[]) => [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))
@@ -212,6 +229,9 @@ describe('整库恢复', () => {
     expect(back.meter_readings).toEqual(backup.meter_readings)
     expect(back.meter_readings!.map((m) => m.centi_kwh).sort()).toEqual([338540, 339340])
     expect(back.meter_readings!.map((m) => new Date(m.read_at as string).toISOString()).sort()).toEqual(['2026-10-02T13:40:00.000Z', '2026-10-03T13:40:00.000Z'])
+    // 用电备注：一个字不差，日期还是那一天
+    expect(back.meter_notes).toEqual(backup.meter_notes)
+    expect(back.meter_notes!.map((n) => n.day)).toEqual(['2026-10-07', '2026-10-08'])
   })
 
   it('金额往返零误差：大额小数、1 分、负数校准都不能变', async () => {
@@ -370,6 +390,7 @@ const asSnap = (s: Snapshot): Snap => ({
   transactions: s.transactions as unknown as Row[],
   facade_adjusts: s.facade_adjusts as unknown as Row[],
   meter_readings: s.meter_readings as unknown as Row[],
+  meter_notes: s.meter_notes as unknown as Row[],
 })
 
 /** 完整走一遍 store.ts 的 restoreSnapshot：**先校验**，不过就一个字节都不动云端；过了才 wipe→import */
@@ -385,6 +406,7 @@ interface RawFile {
   transactions: unknown[]
   facade_adjusts?: unknown[]
   meter_readings?: unknown[]
+  meter_notes?: unknown[]
 }
 
 const uid = (n: number): string => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`
@@ -454,6 +476,11 @@ function legalBackup(): RawFile {
       { id: uid(301), read_at: '2026-10-01T00:00:00.000Z', centi_kwh: 0, created_at: '2026-10-01T00:00:05.000Z' },
       { id: uid(302), read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 339340, created_at: '2026-10-03T13:40:05.000Z' },
       { id: uid(303), read_at: '2026-10-03T14:00:00.000Z', centi_kwh: Number.MAX_SAFE_INTEGER, created_at: '2026-10-03T14:00:05.000Z' },
+    ],
+    // 0013：一条普通的、一条正好 100 个 emoji（数据库按字符数算，200 个 UTF-16 码元也收）
+    meter_notes: [
+      { id: '6d6e6f74-0000-4000-8000-000020261007', day: '2026-10-07', note: '没开空调', created_at: '2026-10-07T12:00:00.000Z' },
+      { id: '6d6e6f74-0000-4000-8000-000020261008', day: '2026-10-08', note: '😀'.repeat(100), created_at: '2026-10-08T12:00:00.000Z' },
     ],
   }
 }
@@ -567,6 +594,10 @@ const BAD_CASES: BadCase[] = [
   { name: '电表读数写成「度」（3393.4 而不是 339340）', mutate: (f) => ((f.meter_readings![1] as Row).centi_kwh = 3393.4), msg: /电表读数.*整数/, dbRejects: true },
   { name: '电表读数时间是 2025-02-30', mutate: (f) => ((f.meter_readings![1] as Row).read_at = '2025-02-30T10:00:00Z'), msg: /电表读数.*读数时间/, dbRejects: true },
   { name: '两条电表读数同一个 id', mutate: (f) => f.meter_readings!.push({ ...(f.meter_readings![1] as Row) }), msg: /电表读数.*重复/, dbRejects: false },
+  // 0013 用电备注
+  { name: '用电备注 101 个字（check char_length between 1 and 100）', mutate: (f) => ((f.meter_notes![0] as Row).note = '字'.repeat(101)), msg: /用电备注.*1 到 100 个字/, dbRejects: true },
+  { name: '用电备注是空的', mutate: (f) => ((f.meter_notes![0] as Row).note = ''), msg: /用电备注.*1 到 100 个字/, dbRejects: true },
+  { name: '用电备注的日期是 2025-02-30', mutate: (f) => ((f.meter_notes![0] as Row).day = '2025-02-30'), msg: /用电备注.*这一天不存在/, dbRejects: true },
 ]
 
 describe('落地前校验：凡是通过的都能真的导进去', () => {
@@ -662,6 +693,7 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
       transactions: iso(snap.transactions),
       facade_adjusts: iso(snap.facade_adjusts),
       meter_readings: iso(snap.meter_readings!).map((m) => ({ ...m, read_at: new Date(m.read_at as string).toISOString() })),
+      meter_notes: iso(snap.meter_notes!),
     }
     expect(() => validateImport(asFile)).not.toThrow()
   })

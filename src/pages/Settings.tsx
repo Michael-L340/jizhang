@@ -68,11 +68,12 @@ export function Settings() {
   const trustworthy = exportTrustworthy({ loaded, syncFailed })
   const facade_adjusts = useStore((st) => st.facade_adjusts)
   const meter_readings = useStore((st) => st.meter_readings)
+  const meter_notes = useStore((st) => st.meter_notes)
   // 「生活」那组里用电记录的副标题：电表上次读数
   const lastMeter = useMemo(() => sortReadings(meter_readings).at(-1), [meter_readings])
   const snapshot = useMemo(
-    () => ({ accounts, categories, transactions, facade_adjusts, meter_readings }),
-    [accounts, categories, transactions, facade_adjusts, meter_readings],
+    () => ({ accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes }),
+    [accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes],
   )
   // 外页面导出的 CSV 只有外页面那本账（藏掉的、校准行都不在）：导出不能成为绕过外页面的口子
   const csvSnapshot = useMemo(() => ({ ...snapshot, transactions: outerList(transactions, accounts, mode) }), [snapshot, transactions, accounts, mode])
@@ -184,6 +185,11 @@ export function Settings() {
         if (!/"meter_readings"\s*:/.test(text) && meter_readings.length) {
           snap = { ...snap, meter_readings }
           warn.push(`这个备份文件比「用电记录」早，里面没有电表读数；现在的 ${meter_readings.length} 条读数会原样保留。`)
+        }
+        // 0013 之前的备份没有用电备注这一节，同理原样保留
+        if (!/"meter_notes"\s*:/.test(text) && meter_notes.length) {
+          snap = { ...snap, meter_notes }
+          warn.push(`这个备份文件里没有用电备注；现在的 ${meter_notes.length} 条备注会原样保留。`)
         }
         if (meta.synced === false) warn.push('注意：这个备份文件导出时本机还没同步过云端，它自己标了「未同步」，里面的账可能不全。')
         if (!trustworthy) warn.push('注意：这次打开 App 后还没成功同步过。万一恢复中途失败，自动退回用的是本机现在这份数据，可能比云端少几条。')

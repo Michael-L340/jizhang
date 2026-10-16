@@ -10,7 +10,7 @@
 // 断网时先记一笔再改两次再删掉，队列里始终只有这一个 id 的一条，补传时按最终状态
 // upsert 或 delete 即可，不用回放顺序，重复执行也不会出错（两个操作都是幂等的）。
 
-import type { MeterReading, Transaction } from '../types'
+import type { MeterNote, MeterReading, Transaction } from '../types'
 import { DELETED, type Pending } from './pending'
 
 export type Outbox = Pending<Transaction>
@@ -36,6 +36,11 @@ export function unpackOutbox(raw: unknown): Outbox {
 /** 电表读数的队列，规矩同上 */
 export function unpackMrOutbox(raw: unknown): MrOutbox {
   return unpackWith(raw, isMrLike)
+}
+
+/** 用电每日备注的队列，规矩同上 */
+export function unpackMnOutbox(raw: unknown): Pending<MeterNote> {
+  return unpackWith(raw, isMnLike)
 }
 
 function unpackWith<T extends { id: string }>(raw: unknown, ok: (v: unknown) => v is T): Pending<T> {
@@ -66,4 +71,10 @@ function isMrLike(v: unknown): v is MeterReading {
   if (typeof v !== 'object' || v === null) return false
   const r = v as Partial<MeterReading>
   return typeof r.id === 'string' && typeof r.read_at === 'string' && Number.isInteger(r.centi_kwh) && typeof r.created_at === 'string'
+}
+
+function isMnLike(v: unknown): v is MeterNote {
+  if (typeof v !== 'object' || v === null) return false
+  const n = v as Partial<MeterNote>
+  return typeof n.id === 'string' && typeof n.day === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(n.day) && typeof n.note === 'string' && n.note.length > 0 && typeof n.created_at === 'string'
 }

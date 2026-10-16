@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { packOutbox, unpackOutbox, type Outbox } from './outbox'
+import { packOutbox, unpackMnOutbox, unpackOutbox, type Outbox } from './outbox'
 import { DELETED } from './pending'
 import type { Transaction } from '../types'
 
@@ -60,3 +60,13 @@ describe('待上传队列的存取', () => {
     expect(packOutbox(new Map())).toEqual([])
   })
 })
+
+describe('用电备注的待传队列（0013）', () => {
+  it('认得出的留下，缺字段、id 对不上、空备注的丢掉；「已删除」照留', () => {
+    // 变异：isMnLike 不查 note 非空 → 空备注留下，补传时被数据库 check 拒，红
+    const ok = { id: 'n1', day: '2026-10-07', note: '没开空调', created_at: '2026-10-07T12:00:00.000Z' }
+    const q = unpackMnOutbox([['n1', ok], ['n2', { ...ok, id: 'n2', note: '' }], ['n3', { ...ok }], ['n4', '__deleted__'], ['n5', { ...ok, id: 'n5', day: '10/7' }]])
+    expect([...q.keys()]).toEqual(['n1', 'n4'])
+  })
+})
+

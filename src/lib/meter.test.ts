@@ -2,7 +2,7 @@
 // 每条用例都先把实现改坏跑过一次，确认它会红（注释里的「变异：… → 红」）。
 import { describe, expect, it } from 'vitest'
 import type { MeterReading } from '../types'
-import { costCents, dailyUsage, fmtDuration, fmtHours, fmtSpan, hourProfile, peakHours, peakWeekdays, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, readingIssues, spreadOf, summarize, weekdayLead, weekdayOf, weekdayProfile, WEEKDAY_WEEKS, type WeekdaySlot } from './meter'
+import { bucketAverage, noteIdFor, usageBuckets, costCents, dailyUsage, fmtDuration, fmtHours, fmtSpan, hourProfile, peakHours, peakWeekdays, fmtKwh, fmtReading, intervals, parsePrice, parseReading, preview, rateSteps, readingIssues, spreadOf, summarize, weekdayLead, weekdayOf, weekdayProfile, WEEKDAY_WEEKS, type WeekdaySlot } from './meter'
 
 let seq = 0
 /** 北京时间「2026-10-01 08:00」那一刻电表上写着 value */
@@ -423,3 +423,51 @@ describe('读数输错、同一时刻、并列（2026-10-08 审出来的）', ()
     expect(fmtSpan(R('2025-10-03 07:20', '1').read_at, R('2026-10-03 15:20', '2').read_at)).toBe('10/3 07:20 – 10/3 15:20')
   })
 })
+
+describe('每天用了多少度：按周 / 按月（2026-10-16）', () => {
+  // 10/4 周日 20:00 开始记，每天 20:00 记一次，每天用 4 度；10/16（周五）上午看
+  const rs = Array.from({ length: 12 }, (_, i) => R(`2026-10-${String(4 + i).padStart(2, '0')} 20:00`, (3000 + 4 * i).toFixed(1)))
+  const TODAY = '2026-10-16'
+
+  it('按周：周一到周日一段，每段 = 那几天之和；没读数的前几周去掉；没记满的标出来', () => {
+    // 变异：段从周日开始（getUTCDay 不 +6）→ from 不是周一，红；不去掉前面空的 → 长度 12，红
+    const bs = usageBuckets(rs, 'week', TODAY)
+    expect(bs.map((b) => `${b.from}~${b.to}`)).toEqual(['2026-09-28~2026-10-04', '2026-10-05~2026-10-11', '2026-10-12~2026-10-18'])
+    const daily = dailyUsage(rs, '2026-09-28', '2026-10-18')
+    for (const b of bs) {
+      const want = daily.filter((d) => d.date >= b.from && d.date <= b.to).reduce((n, d) => n + d.used, 0)
+      expect(b.used).toBeCloseTo(want, 6)
+    }
+    expect(bs[1].used).toBeCloseTo(7 * 400, 6)
+    expect(bs[1].coveredHours).toBeCloseTo(bs[1].spanHours, 6)
+    expect(bs[0].coveredHours).toBeLessThan(bs[0].spanHours)
+    expect(bs[2].coveredHours).toBeLessThan(bs[2].spanHours)
+    // 只有中间那周记满了：周均 = 那一周
+    expect(bucketAverage(bs)).toBeCloseTo(2800, 6)
+  })
+
+  it('按月：一个月一段，到月底；跨年也对', () => {
+    const bs = usageBuckets(rs, 'month', TODAY)
+    expect(bs.map((b) => `${b.from}~${b.to}`)).toEqual(['2026-10-01~2026-10-31'])
+    expect(bs[0].spanHours).toBe(31 * 24)
+    expect(bucketAverage(bs)).toBeNull()
+    const jan = usageBuckets([R('2025-12-30 08:00', '100.0'), R('2026-01-02 08:00', '106.0')], 'month', '2026-01-05')
+    expect(jan.map((b) => b.from)).toEqual(['2025-12-01', '2026-01-01'])
+    expect(jan[0].to).toBe('2025-12-31')
+    expect(jan[0].used + jan[1].used).toBeCloseTo(600, 6)
+  })
+
+  it('一次读数都没有：留一段空的，不是空数组（图照样画得出坐标轴）', () => {
+    expect(usageBuckets([], 'week', TODAY)).toHaveLength(12)
+  })
+})
+
+describe('用电备注的 id（0013）', () => {
+  it('由日期推出：同一天永远是同一个，是合法的 UUID', () => {
+    // 变异：用 newId() → 两台手机给同一天各写一条，红
+    expect(noteIdFor('2026-10-07')).toBe(noteIdFor('2026-10-07'))
+    expect(noteIdFor('2026-10-07')).not.toBe(noteIdFor('2026-10-08'))
+    expect(noteIdFor('2026-10-07')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/)
+  })
+})
+

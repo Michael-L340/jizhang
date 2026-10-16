@@ -114,6 +114,18 @@ export interface MeterReading {
   created_at: string // ISO
 }
 
+/**
+ * 0013：用电「每天用了多少度」的每日备注（「没开空调」）。一天最多一条：
+ * id 由日期推出（meter.noteIdFor），两台手机写同一天是同一个 id，按 id 覆盖。
+ * `day` 是北京日期 YYYY-MM-DD。
+ */
+export interface MeterNote {
+  id: string
+  day: string
+  note: string
+  created_at: string // ISO
+}
+
 export interface Snapshot {
   accounts: Account[]
   categories: Category[]
@@ -122,6 +134,8 @@ export interface Snapshot {
   facade_adjusts: FacadeAdjust[]
   /** 0011：电表读数。老备份文件没有这一节，按空的收 */
   meter_readings: MeterReading[]
+  /** 0013：用电每日备注。老备份文件没有这一节，按空的收（整库恢复时现在的备注原样保留） */
+  meter_notes: MeterNote[]
 }
 
 export const TX_TYPE_LABEL: Record<TxType, string> = {

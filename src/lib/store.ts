@@ -1,13 +1,13 @@
 // 全局状态。页面只从这里读数据、只调这里的动作；这里是唯一调用 api.ts 的地方。
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { Account, CatKind, Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction } from '../types'
 import * as api from './api'
 import { CACHE_LIMIT_BYTES, cacheBytes, IDB_LIMIT_BYTES, type BackupStatus } from './backup'
-import { dropLegacy, LEDGER_KEY, MR_OUTBOX_KEY, readLedger, readOutboxDump, removeLedger, removeOutboxDump, storageQuota, writeLedger, writeOutboxDump, type Backend } from './cache'
+import { dropLegacy, LEDGER_KEY, MN_OUTBOX_KEY, MR_OUTBOX_KEY, readLedger, readOutboxDump, removeLedger, removeOutboxDump, storageQuota, writeLedger, writeOutboxDump, type Backend } from './cache'
 import { nowIso } from './date'
 import { applyPending, DELETED, type Pending } from './pending'
-import { packOutbox, unpackMrOutbox, unpackOutbox, type MrOutbox, type Outbox, type OutboxDump } from './outbox'
+import { packOutbox, unpackMnOutbox, unpackMrOutbox, unpackOutbox, type Outbox, type OutboxDump } from './outbox'
 import { INNER_TTL_MS, type Mode } from './facade'
 
 // 账本快照存 IndexedDB、待传队列存 localStorage，存哪、怎么兜底都在 cache.ts；这里只管内容。
@@ -36,6 +36,8 @@ function parseCache(raw: string | null): Cache | null {
       facade_adjusts: Array.isArray(c.facade_adjusts) ? c.facade_adjusts : [],
       // 0011 之前写的缓存没有电表读数，同上
       meter_readings: Array.isArray(c.meter_readings) ? c.meter_readings : [],
+      // 0013 之前写的缓存没有用电备注，同上
+      meter_notes: Array.isArray(c.meter_notes) ? c.meter_notes : [],
     }
   } catch {
     return null
@@ -75,6 +77,7 @@ function serializeCache(s: Snapshot): string {
     transactions: s.transactions,
     facade_adjusts: s.facade_adjusts,
     meter_readings: s.meter_readings,
+    meter_notes: s.meter_notes,
     at: nowIso(),
   }
   return JSON.stringify(c)
@@ -164,6 +167,9 @@ export interface State extends Snapshot {
    * 否则一次比删除更早出门的同步落地时，会把这条又带回来。
    */
   removeMeterReading: (id: string) => Promise<boolean>
+  /** 写 / 改一天的用电备注（0013）。和读数同一套：先写云端，没网进队列（2026-10-16「云端 + 本地」） */
+  saveMeterNote: (n: MeterNote) => Promise<boolean>
+  removeMeterNote: (id: string) => Promise<boolean>
   /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
   /**
@@ -196,17 +202,88 @@ const pendingTx: Pending<Transaction> = new Map()
 const pendingCat: Pending<Category> = new Map()
 const pendingFa: Pending<FacadeAdjust> = new Map()
 const pendingMr: Pending<MeterReading> = new Map()
+const pendingMn: Pending<MeterNote> = new Map()
+// 用电那两张的「哪次同步之后才能退休」编号（settle / retirePatches，见下面流水那几张的说明）
+const settledMr = new Map<string, number>()
+const settledMn = new Map<string, number>()
 
 // ── 待上传队列 ────────────────────────────────────────────────
 // 上面那两张补丁表管的是「请求飞在路上」，60 秒就过期；这一张管的是「请求根本没发出去」，
 // 只有真的传上去才删、还要写进缓存跨会话保留。详见 outbox.ts 顶部。
 const outboxTx: Outbox = new Map()
-/** 电表读数的待传队列（2026-10-15，用户：「和记账一样」）。单独一个 localStorage 键（MR_OUTBOX_KEY） */
-const outboxMr: MrOutbox = new Map()
 
-/** 首页、设置页「N 笔没上传」：流水和读数加起来 */
+/**
+ * 用电那两张表（电表读数、每日备注）的待传队列。规矩全照流水那份，只是各存一个 localStorage 键：
+ * 读数 2026-10-15（用户：「和记账一样」），备注 2026-10-16（「云端 + 本地」）。
+ * 两张表写法一样（按 id 覆盖、按 id 删），所以写成一份通用的，别再各抄一遍。
+ */
+interface Side<T extends { id: string }> {
+  /** state 里那一节 */
+  key: 'meter_readings' | 'meter_notes'
+  /** localStorage 的键 */
+  storage: string
+  /** 待传队列 */
+  q: Pending<T>
+  pending: Pending<T>
+  settled: Map<string, number>
+  /** 队列最近一次落盘成功了没有（只管 outboxUnsaved） */
+  onDisk: boolean
+  unpack: (raw: unknown) => Pending<T>
+  put: (v: T) => Promise<void>
+  del: (id: string) => Promise<void>
+  /** toast 里怎么叫它 */
+  what: string
+  failPut: string
+  failDel: string
+  rejected: string
+}
+
+const mrSide: Side<MeterReading> = {
+  key: 'meter_readings',
+  storage: MR_OUTBOX_KEY,
+  q: new Map(),
+  pending: pendingMr,
+  settled: settledMr,
+  onDisk: true,
+  unpack: unpackMrOutbox,
+  put: (v) => api.insertMeterReading(v),
+  del: (id) => api.deleteMeterReading(id),
+  what: '这条读数',
+  failPut: '记录读数失败',
+  failDel: '删除读数失败',
+  rejected: '有 1 条读数上传被拒绝',
+}
+
+const mnSide: Side<MeterNote> = {
+  key: 'meter_notes',
+  storage: MN_OUTBOX_KEY,
+  q: new Map(),
+  pending: pendingMn,
+  settled: settledMn,
+  onDisk: true,
+  unpack: unpackMnOutbox,
+  put: (v) => api.saveMeterNote(v),
+  del: (id) => api.deleteMeterNote(id),
+  what: '这条备注',
+  failPut: '保存备注失败',
+  failDel: '删除备注失败',
+  rejected: '有 1 条备注上传被拒绝',
+}
+
+/** 对两张表各做一遍（泛型函数不能直接吃联合类型，所以这么转一手） */
+function eachSide(f: <T extends { id: string }>(s: Side<T>) => void): void {
+  f(mrSide)
+  f(mnSide)
+}
+
+/** state 里那一节，按 Side 的类型读 */
+function rowsOf<T extends { id: string }>(st: State, s: Side<T>): T[] {
+  return st[s.key] as unknown as T[]
+}
+
+/** 首页、设置页「N 笔没上传」：流水、读数、备注加起来 */
 function outboxSize(): number {
-  return outboxTx.size + outboxMr.size
+  return outboxTx.size + mrSide.q.size + mnSide.q.size
 }
 
 /**
@@ -222,8 +299,12 @@ function offlineNow(): boolean {
 function offlineError(): Error {
   return new Error('当前离线')
 }
-/** 补传是串行的，防止 online 事件和 refresh 各触发一次、同一条被传两遍 */
-let flushing = false
+/**
+ * 补传是串行的，防止 online 事件和 refresh 各触发一次、同一条被传两遍。
+ * 正在补传时又被叫一次（比如刚往队列里加了一条）：等这一轮完了再跑一轮，而不是直接不理——
+ * 这一轮开始之后才进队列的那条，这一轮不会传，不跑第二轮它就要等到下一次同步。
+ */
+let flushing: Promise<void> | null = null
 
 // 补丁不能一写完就删，那只挡住了一个方向的时序。
 // 反过来的顺序照样出事：refresh 先发出 GET（此刻服务端还没有这笔）→ 用户立刻记一笔、
@@ -236,7 +317,6 @@ let fetchSeq = 0
 const settledTx = new Map<string, number>()
 const settledCat = new Map<string, number>()
 const settledFa = new Map<string, number>()
-const settledMr = new Map<string, number>()
 
 // 备份状态这一路也编号，理由同类但简单得多：只有「最后一次问的答案」算数。
 // 设置页每次挂载都发一次，来回切页就有两次在飞；退出登录也算改朝换代。
@@ -266,6 +346,11 @@ function retirePatches(my: number): void {
     if (g >= my) continue
     pendingMr.delete(id)
     settledMr.delete(id)
+  }
+  for (const [id, g] of settledMn) {
+    if (g >= my) continue
+    pendingMn.delete(id)
+    settledMn.delete(id)
   }
 }
 
@@ -307,11 +392,8 @@ function offlineToast(saved: boolean, what: string): string {
 
 /** 队列最近一次落盘成功了没有。老缓存（里面包着一份队列）只在它为真时才许删 */
 let outboxOnDisk = true
-/** 读数那份队列最近一次落盘成功了没有。只管 outboxUnsaved，和老缓存无关（老缓存里没有读数队列） */
-let mrOutboxOnDisk = true
-
 function noteOutboxUnsaved(): void {
-  const unsaved = !outboxOnDisk || !mrOutboxOnDisk
+  const unsaved = !outboxOnDisk || !mrSide.onDisk || !mnSide.onDisk
   if (useStore.getState().outboxUnsaved !== unsaved) useStore.setState({ outboxUnsaved: unsaved })
 }
 
@@ -332,34 +414,100 @@ function saveOutbox(): boolean {
   return outboxOnDisk
 }
 
-/** 读数队列落盘，规矩同 saveOutbox。空了就删键，不留一个空壳 */
-function saveMrOutbox(): boolean {
+/** 用电队列落盘，规矩同 saveOutbox。空了就删键，不留一个空壳 */
+function saveSide<T extends { id: string }>(s: Side<T>): boolean {
   try {
-    if (outboxMr.size) writeOutboxDump({ at: nowIso(), entries: packOutbox(outboxMr) }, MR_OUTBOX_KEY)
-    else removeOutboxDump(MR_OUTBOX_KEY)
-    mrOutboxOnDisk = true
+    if (s.q.size) writeOutboxDump({ at: nowIso(), entries: packOutbox(s.q) }, s.storage)
+    else removeOutboxDump(s.storage)
+    s.onDisk = true
   } catch {
-    mrOutboxOnDisk = false
+    s.onDisk = false
   }
   noteOutboxUnsaved()
-  return mrOutboxOnDisk
+  return s.onDisk
 }
 
-/** 读数写不出去（没网）：进读数队列，在途补丁一并删掉（队列才是权威的那个） */
-function enqueueMr(id: string, v: MeterReading | typeof DELETED): boolean {
-  drop(settledMr, pendingMr, id)
-  outboxMr.set(id, v)
-  return saveMrOutbox()
+/** 写不出去（没网）：进队列，在途补丁一并删掉（队列才是权威的那个） */
+function enqueueSide<T extends { id: string }>(s: Side<T>, id: string, v: T | typeof DELETED): boolean {
+  drop(s.settled, s.pending, id)
+  s.q.set(id, v)
+  return saveSide(s)
 }
 
-/** 已经在读数队列里的 id 的后续增删：只改队列和界面，马上试着补传（同 queueWrite） */
-function queueMr(id: string, v: MeterReading | typeof DELETED, patch: (s: State) => Partial<State>): true {
-  if (!enqueueMr(id, v)) useStore.getState().showToast(offlineToast(false, ''))
-  useStore.setState(patch)
+/** 界面上这一节：v 是 DELETED 就拿掉，否则按 id 换上（没有就加在最后） */
+function patchSide<T extends { id: string }>(s: Side<T>, id: string, v: T | typeof DELETED): (st: State) => Partial<State> {
+  return (st) => {
+    const rest = rowsOf(st, s).filter((x) => x.id !== id)
+    return { [s.key]: v === DELETED ? rest : [...rest, v] } as Partial<State>
+  }
+}
+
+/**
+ * 补传一张用电表的队列。返回 false = 还是没网、中途停了（剩下的留到下次）。
+ * 每一步的理由见 flushOutbox 里流水那段，这里是同一套。
+ */
+async function flushSide<T extends { id: string }>(s: Side<T>): Promise<boolean> {
+  for (const [id, v] of [...s.q.entries()]) {
+    try {
+      if (v === DELETED) await s.del(id)
+      else await s.put(v)
+      s.pending.set(id, v)
+      settle(s.settled, s.pending, id)
+      if (s.q.get(id) === v) s.q.delete(id)
+      saveSide(s)
+    } catch (e) {
+      if (!api.isPermanentError(e)) return false
+      if (s.q.get(id) !== v) continue
+      s.q.delete(id)
+      saveSide(s)
+      if (v !== DELETED) useStore.setState(patchSide(s, id, DELETED))
+      useStore.getState().showToast(`${s.rejected}，已从本机移除：${api.friendlyError(e)}`)
+    }
+  }
+  return true
+}
+
+/** 已经在队列里的 id 的后续增删：只改队列和界面，马上试着补传（同 queueWrite） */
+function queueSide<T extends { id: string }>(s: Side<T>, id: string, v: T | typeof DELETED): true {
+  if (!enqueueSide(s, id, v)) useStore.getState().showToast(offlineToast(false, ''))
+  useStore.setState(patchSide(s, id, v))
   useStore.setState({ outboxCount: outboxSize() })
   useStore.getState().persist()
   void useStore.getState().flushOutbox()
   return true
+}
+
+/**
+ * 用电那两张表的一次写入（记 / 删）。先写云端再进 state，不做乐观更新；
+ * 没网（明确断网或请求失败但不是数据被拒）就进队列、照样进 state，返回 true。
+ */
+async function writeSide<T extends { id: string }>(s: Side<T>, id: string, v: T | typeof DELETED): Promise<boolean> {
+  if (s.q.has(id)) return queueSide(s, id, v)
+  const st = useStore.getState()
+  try {
+    if (offlineNow()) throw offlineError()
+    if (v === DELETED) await s.del(id)
+    else await s.put(v)
+    // 登记为在途：紧接着的一次 refresh 可能还拉不到它（或者删之前就出门的那次还带着它）
+    s.pending.set(id, v)
+    settle(s.settled, s.pending, id)
+    // 同一条可能已经被同步带回来了，按 id 去重
+    useStore.setState(patchSide(s, id, v))
+    st.persist()
+    return true
+  } catch (e) {
+    if (api.isPermanentError(e)) {
+      st.showToast(`${v === DELETED ? s.failDel : s.failPut}：${api.friendlyError(e)}`)
+      return false
+    }
+    // 没网：和记账一样，先存本机、联网后自动补传。对用户来说已经记下了
+    const saved = enqueueSide(s, id, v)
+    useStore.setState(patchSide(s, id, v))
+    useStore.setState({ outboxCount: outboxSize() })
+    st.persist()
+    st.showToast(offlineToast(saved, v === DELETED ? '删除' : s.what))
+    return true
+  }
 }
 
 /** 账本写不进去：标降级，只提示一次。云端数据不受影响，但离线看到的会是旧的，必须让用户知道 */
@@ -497,6 +645,7 @@ export const useStore = create<State>((set, get) => ({
   transactions: [],
   facade_adjusts: [],
   meter_readings: [],
+  meter_notes: [],
   auth: 'loading',
   loaded: false,
   syncing: false,
@@ -529,8 +678,10 @@ export const useStore = create<State>((set, get) => ({
     ledgerTrusted = !failed
     // 队列要在拉云端之前装回来，否则第一次 refresh 会把上次没传上去的那几笔冲掉
     if (mergeOutbox(read.legacy)) saveOutbox()
-    const mrDump = readOutboxDump(MR_OUTBOX_KEY)
-    for (const [id, v] of unpackMrOutbox(mrDump.found ? mrDump.entries : null)) outboxMr.set(id, v)
+    eachSide((s) => {
+      const dump = readOutboxDump(s.storage)
+      for (const [id, v] of s.unpack(dump.found ? dump.entries : null)) s.q.set(id, v)
+    })
     // 没读到缓存也要把队列叠上去：那几笔是云端没有的，不显示的话首页写着「N 笔还没上传」列表里却找不到
     if (cache || outboxSize()) {
       set({
@@ -539,7 +690,8 @@ export const useStore = create<State>((set, get) => ({
         // 账本和队列分开写、各有各的落盘时间，哪份新不一定；队列是「用户改完、云端至今不知道的最新状态」，叠在最上面
         transactions: applyPending(cache?.transactions ?? [], outboxTx),
         facade_adjusts: cache?.facade_adjusts ?? [],
-        meter_readings: applyPending(cache?.meter_readings ?? [], outboxMr),
+        meter_readings: applyPending(cache?.meter_readings ?? [], mrSide.q),
+        meter_notes: applyPending(cache?.meter_notes ?? [], mnSide.q),
         lastSync: cache?.at ?? null,
         cacheBytes: raw ? cacheBytes([[LEDGER_KEY, raw]]) : 0,
       })
@@ -594,7 +746,8 @@ export const useStore = create<State>((set, get) => ({
         // 队列在最上面，因为那是用户改完、云端至今不知道的最新状态。
         transactions: applyPending(applyPending(snap.transactions, pendingTx), outboxTx),
         facade_adjusts: applyPending(snap.facade_adjusts, pendingFa),
-        meter_readings: applyPending(applyPending(snap.meter_readings, pendingMr), outboxMr),
+        meter_readings: applyPending(applyPending(snap.meter_readings, pendingMr), mrSide.q),
+        meter_notes: applyPending(applyPending(snap.meter_notes, pendingMn), mnSide.q),
       }
       cancelRetry()
       retryAt = 0
@@ -633,8 +786,10 @@ export const useStore = create<State>((set, get) => ({
    * 所以必须能重入而不重复发送 —— flushing 那把锁就是干这个的。
    */
   async flushOutbox() {
-    if (flushing || get().auth !== 'in' || outboxSize() === 0 || offlineNow()) return
-    flushing = true
+    if (flushing) return flushing.then(() => get().flushOutbox())
+    if (get().auth !== 'in' || outboxSize() === 0 || offlineNow()) return
+    let done!: () => void
+    flushing = new Promise<void>((r) => (done = r))
     let stopped = false
     try {
       // 先拷一份再遍历：循环体里会删 outboxTx，边删边遍历行为不确定
@@ -667,30 +822,16 @@ export const useStore = create<State>((set, get) => ({
           get().showToast(`有 1 笔上传被拒绝，已从本机移除：${api.friendlyError(e)}`)
         }
       }
-      // 电表读数：同一套（按 id 覆盖写入，传几次都是同一条）
-      for (const [id, v] of stopped ? [] : [...outboxMr.entries()]) {
-        try {
-          if (v === DELETED) await api.deleteMeterReading(id)
-          else await api.insertMeterReading(v)
-          pendingMr.set(id, v)
-          settle(settledMr, pendingMr, id)
-          if (outboxMr.get(id) === v) outboxMr.delete(id)
-          saveMrOutbox()
-        } catch (e) {
-          if (!api.isPermanentError(e)) break
-          if (outboxMr.get(id) !== v) continue
-          outboxMr.delete(id)
-          saveMrOutbox()
-          if (v !== DELETED) set((st) => ({ meter_readings: st.meter_readings.filter((x) => x.id !== id) }))
-          get().showToast(`有 1 条读数上传被拒绝，已从本机移除：${api.friendlyError(e)}`)
-        }
-      }
+      // 电表读数、用电备注：同一套（按 id 覆盖写入，传几次都是同一条）。前面断了，后面这轮都不试
+      if (!stopped) stopped = !(await flushSide(mrSide))
+      if (!stopped) await flushSide(mnSide)
     } finally {
-      flushing = false
+      flushing = null
       set({ outboxCount: outboxSize() })
       saveOutbox()
-      saveMrOutbox()
+      eachSide(saveSide)
       get().persist()
+      done()
     }
   },
 
@@ -700,9 +841,9 @@ export const useStore = create<State>((set, get) => ({
       persistTimer = null
       // 冷启动没读出缓存、又还没同步成功过：内存里是白纸，写下去会盖掉本机那份好的
       if (!ledgerTrusted) return
-      const { accounts, categories, transactions, facade_adjusts, meter_readings } = get()
+      const { accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes } = get()
       // 序列化在这里同步做（现读 state），落盘是异步的；多次写入由 cache.ts 排成一队，后写的后落地
-      const json = serializeCache({ accounts, categories, transactions, facade_adjusts, meter_readings })
+      const json = serializeCache({ accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes })
       const gen = cacheGen
       const my = ++writeSeq
       writeLedger(json, { dropLegacy: outboxOnDisk }).then(
@@ -750,10 +891,12 @@ export const useStore = create<State>((set, get) => ({
     pendingCat.clear()
     pendingFa.clear()
     pendingMr.clear()
+    pendingMn.clear()
     settledTx.clear()
     settledCat.clear()
     settledFa.clear()
     settledMr.clear()
+    settledMn.clear()
     // 换个人登录进来必须是外页面
     hiddenAt = null
     set({ mode: 'outer' })
@@ -767,9 +910,11 @@ export const useStore = create<State>((set, get) => ({
     outboxTx.clear()
     removeOutboxDump()
     outboxOnDisk = true
-    outboxMr.clear()
-    removeOutboxDump(MR_OUTBOX_KEY)
-    mrOutboxOnDisk = true
+    eachSide((s) => {
+      s.q.clear()
+      removeOutboxDump(s.storage)
+      s.onDisk = true
+    })
     ledgerTrusted = true
     try {
       // 搜索词、筛选、上次用的账户这些也是这个账号的痕迹，一起清。只删自己前缀的键，同一个域名下还住着交易日志
@@ -784,7 +929,7 @@ export const useStore = create<State>((set, get) => ({
     // 退出登录之后别有个定时器还挂在那儿。
     cancelRetry()
     retryAt = 0
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0, outboxUnsaved: false })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], meter_notes: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0, outboxUnsaved: false })
   },
 
   /**
@@ -977,55 +1122,10 @@ export const useStore = create<State>((set, get) => ({
     }
   },
 
-  async addMeterReading(r) {
-    if (outboxMr.has(r.id)) return queueMr(r.id, r, (s) => ({ meter_readings: [...s.meter_readings.filter((x) => x.id !== r.id), r] }))
-    try {
-      if (offlineNow()) throw offlineError()
-      await api.insertMeterReading(r)
-      // 登记为在途：紧接着的一次 refresh 可能还拉不到它，会把它冲掉（和 addFacadeAdjust 一样）
-      pendingMr.set(r.id, r)
-      settle(settledMr, pendingMr, r.id)
-      // 同一条可能已经被同步带回来了（插入还没返回时跑了一次 refresh），按 id 去重，别让列表里出现两份
-      set((s) => ({ meter_readings: [...s.meter_readings.filter((x) => x.id !== r.id), r] }))
-      get().persist()
-      return true
-    } catch (e) {
-      if (api.isPermanentError(e)) {
-        get().showToast(`记录读数失败：${api.friendlyError(e)}`)
-        return false
-      }
-      // 没网：和记账一样，先存本机、联网后自动补传。对用户来说这条已经记下了
-      const saved = enqueueMr(r.id, r)
-      set((s) => ({ meter_readings: [...s.meter_readings.filter((x) => x.id !== r.id), r], outboxCount: outboxSize() }))
-      get().persist()
-      get().showToast(offlineToast(saved, '这条读数'))
-      return true
-    }
-  },
-
-  async removeMeterReading(id) {
-    if (outboxMr.has(id)) return queueMr(id, DELETED, (s) => ({ meter_readings: s.meter_readings.filter((x) => x.id !== id) }))
-    try {
-      if (offlineNow()) throw offlineError()
-      await api.deleteMeterReading(id)
-      // 反方向的同一件事：删之前就出门的那次同步还带着这条，落地时不能让它复活
-      pendingMr.set(id, DELETED)
-      settle(settledMr, pendingMr, id)
-      set((s) => ({ meter_readings: s.meter_readings.filter((x) => x.id !== id) }))
-      get().persist()
-      return true
-    } catch (e) {
-      if (api.isPermanentError(e)) {
-        get().showToast(`删除读数失败：${api.friendlyError(e)}`)
-        return false
-      }
-      const saved = enqueueMr(id, DELETED)
-      set((s) => ({ meter_readings: s.meter_readings.filter((x) => x.id !== id), outboxCount: outboxSize() }))
-      get().persist()
-      get().showToast(offlineToast(saved, '删除'))
-      return true
-    }
-  },
+  addMeterReading: (r) => writeSide(mrSide, r.id, r),
+  removeMeterReading: (id) => writeSide(mrSide, id, DELETED),
+  saveMeterNote: (n) => writeSide(mnSide, n.id, n),
+  removeMeterNote: (id) => writeSide(mnSide, id, DELETED),
 
   async importSnapshot(snap) {
     try {
@@ -1047,9 +1147,10 @@ export const useStore = create<State>((set, get) => ({
       transactions: get().transactions,
       facade_adjusts: get().facade_adjusts,
       meter_readings: get().meter_readings,
+      meter_notes: get().meter_notes,
     }
-    // 电表读数也算：只记过电表、没记过账的话，失败时同样要写回去，否则「已经退回操作前的样子」是假话
-    const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0 || before.meter_readings.length > 0
+    // 电表读数、用电备注也算：只记过电表、没记过账的话，失败时同样要写回去，否则「已经退回操作前的样子」是假话
+    const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0 || before.meter_readings.length > 0 || before.meter_notes.length > 0
     try {
       await api.wipeAll()
       await api.importAll(snap)
@@ -1065,6 +1166,14 @@ export const useStore = create<State>((set, get) => ({
             await api.upsertMeterReadings(before.meter_readings)
           } catch {
             /* 没网：本来就没删成 */
+          }
+        }
+        // 备注排在第二句删，第一句失败时它肯定没删；写回去只是和上面一样图个安心（按 id 覆盖，安全）
+        if (before.meter_notes.length) {
+          try {
+            await api.upsertMeterNotes(before.meter_notes)
+          } catch {
+            /* 同上 */
           }
         }
         throw new RestoreFailed(`恢复失败：${why}。云端一条数据都没删，账本还是原来的样子，联网之后可以再试一次。`)

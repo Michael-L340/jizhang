@@ -6,9 +6,9 @@
 import 'fake-indexeddb/auto'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import type { Category, FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
+import type { Category, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction } from '../types'
 import { CACHE_LIMIT_BYTES, IDB_LIMIT_BYTES } from './backup'
-import { DB_NAME, LEDGER_KEY, LEGACY_KEY, MR_OUTBOX_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, STORE } from './cache'
+import { DB_NAME, LEDGER_KEY, LEGACY_KEY, MN_OUTBOX_KEY, MR_OUTBOX_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, STORE } from './cache'
 
 // ---------- 假的 api.ts ----------
 // vi.hoisted 保证这个对象在 vi.mock 提升后仍是同一个引用，resetModules 之后也不会换。
@@ -23,6 +23,10 @@ const api = vi.hoisted(() => ({
   insertFacadeAdjust: vi.fn(),
   insertMeterReading: vi.fn(),
   deleteMeterReading: vi.fn(),
+  saveMeterNote: vi.fn(),
+  deleteMeterNote: vi.fn(),
+  upsertMeterReadings: vi.fn(),
+  upsertMeterNotes: vi.fn(),
   importAll: vi.fn(),
   wipeAll: vi.fn(),
   fetchBackupStatus: vi.fn(),
@@ -195,7 +199,7 @@ function cat(id: string, over: Partial<Category> = {}): Category {
 }
 
 function snap(transactions: Transaction[] = [], categories: Category[] = []): Snapshot {
-  return { accounts: [], categories, transactions, facade_adjusts: [], meter_readings: [] }
+  return { accounts: [], categories, transactions, facade_adjusts: [], meter_notes: [], meter_readings: [] }
 }
 
 function fa(id: string, cents = -800000): FacadeAdjust {
@@ -406,7 +410,7 @@ describe('S2 本机缓存（账本在 IndexedDB）', () => {
     st().showToast('随便一句')
     st().persist()
     await flushed()
-    expect(Object.keys(await cached()).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'meter_readings', 'transactions'])
+    expect(Object.keys(await cached()).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'meter_notes', 'meter_readings', 'transactions'])
   })
 
   it('缓存占用按 UTF-16 算：(键长 + 值长) × 2', async () => {
@@ -834,7 +838,7 @@ describe('同步失败留痕', () => {
 //   恢复是唯一会主动删数据的路径，顺序错一步就是删了没导回来。
 // ══════════════════════════════════════════════════════════════
 describe('导入与整库恢复', () => {
-  const snapshot: Snapshot = { accounts: [], categories: [], transactions: [tx('t1')] , facade_adjusts: [], meter_readings: [] }
+  const snapshot: Snapshot = { accounts: [], categories: [], transactions: [tx('t1')] , facade_adjusts: [], meter_notes: [], meter_readings: [] }
 
   it('整库恢复必须先清空再导入，最后把界面拉到云端', async () => {
     const order: string[] = []
@@ -1865,6 +1869,113 @@ describe('电表读数：待上传队列', () => {
     await st().signOut()
     expect(ls.map.has(MR_OUTBOX_KEY)).toBe(false)
     expect(st().outboxCount).toBe(0)
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
+// 2026-10-16：用电每日备注（0013），「云端 + 本地」：和读数同一套
+// ══════════════════════════════════════════════════════════════
+describe('用电备注', () => {
+  const note = (day: string, text = '没开空调'): MeterNote => ({ id: `id-${day}`, day, note: text, created_at: '2026-10-16T02:00:00.000Z' })
+
+  it('有网写一条：先写云端再进 state、落缓存', async () => {
+    // 变异：saveMeterNote 不进 state → 红
+    api.saveMeterNote.mockResolvedValueOnce(undefined)
+    expect(await st().saveMeterNote(note('2026-10-07'))).toBe(true)
+    expect(api.saveMeterNote).toHaveBeenCalledWith(note('2026-10-07'))
+    expect(st().meter_notes).toEqual([note('2026-10-07')])
+    await vi.advanceTimersByTimeAsync(600)
+    expect((await cached()).meter_notes).toEqual([note('2026-10-07')])
+  })
+
+  it('同一天改一次：还是一条，换成新字', async () => {
+    api.saveMeterNote.mockResolvedValue(undefined)
+    await st().saveMeterNote(note('2026-10-07'))
+    await st().saveMeterNote(note('2026-10-07', '开了空调'))
+    expect(st().meter_notes).toEqual([note('2026-10-07', '开了空调')])
+  })
+
+  it('没网写一条：照样显示、进本机队列、算记下了；同步回来的快照没有它也不冲掉；联网补传后清空', async () => {
+    // 变异：refresh 合并时备注不叠队列 → 同步后备注消失，红
+    api.saveMeterNote.mockRejectedValueOnce(offline())
+    expect(await st().saveMeterNote(note('2026-10-07'))).toBe(true)
+    expect(st().meter_notes.map((n) => n.day)).toEqual(['2026-10-07'])
+    expect(st().outboxCount).toBe(1)
+    expect(st().toast?.msg).toMatch(/已存在本机/)
+    expect(JSON.parse(ls.map.get(MN_OUTBOX_KEY)!).entries[0][0]).toBe('id-2026-10-07')
+    api.saveMeterNote.mockRejectedValue(offline())
+    api.fetchAll.mockResolvedValueOnce(snap())
+    await st().refresh()
+    expect(st().meter_notes.map((n) => n.day)).toEqual(['2026-10-07'])
+    api.saveMeterNote.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(st().outboxCount).toBe(0)
+    expect(ls.map.has(MN_OUTBOX_KEY)).toBe(false)
+  })
+
+  it('冷启动：备注队列从本机装回来，叠在缓存上', async () => {
+    // 变异：init 不读 MN_OUTBOX_KEY → 红
+    ls.map.set(MN_OUTBOX_KEY, JSON.stringify({ at: '2026-10-16T00:00:00.000Z', entries: [['id-2026-10-07', note('2026-10-07')]] }))
+    await st().init()
+    expect(st().meter_notes.map((n) => n.day)).toEqual(['2026-10-07'])
+    expect(st().outboxCount).toBe(1)
+  })
+
+  it('删一条：从 state 拿掉；删之前就出门的那次同步落地时不许复活', async () => {
+    store.useStore.setState({ meter_notes: [note('2026-10-07')] })
+    const d = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(d.promise)
+    const rp = st().refresh()
+    api.deleteMeterNote.mockResolvedValueOnce(undefined)
+    expect(await st().removeMeterNote('id-2026-10-07')).toBe(true)
+    d.resolve({ ...snap(), meter_notes: [note('2026-10-07')] })
+    await rp
+    expect(st().meter_notes).toEqual([])
+  })
+
+  it('补传时流水那边就断了：备注这轮也不试', async () => {
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    api.saveMeterNote.mockRejectedValueOnce(offline())
+    await st().saveMeterNote(note('2026-10-07'))
+    api.saveMeterNote.mockClear()
+    api.upsertTx.mockRejectedValueOnce(offline())
+    await st().flushOutbox()
+    expect(api.saveMeterNote).not.toHaveBeenCalled()
+  })
+
+  it('补传正在跑时又叫一次：等这一轮完了再跑一轮，不是直接不理', async () => {
+    // 变异：flushOutbox 正在跑时直接 return（改回原来的布尔锁）→ 第二次叫完备注还在队列里，红
+    api.insertTx.mockRejectedValueOnce(offline())
+    await st().addTx(tx('t1'))
+    const slow = deferred<void>()
+    api.upsertTx.mockReturnValueOnce(slow.promise)
+    const first = st().flushOutbox()
+    api.saveMeterNote.mockRejectedValueOnce(offline()) // 写的那一下没网，进队列
+    await st().saveMeterNote(note('2026-10-07'))
+    api.saveMeterNote.mockResolvedValue(undefined)
+    const second = st().flushOutbox()
+    slow.resolve()
+    await first
+    await second
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('退出登录：备注和备注队列一起清掉', async () => {
+    api.saveMeterNote.mockRejectedValueOnce(offline())
+    await st().saveMeterNote(note('2026-10-07'))
+    api.signOut.mockResolvedValue(undefined)
+    await st().signOut()
+    expect(st().meter_notes).toEqual([])
+    expect(ls.map.has(MN_OUTBOX_KEY)).toBe(false)
+  })
+
+  it('整库恢复第一句就失败：读数和备注都按原样写回去', async () => {
+    store.useStore.setState({ meter_notes: [note('2026-10-07')] })
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'meter_readings' }))
+    api.upsertMeterNotes.mockResolvedValue(undefined)
+    await expect(st().restoreSnapshot(snap())).rejects.toThrow(/一条数据都没删/)
+    expect(api.upsertMeterNotes).toHaveBeenCalledWith([note('2026-10-07')])
   })
 })
 

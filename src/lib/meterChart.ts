@@ -1,5 +1,6 @@
 // 用电记录页的几张图（ECharts option）。纯函数，颜色只走 palette.CHART。
-import { fmtKwh, peakHours, peakWeekdays, WEEKDAY_NAMES, type DayUsage, type HourSlot, type WeekdaySlot } from './meter'
+import { fmtKwh, peakHours, peakWeekdays, WEEKDAY_NAMES, type DayUsage, type HourSlot, type UsageBucket, type WeekdaySlot } from './meter'
+import { esc } from './more/html'
 import { CHART } from './palette'
 
 const AXIS = { axisLine: { lineStyle: { color: CHART.axis } }, axisTick: { show: false }, axisLabel: { color: CHART.label, fontSize: 10 } }
@@ -12,7 +13,7 @@ const md = (ymd: string) => `${Number(ymd.slice(5, 7))}.${Number(ymd.slice(8, 10
  * 每天用了多少度（柱子）+ 近 7 天日均（虚线）。
  * 一点没被读数盖住的天画成空（第一次记之前），只盖住一部分的天（今天、刚开始记的那天）画浅色：数是对的，只是这天还没算全。
  */
-export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7) {
+export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7, notes: ReadonlyMap<string, string> = new Map()) {
   const n = days.length
   const every = Math.max(1, Math.ceil(n / 6))
   return {
@@ -31,7 +32,10 @@ export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7) 
         const hrs = Math.floor(d.coveredHours)
         const part = d.coveredHours < 24 - 1e-9 ? `<br/><span style="opacity:.7">只算了${hrs < 1 ? '不到 1 ' : ` ${hrs} `}小时（读数还没盖满这一天）</span>` : ''
         const avg = avg7 === null ? '' : `<br/><span style="opacity:.7">近 ${avgDays} 天日均 ${fmtKwh(avg7)} 度</span>`
-        return `${head}<br/><b>${fmtKwh(d.used)} 度</b>${part}${avg}`
+        const note = notes.get(d.date)
+        // 备注是用户自己写的字，进提示框（HTML）前一律 esc
+        const tail = note ? `<br/>备注：${esc(note)}<br/>${HINT('再点一下改备注')}` : `<br/>${HINT('再点一下写备注')}`
+        return `${head}<br/><b>${fmtKwh(d.used)} 度</b>${part}${avg}${tail}`
       },
     },
     xAxis: { type: 'category', data: days.map((d) => md(d.date)), ...AXIS, axisLabel: { ...AXIS.axisLabel, interval: (i: number) => (n - 1 - i) % every === 0 } },
@@ -45,6 +49,8 @@ export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7) 
           value: d.coveredHours === 0 ? null : Math.round(d.used) / 100,
           itemStyle: { color: CHART.balance, opacity: d.coveredHours < 24 - 1e-9 ? 0.4 : 1, borderRadius: [3, 3, 0, 0] },
         })),
+        // 写了备注的那天柱顶一个小点
+        label: { show: true, position: 'top', distance: 2, fontSize: 8, color: CHART.brandInk, formatter: (p: { dataIndex: number }) => (notes.has(days[p.dataIndex]?.date ?? '') ? '●' : '') },
       },
       ...(avg7 === null
         ? []
@@ -56,6 +62,64 @@ export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7) 
               showSymbol: false,
               silent: true,
               // 不在线头写字：手机上它总压在最右边那几根柱子上。日均是多少，顶上大数字底下写着、提示框里也有
+              lineStyle: { color: CHART.brandInk, type: 'dashed', width: 1.5 },
+            },
+          ]),
+    ],
+  }
+}
+
+/** 提示框最底下那行灰色小字 */
+const HINT = (s: string) => `<span style="opacity:.55;font-size:11px">${s}</span>`
+
+/**
+ * 每天用了多少度的「周」「月」两档：一根柱子 = 一周（周一到周日）/ 一个月，没记满的浅色；
+ * 虚线是记满了的那几段的平均（周均 / 月均）。提示框列出这段时间里的备注（备注只在「日」里写）。
+ */
+export function bucketOption(bs: UsageBucket[], unit: 'week' | 'month', avg: number | null, notes: ReadonlyMap<string, string> = new Map()) {
+  const label = (b: UsageBucket) => (unit === 'week' ? md(b.from) : `${Number(b.from.slice(5, 7))}月`)
+  const title = (b: UsageBucket) => (unit === 'week' ? `${md(b.from)}–${md(b.to)}` : `${Number(b.from.slice(0, 4))}年${Number(b.from.slice(5, 7))}月`)
+  const avgName = unit === 'week' ? '周均' : '月均'
+  return {
+    animationDuration: 500,
+    grid: { left: 4, right: 8, top: 22, bottom: 0, containLabel: true },
+    tooltip: {
+      trigger: 'axis',
+      confine: true,
+      axisPointer: { type: 'shadow' },
+      formatter: (ps: { dataIndex: number }[]) => {
+        const b = bs[ps[0]?.dataIndex ?? 0]
+        if (!b) return ''
+        if (b.coveredHours === 0) return `${title(b)}<br/>这段没有读数`
+        const perDay = b.used / (b.coveredHours / 24)
+        const part = b.coveredHours < b.spanHours - 1e-6 ? `<br/><span style="opacity:.7">还没记满</span>` : ''
+        const ns = b.days.filter((d) => notes.has(d)).map((d) => `<br/>${md(d)} ${esc(notes.get(d) ?? '')}`)
+        const avgLine = avg === null ? '' : `<br/><span style="opacity:.7">${avgName} ${fmtKwh(avg)} 度</span>`
+        return `${title(b)}<br/><b>${fmtKwh(b.used)} 度</b><br/><span style="opacity:.7">日均 ${fmtKwh(perDay)} 度</span>${part}${avgLine}${ns.join('')}`
+      },
+    },
+    xAxis: { type: 'category', data: bs.map(label), ...AXIS, axisLabel: { ...AXIS.axisLabel, hideOverlap: true } },
+    yAxis: { type: 'value', name: '度', nameTextStyle: { color: CHART.label, fontSize: 10, align: 'right' }, axisLabel: { color: CHART.label, fontSize: 10 }, splitLine: SPLIT },
+    series: [
+      {
+        name: '用电',
+        type: 'bar',
+        barMaxWidth: 28,
+        data: bs.map((b) => ({
+          value: b.coveredHours === 0 ? null : Math.round(b.used) / 100,
+          itemStyle: { color: CHART.balance, opacity: b.coveredHours < b.spanHours - 1e-6 ? 0.4 : 1, borderRadius: [3, 3, 0, 0] },
+        })),
+        label: { show: true, position: 'top', distance: 2, fontSize: 8, color: CHART.brandInk, formatter: (p: { dataIndex: number }) => (bs[p.dataIndex]?.days.some((d) => notes.has(d)) ? '●' : '') },
+      },
+      ...(avg === null
+        ? []
+        : [
+            {
+              name: avgName,
+              type: 'line',
+              data: bs.map(() => Math.round(avg) / 100),
+              showSymbol: false,
+              silent: true,
               lineStyle: { color: CHART.brandInk, type: 'dashed', width: 1.5 },
             },
           ]),

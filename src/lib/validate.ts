@@ -15,7 +15,7 @@
 //
 // 报错必须是人话，还要指出第几条、哪个字段、什么问题：真出事那天，用户是一个人
 // 举着手机看着这句话决定下一步怎么办的。只报第一个错，报一串没人看得完。
-import type { Account, CatKind, Category, FacadeAdjust, MeterReading, Snapshot, Transaction, TxType } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction, TxType } from '../types'
 import { TX_TYPE_LABEL } from '../types'
 import { categoryKindOf } from './compute'
 
@@ -295,6 +295,22 @@ function readMeterReading(v: unknown, i: number): MeterReading {
   return { id: r.id as string, read_at: r.read_at as string, centi_kwh: n as number, created_at: r.created_at as string }
 }
 
+/** 0013：用电每日备注。note 对应 check (char_length(note) between 1 and 100)，按字符数（不是 UTF-16 码元）算 */
+function readMeterNote(v: unknown, i: number): MeterNote {
+  const fail: Fail = failer(`备份文件第 ${i + 1} 条用电备注`)
+  const r = asRow(v)
+  if (!r) fail('不是一条记录，文件可能已损坏')
+  if (typeof r.id !== 'string') fail('缺少 id，文件可能已损坏')
+  if (!isUuid(r.id)) fail(`的 id「${String(r.id)}」不是合法的 UUID，数据库不接受`)
+  const day: unknown = r.day
+  if (typeof day !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(day)) fail(`的日期格式不对（读到 ${JSON.stringify(r.day)}），应该长得像 2026-10-07`)
+  if (!isRealDate(day as string)) fail(`的日期是 ${String(day)}，这一天不存在`)
+  const note: unknown = r.note
+  if (typeof note !== 'string' || [...note].length < 1 || [...note].length > 100) fail('的备注要是 1 到 100 个字')
+  if (!isTimestamp(r.created_at)) fail(`的记录时间不是合法的时间（读到 ${JSON.stringify(r.created_at)}）`)
+  return { id: r.id as string, day: day as string, note: note as string, created_at: r.created_at as string }
+}
+
 // ── 跨行：外键、唯一索引、触发器，这些都要看过整份文件才知道 ──
 
 function checkAccounts(accounts: Account[]): void {
@@ -400,13 +416,21 @@ function checkMeterReadings(rows: MeterReading[]): void {
   })
 }
 
+function checkMeterNotes(rows: MeterNote[]): void {
+  const ids = new Set<string>()
+  rows.forEach((m, i) => {
+    if (ids.has(m.id)) failer(`备份文件第 ${i + 1} 条用电备注`)(`的 id 和前面某一条重复了（${m.id}）`)
+    ids.add(m.id)
+  })
+}
+
 /**
- * 校验并归一化一份备份文件的五张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
+ * 校验并归一化一份备份文件的六张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
  * 返回的对象只含数据库真有的那几列，字段齐全（缺的按数据库默认值补），可以直接交给 importAll。
  * facade_adjusts 缺失按空处理（0010 之前的文件）；要不要按老偏移量换算，是 csv.ts parseImport 的事。
- * meter_readings 缺失按空处理（0011 之前的文件），没有什么可换算的。
+ * meter_readings 缺失按空处理（0011 之前的文件），没有什么可换算的；meter_notes 同理（0013）。
  */
-export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[]; facade_adjusts?: unknown[]; meter_readings?: unknown[] }): Snapshot {
+export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[]; facade_adjusts?: unknown[]; meter_readings?: unknown[]; meter_notes?: unknown[] }): Snapshot {
   const accounts = raw.accounts.map(readAccount)
   checkAccounts(accounts)
   const categories = raw.categories.map(readCategory)
@@ -417,5 +441,7 @@ export function validateImport(raw: { accounts: unknown[]; categories: unknown[]
   checkFacadeAdjusts(facade_adjusts, accounts)
   const meter_readings = (raw.meter_readings ?? []).map(readMeterReading)
   checkMeterReadings(meter_readings)
-  return { accounts, categories, transactions, facade_adjusts, meter_readings }
+  const meter_notes = (raw.meter_notes ?? []).map(readMeterNote)
+  checkMeterNotes(meter_notes)
+  return { accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes }
 }
