@@ -95,8 +95,8 @@ export function Home() {
     [agg, pieColors],
   )
 
-  // 首页用电入口那一行的字：近 7 天日均、本月预计（没有预计就写本月已用）
-  const powerText = power ? `日均 ${power.avg7 === null ? '—' : fmtKwh(power.avg7)} 度 · 本月约 ${Math.round((power.projected ?? power.month) / 100)} 度` : '记一次读数'
+  // 首页用电入口那一行：近 N 天日均（加粗）、本月预计（没有预计就写本月已用）
+  const powerMonth = power ? Math.round((power.projected ?? power.month) / 100) : 0
 
   return (
     <div className="px-4 pb-6">
@@ -185,12 +185,23 @@ export function Home() {
             {sum.savingRate === null ? <span className="text-muted">本月没有收入</span> : `${(sum.savingRate * 100).toFixed(1)}%`}
           </span>
         </div>
-        {/* 用电入口（用户 2026-10-16 选「甲」、放「储蓄率之下」）：和储蓄率一个样子，点进用电页。用电和里外页面无关，两边一样 */}
+        {/* 用电入口（用户 2026-10-16：放「储蓄率之下」，和储蓄率一样带小字、日均加粗，不写「/天」，不要图标）。点进用电页；和里外页面无关，两边一样 */}
         <Link to="/power" className="mt-2 flex justify-between items-baseline text-sm">
-          <span className="text-muted">用电</span>
-          <span className="num">
-            {powerText} <span className="text-muted">›</span>
+          <span className="text-muted">
+            用电{power?.avg7 != null ? <span className="text-[11px] ml-1.5">近 {power.avgDays} 天日均</span> : null}
           </span>
+          {power ? (
+            <span className="num">
+              {power.avg7 != null ? (
+                <>
+                  <span className="font-semibold">{fmtKwh(power.avg7)}</span> 度 ·{' '}
+                </>
+              ) : null}
+              <span className="text-muted">本月约 {powerMonth} 度 ›</span>
+            </span>
+          ) : (
+            <span className="text-muted">记一次读数 ›</span>
+          )}
         </Link>
       </div>
 
