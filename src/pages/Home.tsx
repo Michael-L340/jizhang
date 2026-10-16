@@ -185,7 +185,7 @@ export function Home() {
             {sum.savingRate === null ? <span className="text-muted">本月没有收入</span> : `${(sum.savingRate * 100).toFixed(1)}%`}
           </span>
         </div>
-        {/* 用电入口（用户 2026-10-16：放「储蓄率之下」，和储蓄率一样带小字、日均加粗，不写「/天」，不要图标）。点进用电页；和里外页面无关，两边一样 */}
+        {/* 用电入口（用户 2026-10-16：放「储蓄率之下」，和储蓄率一样带小字、日均加粗，不写「/天」，不要图标；右边的字颜色和改之前一样，只有日均加粗——「本月约」做成灰的被说颜色不对）。点进用电页；和里外页面无关，两边一样 */}
         <Link to="/power" className="mt-2 flex justify-between items-baseline text-sm">
           <span className="text-muted">
             用电{power?.avg7 != null ? <span className="text-[11px] ml-1.5">近 {power.avgDays} 天日均</span> : null}
@@ -197,7 +197,7 @@ export function Home() {
                   <span className="font-semibold">{fmtKwh(power.avg7)}</span> 度 ·{' '}
                 </>
               ) : null}
-              <span className="text-muted">本月约 {powerMonth} 度 ›</span>
+              本月约 {powerMonth} 度 <span className="text-muted">›</span>
             </span>
           ) : (
             <span className="text-muted">记一次读数 ›</span>
