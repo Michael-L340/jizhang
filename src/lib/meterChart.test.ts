@@ -46,14 +46,14 @@ function render(option: object): string {
 }
 
 describe('用电记录的图', () => {
-  it('每天用了多少度：第一次读数之前的天是空的（不是 0）；最近 7 天日均那条虚线在；画得出来', () => {
+  it('每天用了多少度：第一次读数之前的天是空的（不是 0）；最近 14 天日均那条虚线在；画得出来', () => {
     // 变异：没被读数盖住的天也画 0 → 9/25 那根是 0 不是 null，红
     const days = dailyUsage(RS, '2026-09-25', '2026-10-03')
-    const o = dailyOption(days, summarize(RS, NOW).avg7) as { series: { name: string; data: ({ value: number | null } | number)[] }[] }
+    const o = dailyOption(days, summarize(RS, NOW).avg) as { series: { name: string; data: ({ value: number | null } | number)[] }[] }
     const bars = o.series[0].data as { value: number | null }[]
     expect(bars[0].value).toBeNull()
     expect(bars.at(-1)!.value).toBeGreaterThan(0)
-    expect(o.series.map((s) => s.name)).toEqual(['用电', '近7天日均'])
+    expect(o.series.map((s) => s.name)).toEqual(['用电', '近14天日均'])
     expect((dailyOption(days, 800, 2) as { series: { name: string }[] }).series[1].name).toBe('近2天日均')
     expect(render(o)).toContain('<svg')
   })

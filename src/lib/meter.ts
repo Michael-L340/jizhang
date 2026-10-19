@@ -168,19 +168,19 @@ export interface PowerSummary {
   today: number
   /** 这个月到最后一次读数用了多少（0.01 度） */
   month: number
-  /** 最近 7 天里被读数盖满的整天的平均（0.01 度）；一个整天都没有就 null */
-  avg7: number | null
-  /** 日均是按几个整天平均的（0–7），标题要写「近 N 天日均」，别在只有两天时说「近 7 天」 */
+  /** 最近 AVG_DAYS 天里被读数盖满的整天的平均（0.01 度）；一个整天都没有就 null */
+  avg: number | null
+  /** 日均是按几个整天平均的（0–AVG_DAYS），标题要写「近 N 天日均」，别在只有两天时说「近 14 天」 */
   avgDays: number
-  /** 本月预计 = 已用 + 近 PROJECT_DAYS 天日均 × 最后一次读数到月底；没有日均就 null。
-   *  这个日均和上面的 avg7 不是同一个数（用户 2026-10-19 只要预计改）：7 天太跳，一两天开空调预计就跳十几度 */
+  /** 本月预计 = 已用 + 日均 × 最后一次读数到月底；没有日均就 null */
   projected: number | null
   /** 这个月是从哪天开始有读数的（北京日期）；从 1 号就有、或这个月还没读数，就是 null */
   monthFrom: string | null
 }
 
-/** 本月预计用近几天的日均（只记满的整天）。比 7 天稳、换季两周左右跟上；30 天换季要慢半拍（用户 2026-10-19 选的折中） */
-export const PROJECT_DAYS = 14
+/** 日均看近几天（只记满的整天），首页、用电页、日用量图、本月预计全用这一个。
+ *  7 天太跳（一两天开空调预计就跳十几度），30 天换季慢半拍，用户 2026-10-19 选折中 14 天 */
+export const AVG_DAYS = 14
 
 /** 顶上三个大数字。now 只用来定「今天」「这个月」是哪天 */
 export function summarize(rs: MeterReading[], now: Date): PowerSummary {
@@ -192,16 +192,13 @@ export function summarize(rs: MeterReading[], now: Date): PowerSummary {
   const m1 = Date.UTC(y, mo, 1) - BJ_OFFSET_MS
   const today = usedBetween(ivs, t0, t0 + DAY_MS)
   const month = usedBetween(ivs, m0, m1)
-  const fullDays = (n: number) => dailyUsage(rs, dayOf(t0 - n * DAY_MS), dayOf(t0 - DAY_MS)).filter((d) => d.coveredHours >= 24 - 1e-9)
-  const mean = (ds: DayUsage[]) => (ds.length ? ds.reduce((s, d) => s + d.used, 0) / ds.length : null)
-  const full = fullDays(7)
-  const avg7 = mean(full)
-  const avgProj = mean(fullDays(PROJECT_DAYS))
+  const full = dailyUsage(rs, dayOf(t0 - AVG_DAYS * DAY_MS), dayOf(t0 - DAY_MS)).filter((d) => d.coveredHours >= 24 - 1e-9)
+  const avg = full.length ? full.reduce((s, d) => s + d.used, 0) / full.length : null
   const last = ivs.length ? Date.parse(ivs[ivs.length - 1].to.read_at) : null
-  const projected = avgProj === null || last === null ? null : month + (avgProj * Math.max(0, m1 - Math.max(last, m0))) / DAY_MS
+  const projected = avg === null || last === null ? null : month + (avg * Math.max(0, m1 - Math.max(last, m0))) / DAY_MS
   const first = ivs.length ? Date.parse(ivs[0].from.read_at) : null
   const monthFrom = first !== null && first > m0 + DAY_MS - 1 && first < m1 ? dayOf(first) : null
-  return { today, month, avg7, avgDays: full.length, projected, monthFrom }
+  return { today, month, avg, avgDays: full.length, projected, monthFrom }
 }
 
 /** 一小时用到这么多度（0.01 度）基本不可能是真的（家里同时开十几台空调），八成是漏了小数点 */
@@ -379,7 +376,7 @@ export function weekdayOf(ymd: string): number {
 
 /**
  * 一周里哪天最费电：today 的前一天往回数整整 WEEKDAY_WEEKS 周（182 天，每个星期几恰好 26 个位置），
- * 只拿被读数盖满的整天（和「近 7 天日均」同一口径；today 还没记完，不算），按星期几归堆平均。
+ * 只拿被读数盖满的整天（和「近 14 天日均」同一口径；today 还没记完，不算），按星期几归堆平均。
  */
 export function weekdayProfile(rs: MeterReading[], today: string): WeekdaySlot[] {
   const t0 = dayStart(today)

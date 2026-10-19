@@ -186,11 +186,11 @@ export function Home() {
         {/* 用电入口（用户 2026-10-16：放「储蓄率之下」，和储蓄率一样带小字、日均加粗，不写「/天」，不要图标；右边只有加粗的日均（「本月约 N 度」用户说不用了））。点进用电页；和里外页面无关，两边一样 */}
         <Link to="/power" className="mt-2 flex justify-between items-baseline text-sm">
           <span className="text-muted">
-            用电{power?.avg7 != null ? <span className="text-[11px] ml-1.5">近 {power.avgDays} 天日均</span> : null}
+            用电{power?.avg != null ? <span className="text-[11px] ml-1.5">近 {power.avgDays} 天日均</span> : null}
           </span>
           <span className="num">
-            {power?.avg7 != null ? <span className="font-semibold">{fmtKwh(power.avg7)}</span> : null}
-            {power?.avg7 != null ? ' 度 ' : power ? '— ' : '记一次读数 '}
+            {power?.avg != null ? <span className="font-semibold">{fmtKwh(power.avg)}</span> : null}
+            {power?.avg != null ? ' 度 ' : power ? '— ' : '记一次读数 '}
             <span className="text-muted">›</span>
           </span>
         </Link>

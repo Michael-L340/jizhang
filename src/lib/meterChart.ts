@@ -1,5 +1,5 @@
 // 用电记录页的几张图（ECharts option）。纯函数，颜色只走 palette.CHART。
-import { fmtKwh, peakHours, peakWeekdays, WEEKDAY_NAMES, type DayUsage, type HourSlot, type UsageBucket, type WeekdaySlot } from './meter'
+import { AVG_DAYS, fmtKwh, peakHours, peakWeekdays, WEEKDAY_NAMES, type DayUsage, type HourSlot, type UsageBucket, type WeekdaySlot } from './meter'
 import { esc } from './more/html'
 import { CHART } from './palette'
 
@@ -10,10 +10,10 @@ const SPLIT = { lineStyle: { color: CHART.axis } }
 const md = (ymd: string) => `${Number(ymd.slice(5, 7))}.${Number(ymd.slice(8, 10))}`
 
 /**
- * 每天用了多少度（柱子）+ 近 7 天日均（虚线）。
+ * 每天用了多少度（柱子）+ 近 AVG_DAYS 天日均（虚线）。
  * 一点没被读数盖住的天画成空（第一次记之前），只盖住一部分的天（今天、刚开始记的那天）画浅色：数是对的，只是这天还没算全。
  */
-export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7, notes: ReadonlyMap<string, string> = new Map()) {
+export function dailyOption(days: DayUsage[], avg: number | null, avgDays = AVG_DAYS, notes: ReadonlyMap<string, string> = new Map()) {
   const n = days.length
   const every = Math.max(1, Math.ceil(n / 6))
   return {
@@ -31,11 +31,11 @@ export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7, 
         // 23.7 小时不能写成「只算了 24 小时（还没盖满）」，不到 1 小时也别写「0 小时」
         const hrs = Math.floor(d.coveredHours)
         const part = d.coveredHours < 24 - 1e-9 ? `<br/><span style="opacity:.7">只算了${hrs < 1 ? '不到 1 ' : ` ${hrs} `}小时（读数还没盖满这一天）</span>` : ''
-        const avg = avg7 === null ? '' : `<br/><span style="opacity:.7">近 ${avgDays} 天日均 ${fmtKwh(avg7)} 度</span>`
+        const line = avg === null ? '' : `<br/><span style="opacity:.7">近 ${avgDays} 天日均 ${fmtKwh(avg)} 度</span>`
         const note = notes.get(d.date)
         // 备注是用户自己写的字，进提示框（HTML）前一律 esc
         const tail = note ? `<br/>备注：${esc(note)}<br/>${HINT('再点一下改备注')}` : `<br/>${HINT('再点一下写备注')}`
-        return `${head}<br/><b>${fmtKwh(d.used)} 度</b>${part}${avg}${tail}`
+        return `${head}<br/><b>${fmtKwh(d.used)} 度</b>${part}${line}${tail}`
       },
     },
     xAxis: { type: 'category', data: days.map((d) => md(d.date)), ...AXIS, axisLabel: { ...AXIS.axisLabel, interval: (i: number) => (n - 1 - i) % every === 0 } },
@@ -52,13 +52,13 @@ export function dailyOption(days: DayUsage[], avg7: number | null, avgDays = 7, 
         // 写了备注的那天柱顶一个小点
         label: { show: true, position: 'top', distance: 2, fontSize: 8, color: CHART.brandInk, formatter: (p: { dataIndex: number }) => (notes.has(days[p.dataIndex]?.date ?? '') ? '●' : '') },
       },
-      ...(avg7 === null
+      ...(avg === null
         ? []
         : [
             {
               name: `近${avgDays}天日均`,
               type: 'line',
-              data: days.map(() => Math.round(avg7) / 100),
+              data: days.map(() => Math.round(avg) / 100),
               showSymbol: false,
               silent: true,
               // 不在线头写字：手机上它总压在最右边那几根柱子上。日均是多少，顶上大数字底下写着、提示框里也有

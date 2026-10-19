@@ -129,8 +129,8 @@ export function Power() {
   const notes = useMemo(() => new Map(notesRaw.map((n) => [n.day, n.note])), [notesRaw])
   const buckets = useMemo(() => (unit === 'day' ? [] : usageBuckets(readings, unit, todayYmd)), [readings, unit, todayYmd])
   const usageOpt = useMemo(
-    () => (unit === 'day' ? dailyOption(days, sum.avg7, sum.avgDays, notes) : bucketOption(buckets, unit, bucketAverage(buckets), notes)),
-    [unit, days, sum.avg7, sum.avgDays, notes, buckets],
+    () => (unit === 'day' ? dailyOption(days, sum.avg, sum.avgDays, notes) : bucketOption(buckets, unit, bucketAverage(buckets), notes)),
+    [unit, days, sum.avg, sum.avgDays, notes, buckets],
   )
   const [noteDay, setNoteDay] = useState<string | null>(null)
   const daysAny = days.some((d) => d.coveredHours > 0)
@@ -182,7 +182,7 @@ export function Power() {
                 <span className="text-sm font-normal text-muted"> 度</span>
               </div>
               <div className="text-xs text-muted">
-                {sum.avg7 === null ? '记满一整天之后，这里会写日均' : `近 ${sum.avgDays} 天日均 ${fmtKwh(sum.avg7)} 度`}
+                {sum.avg === null ? '记满一整天之后，这里会写日均' : `近 ${sum.avgDays} 天日均 ${fmtKwh(sum.avg)} 度`}
                 {money(sum.today)}
               </div>
             </div>
