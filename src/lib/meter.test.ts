@@ -148,6 +148,21 @@ describe('顶上三个大数字', () => {
     expect(fmtKwh(s.projected!)).toBe(fmtKwh(2100 + 800 * restDays))
   })
 
+  it('本月预计用近 14 天日均，不是近 7 天：前一周每天 2 度、后一周每天 8 度，预计按 5 度往后估；15 天前那天不算', () => {
+    // 变异：预计改回用 avg7 → 70 + 8 × 17 = 206，红
+    // 变异：PROJECT_DAYS 改成 15 → 9/30 那 100 度混进日均，红
+    const rs = [R('2026-09-30 00:00', '1000.0')]
+    let v = 1100
+    for (let d = 1; d <= 15; d++) {
+      rs.push(R(`2026-10-${String(d).padStart(2, '0')} 00:00`, v.toFixed(1)))
+      v += d <= 7 ? 2 : 8
+    }
+    const s = summarize(rs, at('2026-10-15 21:40'))
+    expect(fmtKwh(s.avg7!)).toBe('8.0')
+    expect(fmtKwh(s.month)).toBe('70.0')
+    expect(fmtKwh(s.projected!)).toBe('155.0')
+  })
+
   it('才记了一次 → 今天 0 度、没有日均、不预计', () => {
     const s = summarize([R('2026-10-03 08:00', '3000.0')], at('2026-10-03 21:40'))
     expect(s.today).toBe(0)

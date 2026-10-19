@@ -172,11 +172,15 @@ export interface PowerSummary {
   avg7: number | null
   /** 日均是按几个整天平均的（0–7），标题要写「近 N 天日均」，别在只有两天时说「近 7 天」 */
   avgDays: number
-  /** 本月预计 = 已用 + 日均 × 最后一次读数到月底；没有日均就 null */
+  /** 本月预计 = 已用 + 近 PROJECT_DAYS 天日均 × 最后一次读数到月底；没有日均就 null。
+   *  这个日均和上面的 avg7 不是同一个数（用户 2026-10-19 只要预计改）：7 天太跳，一两天开空调预计就跳十几度 */
   projected: number | null
   /** 这个月是从哪天开始有读数的（北京日期）；从 1 号就有、或这个月还没读数，就是 null */
   monthFrom: string | null
 }
+
+/** 本月预计用近几天的日均（只记满的整天）。比 7 天稳、换季两周左右跟上；30 天换季要慢半拍（用户 2026-10-19 选的折中） */
+export const PROJECT_DAYS = 14
 
 /** 顶上三个大数字。now 只用来定「今天」「这个月」是哪天 */
 export function summarize(rs: MeterReading[], now: Date): PowerSummary {
@@ -188,10 +192,13 @@ export function summarize(rs: MeterReading[], now: Date): PowerSummary {
   const m1 = Date.UTC(y, mo, 1) - BJ_OFFSET_MS
   const today = usedBetween(ivs, t0, t0 + DAY_MS)
   const month = usedBetween(ivs, m0, m1)
-  const full = dailyUsage(rs, dayOf(t0 - 7 * DAY_MS), dayOf(t0 - DAY_MS)).filter((d) => d.coveredHours >= 24 - 1e-9)
-  const avg7 = full.length ? full.reduce((s, d) => s + d.used, 0) / full.length : null
+  const fullDays = (n: number) => dailyUsage(rs, dayOf(t0 - n * DAY_MS), dayOf(t0 - DAY_MS)).filter((d) => d.coveredHours >= 24 - 1e-9)
+  const mean = (ds: DayUsage[]) => (ds.length ? ds.reduce((s, d) => s + d.used, 0) / ds.length : null)
+  const full = fullDays(7)
+  const avg7 = mean(full)
+  const avgProj = mean(fullDays(PROJECT_DAYS))
   const last = ivs.length ? Date.parse(ivs[ivs.length - 1].to.read_at) : null
-  const projected = avg7 === null || last === null ? null : month + (avg7 * Math.max(0, m1 - Math.max(last, m0))) / DAY_MS
+  const projected = avgProj === null || last === null ? null : month + (avgProj * Math.max(0, m1 - Math.max(last, m0))) / DAY_MS
   const first = ivs.length ? Date.parse(ivs[0].from.read_at) : null
   const monthFrom = first !== null && first > m0 + DAY_MS - 1 && first < m1 ? dayOf(first) : null
   return { today, month, avg7, avgDays: full.length, projected, monthFrom }
