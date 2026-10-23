@@ -15,7 +15,7 @@ import { ledgerPosition } from '../lib/ledgerPosition'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
 import { outerBook, outerList } from '../lib/facade'
 import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, filterFromQuery, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from '../lib/filter'
-import { fmtYuan } from '../lib/money'
+import { fmtYuan, parseYuan, yuanPlain } from '../lib/money'
 import { useActiveAccounts, useStore } from '../lib/store'
 
 const TYPE_OPTS: { id: string; label: string }[] = [
@@ -103,6 +103,7 @@ export function Ledger() {
   // 换一级分类就把二级清掉：上一个一级的二级挂在新一级下面是筛不出东西的
   const setParentId = (parentId: string) => setFilter({ ...filter, parentId, childId: 'all' })
   const setChildId = (childId: string) => setFilter({ ...filter, childId })
+  const amountBad = filter.minCents != null && filter.maxCents != null && filter.minCents > filter.maxCents
   const [open, setOpen] = useState(false)
 
   // 搜索结果里点某一天的标题：退出搜索、清掉筛选，回到全部流水并定位到那一天（用户 2026-10-09 要的）
@@ -477,6 +478,14 @@ export function Ledger() {
             className="mb-4 pl-2.5 border-l-2 border-brand"
           />
         ) : null}
+        <div className="text-xs text-muted mb-2">金额</div>
+        {/* 一笔多少钱，两头都含；两个框撑满一行，和底下「清除」「完成」同一个样子（用户 2026-10-23 选的） */}
+        <div className={`flex items-center gap-2 ${amountBad ? 'mb-1.5' : 'mb-4'}`}>
+          <AmountBox value={filter.minCents} placeholder="最低" onChange={(minCents) => setFilter({ ...filter, minCents })} />
+          <span className="text-muted">–</span>
+          <AmountBox value={filter.maxCents} placeholder="最高" onChange={(maxCents) => setFilter({ ...filter, maxCents })} />
+        </div>
+        {amountBad ? <div className="text-xs text-expense mb-4">最低比最高还大</div> : null}
         {mode === 'inner' ? (
           <>
             {/* 只在里页面出现。外页面的筛选弹层里没有这一项，那边不能有任何暗示「有东西被藏了」的字 */}
@@ -506,5 +515,34 @@ export function Ledger() {
         </div>
       </Sheet>
     </div>
+  )
+}
+
+/**
+ * 金额筛选的一个框。框里留着用户敲的原文（敲到「12.」时不能被回填成「12」），
+ * 外面的值变了（点「清除」、再点底部「流水」）才跟着改。负数、敲不成金额的当没填。
+ */
+function AmountBox({ value, placeholder, onChange }: { value: number | undefined; placeholder: string; onChange: (cents: number | undefined) => void }) {
+  const [text, setText] = useState(value == null ? '' : yuanPlain(value))
+  const toCents = (t: string) => {
+    const c = parseYuan(t)
+    return c !== null && c >= 0 ? c : undefined
+  }
+  useEffect(() => {
+    if (toCents(text) !== value) setText(value == null ? '' : yuanPlain(value))
+  }, [value, text])
+  return (
+    <input
+      className="chip flex-1 min-w-0 text-center"
+      style={{ padding: '7px 12px', fontSize: 16 }}
+      inputMode="decimal"
+      placeholder={placeholder}
+      aria-label={`${placeholder}金额`}
+      value={text}
+      onChange={(e) => {
+        setText(e.target.value)
+        onChange(toCents(e.target.value))
+      }}
+    />
   )
 }

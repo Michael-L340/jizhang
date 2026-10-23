@@ -33,6 +33,12 @@ export function fmtYuan(cents: number, opts: { sign?: boolean; symbol?: boolean 
   return opts.sign && cents > 0 ? `+${body}` : body
 }
 
+/** 分 → 不带千分位、去掉末尾零的元，如 1250 → 「12.5」、10000 → 「100」。给输入框回填和筛选标签用 */
+export function yuanPlain(cents: number): string {
+  const s = centsToDb(cents)
+  return s.endsWith('.00') ? s.slice(0, -3) : s.endsWith('0') ? s.slice(0, -1) : s
+}
+
 /**
  * 余额核对的那条算式：差额 = 实际余额 − 推算余额。
  * @param input          用户输入的实际余额（元，字符串）

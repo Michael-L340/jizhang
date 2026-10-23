@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, filterFromQuery, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
+import { amountLabel, CHILD_NONE, CREDIT_ALL, describeFilter, effectiveFilter, filterFromQuery, isFiltered, matchesFilter, NO_FILTER, type LedgerFilter } from './filter'
 import type { Transaction } from '../types'
 
 const rootOf = (id: string) => ({ p1: 'p1', c1: 'p1', c2: 'p2' } as Record<string, string>)[id]
@@ -86,6 +86,45 @@ describe('matchesFilter', () => {
   })
 })
 
+describe('金额范围（用户 2026-10-23）', () => {
+  it('只填最低 = 这个数及以上，正好等于的那笔也算；只填最高 = 这个数及以下；都填 = 夹在中间', () => {
+    // 变异：最低那头写成 <=（正好 100 的被筛掉）→ 红；最高那头写成 >= → 红
+    const at = (amount: number, lo?: number, hi?: number) => matchesFilter(tx({ amount }), f({ minCents: lo, maxCents: hi }), rootOf)
+    expect([9999, 10000, 10001].map((a) => at(a, 10000))).toEqual([false, true, true])
+    expect([4999, 5000, 5001].map((a) => at(a, undefined, 5000))).toEqual([true, true, false])
+    expect([9999, 10000, 30000, 50000, 50001].map((a) => at(a, 10000, 50000))).toEqual([false, true, true, true, false])
+  })
+
+  it('校准有正有负，看去掉正负号的大小：-200 算 200', () => {
+    // 变异：去掉 Math.abs → -200 的那笔筛「150 以上」时被漏掉，红
+    const adj = tx({ type: 'adjust', amount: -20000, category_id: null })
+    expect(matchesFilter(adj, f({ minCents: 15000 }), rootOf)).toBe(true)
+    expect(matchesFilter(adj, f({ maxCents: 15000 }), rootOf)).toBe(false)
+  })
+
+  it('和别的条件是「且」：支出 + 恋爱 + 200 以上', () => {
+    const cond = f({ type: 'expense', parentId: 'p1', minCents: 20000 })
+    expect(matchesFilter(tx({ amount: 26800 }), cond, rootOf)).toBe(true)
+    expect(matchesFilter(tx({ amount: 1800 }), cond, rootOf)).toBe(false)
+    expect(matchesFilter(tx({ amount: 26800, category_id: 'c2' }), cond, rootOf)).toBe(false)
+  })
+
+  it('只设了金额也算「已筛选」，按钮要亮', () => {
+    // 变异：isFiltered 不看金额 → 红（列表少了一半，筛选按钮却不亮）
+    expect(isFiltered(f({ minCents: 10000 }))).toBe(true)
+    expect(isFiltered(f({ maxCents: 0 }))).toBe(true)
+    expect(isFiltered(NO_FILTER)).toBe(false)
+  })
+
+  it('顶上写成「¥100 以上」「¥50 以下」「¥100–500」，零头照写', () => {
+    expect(amountLabel(10000, undefined)).toBe('¥100 以上')
+    expect(amountLabel(undefined, 5000)).toBe('¥50 以下')
+    expect(amountLabel(10000, 50000)).toBe('¥100–500')
+    expect(amountLabel(1250, 1205)).toBe('¥12.5–12.05')
+    expect(amountLabel(undefined, undefined)).toBe('')
+  })
+})
+
 describe('只看「外面隐藏」的记录', () => {
   it('开着时只剩打了记号的，可以和别的条件叠加', () => {
     // 变异：matchesFilter 去掉 hiddenOnly 那一行 → 红
@@ -130,7 +169,7 @@ describe('「已筛选」后面把条件写出来', () => {
     category: (id: string | null) => ({ p1: '日常开支', c1: '日常开支 通勤交通' } as Record<string, string>)[id ?? ''] ?? '',
   }
 
-  it('按 类型 · 账户 · 分类 · 藏起来的 的顺序，没选的不写', () => {
+  it('按 类型 · 账户 · 分类 · 金额 · 藏起来的 的顺序，没选的不写', () => {
     // 变异：去掉 hiddenOnly 那一段 → 红；账户和类型顺序对调 → 红
     expect(describeFilter(NO_FILTER, names)).toEqual([])
     expect(describeFilter(f({ type: 'expense', accountId: 'a1', hiddenOnly: true }), names)).toEqual(['支出', '支付宝', '藏起来的'])
@@ -139,6 +178,8 @@ describe('「已筛选」后面把条件写出来', () => {
     expect(describeFilter(f({ parentId: 'p1', childId: CHILD_NONE }), names)).toEqual(['日常开支 未细分'])
     expect(describeFilter(f({ parentId: 'none', accountId: 'none' }), names)).toEqual(['未指定账户', '未分类'])
     expect(describeFilter(f({ accountId: CREDIT_ALL, type: 'transfer' }), names)).toEqual(['转账', '白条'])
+    // 变异：describeFilter 不写金额 → 红
+    expect(describeFilter(f({ type: 'expense', parentId: 'p1', minCents: 20000, hiddenOnly: true }), names)).toEqual(['支出', '日常开支', '¥200 以上', '藏起来的'])
   })
 
   it('外页面传的是 effectiveFilter 之后的条件，所以永远写不出「藏起来的」', () => {

@@ -1,5 +1,6 @@
 import type { Transaction } from '../types'
 import { isFlow } from './compute'
+import { yuanPlain } from './money'
 import type { Mode } from './facade'
 import type { SearchNames } from './search'
 
@@ -23,6 +24,12 @@ export interface LedgerFilter {
   childId: string
   /** 只看打了「外面隐藏」记号的记录。只在里页面有意义；旧版本存下的筛选条件没有这个字段，当 false */
   hiddenOnly?: boolean
+  /**
+   * 一笔的金额范围（分，两头都含）。没有 = 不限；旧版本存下的条件没有这两个字段。
+   * 比的是绝对值：校准有正有负，-200 算 200（用户 2026-10-23 定的）
+   */
+  minCents?: number
+  maxCents?: number
 }
 
 export const NO_FILTER: LedgerFilter = { type: 'all', accountId: 'all', parentId: 'all', childId: 'all', hiddenOnly: false }
@@ -38,11 +45,19 @@ export function effectiveFilter(f: LedgerFilter, mode: Mode): LedgerFilter {
   return { ...f, hiddenOnly: false }
 }
 
+/** 「¥100 以上」「¥50 以下」「¥100–500」；没设就是空串 */
+export function amountLabel(min: number | undefined, max: number | undefined): string {
+  if (min != null && max != null) return `¥${yuanPlain(min)}–${yuanPlain(max)}`
+  if (min != null) return `¥${yuanPlain(min)} 以上`
+  if (max != null) return `¥${yuanPlain(max)} 以下`
+  return ''
+}
+
 const TYPE_LABEL: Record<string, string> = { expense: '支出', income: '收入', transfer: '转账', adjust: '校准' }
 
 /**
  * 把筛选条件写成人能读的几段，给流水页顶上的「已筛选：…」用。
- * 顺序固定：类型 · 账户 · 分类 · 藏起来的；没选的不写。
+ * 顺序固定：类型 · 账户 · 分类 · 金额 · 藏起来的；没选的不写。
  * 用户 2026-09-18 在里页面开着「只看藏起来的」忘了，看到「已筛选 · 0 笔」以为记录丢了。
  * 传进来的要是 effectiveFilter 之后的条件——外页面那边「藏起来的」被当没开，这里自然也不会写出来。
  */
@@ -58,6 +73,8 @@ export function describeFilter(f: LedgerFilter, names: SearchNames): string[] {
     if (f.childId && f.childId !== 'all') out.push(f.childId === CHILD_NONE ? `${parent} 未细分` : names.category(f.childId) || parent)
     else out.push(parent)
   }
+  const amount = amountLabel(f.minCents, f.maxCents)
+  if (amount) out.push(amount)
   if (f.hiddenOnly) out.push('藏起来的')
   return out
 }
@@ -66,7 +83,7 @@ export function describeFilter(f: LedgerFilter, names: SearchNames): string[] {
  * 别的页带参数跳到流水页时，筛选换成什么。**只有带了 cat 才换**，返回 null = 筛选原样不动
  * （首页「今天」那张卡只带 date，不该清掉用户自己设的筛选）。
  *
- * 带了 cat 就整个换掉，一个旧条件都不留：type / sub / acc 没带的回到「全部」。
+ * 带了 cat 就整个换掉，一个旧条件都不留：type / sub / acc 没带的回到「全部」，金额范围也清掉。
  * cat=all 就是「不筛分类」——图表跳转用它清掉上一次留下的条件：先在瀑布图上点过「日常餐饮」，
  * 再点「收入」，要是只带月份，流水页还筛着日常餐饮，一笔收入都看不到（2026-09-29 审出来的）。
  * acc 是账户（CREDIT_ALL = 四家白条一起）。
@@ -78,7 +95,7 @@ export function filterFromQuery(q: { get(key: string): string | null }): LedgerF
 }
 
 export function isFiltered(f: LedgerFilter): boolean {
-  return f.type !== 'all' || f.accountId !== 'all' || f.parentId !== 'all' || Boolean(f.hiddenOnly)
+  return f.type !== 'all' || f.accountId !== 'all' || f.parentId !== 'all' || Boolean(f.hiddenOnly) || f.minCents != null || f.maxCents != null
 }
 
 /**
@@ -88,6 +105,8 @@ export function isFiltered(f: LedgerFilter): boolean {
 export function matchesFilter(t: Transaction, f: LedgerFilter, rootOf: (catId: string) => string | undefined, creditIds: ReadonlySet<string> = new Set()): boolean {
   if (f.type !== 'all' && t.type !== f.type) return false
   if (f.hiddenOnly && !t.hidden) return false
+  if (f.minCents != null && Math.abs(t.amount) < f.minCents) return false
+  if (f.maxCents != null && Math.abs(t.amount) > f.maxCents) return false
   if (f.accountId === 'none') {
     if (t.account_id) return false
   } else if (f.accountId === CREDIT_ALL) {
