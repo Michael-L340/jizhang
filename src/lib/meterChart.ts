@@ -1,4 +1,5 @@
 // 用电记录页的几张图（ECharts option）。纯函数，颜色只走 palette.CHART。
+import { fmtDateZh } from './date'
 import { AVG_DAYS, fmtKwh, peakHours, peakWeekdays, WEEKDAY_NAMES, type DayUsage, type HourSlot, type UsageBucket, type WeekdaySlot } from './meter'
 import { esc } from './more/html'
 import { CHART } from './palette'
@@ -26,7 +27,8 @@ export function dailyOption(days: DayUsage[], avg: number | null, avgDays = AVG_
       formatter: (ps: { dataIndex: number }[]) => {
         const d = days[ps[0]?.dataIndex ?? 0]
         if (!d) return ''
-        const head = `${Number(d.date.slice(5, 7))}月${Number(d.date.slice(8, 10))}日`
+        // 带周几，和首页「今日开支 · 10月25日 周日」同一个写法（用户 2026-10-25）
+        const head = fmtDateZh(d.date)
         if (d.coveredHours === 0) return `${head}<br/>这天没有读数`
         // 23.7 小时不能写成「只算了 24 小时（还没盖满）」，不到 1 小时也别写「0 小时」
         const hrs = Math.floor(d.coveredHours)

@@ -165,6 +165,17 @@ describe('提示框的措辞和找段', () => {
     expect(o.tooltip.formatter([{ dataIndex: 1 }])).toContain('只算了不到 1 小时')
   })
 
+  it('每天用了多少度：提示框第一行带周几，和首页「今日开支 · 10月25日 周日」同一个写法（用户 2026-10-25）', () => {
+    // 变异：head 改回只写「10月12日」→ 红
+    const days = dailyUsage([R('2026-10-10 20:00', '3000.0'), R('2026-10-12 20:00', '3008.0')], '2026-10-09', '2026-10-12')
+    const o = dailyOption(days, null) as { tooltip: { formatter: (ps: { dataIndex: number }[]) => string } }
+    const tip = (date: string) => o.tooltip.formatter([{ dataIndex: days.findIndex((d) => d.date === date) }])
+    expect(tip('2026-10-11')).toMatch(/^10月11日 周日<br\/>/)
+    expect(tip('2026-10-12')).toMatch(/^10月12日 周一<br\/>/)
+    // 一点读数都没有的那天也带
+    expect(tip('2026-10-09')).toBe('10月9日 周五<br/>这天没有读数')
+  })
+
   it('什么时候最费电：接着的两段，第二段起点往右挪 1 毫秒，提示框在第二段左半边找到的是第二段；写的是整段的起点和总量', () => {
     // 变异：不挪 → 两段共用一个 x，find 先命中上一段，红
     const rs = [R('2026-10-05 20:00', '3000.0'), R('2026-10-06 08:00', '3006.0'), R('2026-10-06 20:00', '3012.0')]
