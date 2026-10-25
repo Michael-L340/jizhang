@@ -37,7 +37,7 @@ import {
   weekdayLead,
   weekdayProfile,
 } from '../lib/meter'
-import { bucketOption, dailyOption, hourOption, RATE_SPANS, rateMarks, rateOption, weekdayOption, type RateSpan } from '../lib/meterChart'
+import { bucketOption, dailyOption, hourOption, RATE_SPANS, rateMarks, rateOption, rateYAxis, weekdayOption, type RateSpan } from '../lib/meterChart'
 import { fmtYuan } from '../lib/money'
 import { useStore } from '../lib/store'
 import type { MeterNote, MeterReading } from '../types'
@@ -102,8 +102,11 @@ export function Power() {
   }
   const onRateZoom = (s: number, e: number) => {
     setZoomed(true)
-    const m = rateMarks(first, until, first + ((until - first) * s) / 100, first + ((until - first) * e) / 100)
-    return { xAxis: { axisLabel: { customValues: m }, axisTick: { customValues: m } } }
+    const a = first + ((until - first) * s) / 100
+    const b = first + ((until - first) * e) / 100
+    const m = rateMarks(first, until, a, b)
+    // 纵轴跟着看得见的那几段走（缩放条不扔窗口外的点，ECharts 不会自己换）
+    return { xAxis: { axisLabel: { customValues: m }, axisTick: { customValues: m } }, yAxis: rateYAxis(steps, a, b) }
   }
   // 一天里几点最费电：最近 30 天
   const slots = useMemo(() => hourProfile(readings, now.getTime() - 30 * DAY_MS, now.getTime()), [readings, now])

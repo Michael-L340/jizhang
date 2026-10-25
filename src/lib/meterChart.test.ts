@@ -8,7 +8,8 @@ import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
 import { bucketAverage, dailyUsage, hourProfile, parseReading, peakHours, rateSteps, summarize, usageBuckets, weekdayProfile } from './meter'
-import { bucketOption, dailyOption, hourOption, rateMarks, rateOption, weekdayOption } from './meterChart'
+import { bucketOption, dailyOption, hourOption, rateMarks, rateOption, rateYAxis, weekdayOption } from './meterChart'
+import { CHART } from './palette'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, DataZoomSliderComponent, DataZoomInsideComponent, SVGRenderer])
 
@@ -202,6 +203,40 @@ describe('提示框的措辞和找段', () => {
     // 第一段被 since 截了起点，提示框仍写真正的起点 10/5 20:00、一共 6.0 度
     expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('10/5 20:00 – 10/6 08:00')
     expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('一共 6.0 度')
+  })
+})
+
+describe('什么时候最费电：放大、拖动之后，跨在可见范围边上的那段也画（2026-10-25）', () => {
+  // 10/22 晚上一段尖峰（每小时 0.73，在窗口外）；10/24 12:00–19:00 每小时 0.24（跨在窗口左边上）；10/24 19:00 – 10/25 17:00 每小时 0.32
+  const rs = [R('2026-10-22 18:00', '3000.00'), R('2026-10-22 22:00', '3002.92'), R('2026-10-24 12:00', '3004.00'), R('2026-10-24 19:00', '3005.68'), R('2026-10-25 17:00', '3012.72')]
+  const first = Date.parse(rs[0].read_at)
+  const view = Date.parse('2026-10-24T15:00:00+08:00')
+  const until = Date.parse('2026-10-25T18:00:00+08:00')
+  const steps = rateSteps(rs, first)
+
+  it('纵轴只看窗口里看得见的那几段：0.32 → 0–0.35 每格 0.05；看全部时尖峰 0.73 → 0–0.8 每格 0.1；窗口里没有段 → 交回 ECharts', () => {
+    // 变异：rateYAxis 不看窗口、拿全部的最大值 → 放大后纵轴还是 0.8，红
+    expect(rateYAxis(steps, view, until)).toEqual({ min: 0, max: 0.35, interval: 0.05 })
+    expect(rateYAxis(steps, first, until)).toEqual({ min: 0, max: 0.8, interval: 0.1 })
+    expect(rateYAxis(steps, first - 86400_000, first)).toEqual({ min: 0, max: null, interval: null })
+  })
+
+  it('缩放条不扔窗口外的点：跨在左边上的那段从画布外面画进来（默认的 filter 会把它整段扔掉，左边空一块）', () => {
+    // 变异：去掉 filterMode: 'none' → 线从窗口里第一个点（10/24 19:00）才开始，红
+    const o = rateOption(steps, first, until, view) as { dataZoom: { filterMode?: string }[]; yAxis: { max: number | null } }
+    expect(o.dataZoom.map((z) => z.filterMode)).toEqual(['none', 'none'])
+    expect(o.yAxis.max).toBe(0.35)
+    const svg = render(o)
+    const line = [...svg.matchAll(/<path d="([^"]+)"[^>]*stroke="([^"]+)"[^>]*stroke-width="2"/g)].find((m) => m[2].toLowerCase() === CHART.balance)
+    expect(line).toBeDefined()
+    const x0 = Number(line![1].match(/-?\d+(\.\d+)?/)![0])
+    expect(x0).toBeLessThan(0)
+  })
+
+  it('拖动、两指缩放时页面把纵轴也换掉（onRateZoom 带上 rateYAxis）', () => {
+    // 变异：onRateZoom 只换日期刻度 → 放大后纵轴还停在打开时那一段的高度，红
+    const src = readFileSync(new URL('../pages/Power.tsx', import.meta.url), 'utf8')
+    expect(src).toContain('yAxis: rateYAxis(steps, a, b)')
   })
 })
 

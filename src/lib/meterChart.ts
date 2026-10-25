@@ -181,6 +181,9 @@ export function rateOption(steps: { from: number; to: number; start: number; per
       {
         type: 'slider',
         xAxisIndex: 0,
+        // 不扔窗口外的点：默认的 filter 会把跨在可见范围边上的那一段整段扔掉（只剩一头的点画不出线），
+        // 放大之后左右两边各空一块（2026-10-25 查出来的）。纵轴因此不会自己跟着窗口变，由 rateYAxis 算
+        filterMode: 'none',
         startValue: Math.max(since, viewFrom),
         endValue: until,
         height: 20,
@@ -197,10 +200,10 @@ export function rateOption(steps: { from: number; to: number; start: number; per
         selectedDataBackground: { lineStyle: { color: CHART.balance, opacity: 0.6 }, areaStyle: { color: CHART.balance, opacity: 0.12 } },
       },
       // 图上两指缩放、拖着平移
-      { type: 'inside', xAxisIndex: 0 },
+      { type: 'inside', xAxisIndex: 0, filterMode: 'none' },
     ],
     // 单位在卡片副标题上（「每小时几度」）；轴名写在左上角时刻度数字窄的话会被画布切掉一截
-    yAxis: { type: 'value', axisLabel: { color: CHART.label, fontSize: 10 }, splitLine: SPLIT },
+    yAxis: { type: 'value', ...rateYAxis(steps, Math.max(since, viewFrom), until), axisLabel: { color: CHART.label, fontSize: 10 }, splitLine: SPLIT },
     series: [
       {
         name: '每小时用电',
@@ -214,6 +217,28 @@ export function rateOption(steps: { from: number; to: number; start: number; per
       },
     ],
   }
+}
+
+/** ECharts 自己给刻度取整的办法（number.nice(v, true)）：1 / 2 / 3 / 5 / 10 × 10 的几次方 */
+function niceStep(v: number): number {
+  const exp = Math.floor(Math.log10(v))
+  const f = v / 10 ** exp
+  const nf = f < 1.5 ? 1 : f < 2.5 ? 2 : f < 4 ? 3 : f < 7 ? 5 : 10
+  return +(nf * 10 ** exp).toFixed(Math.max(0, -exp))
+}
+
+/**
+ * 「什么时候最费电」的纵轴：只按 [a, b] 里看得见的那几段定上限，刻度和 ECharts 自己算的一样（约 5 格）。
+ * 缩放条是 filterMode: 'none'，纵轴不会自己跟着窗口变：打开时 rateOption 用它，拖的时候页面在 onZoom 里换。
+ * 窗口里一段都没有 → null（交回 ECharts 自己定）。
+ */
+export function rateYAxis(steps: { from: number; to: number; perHour: number }[], a: number, b: number): { min: number; max: number | null; interval: number | null } {
+  let top = 0
+  for (const s of steps) if (s.from < b && s.to > a && s.perHour > top) top = s.perHour
+  if (!(top > 0)) return { min: 0, max: null, interval: null }
+  const interval = niceStep(top / 5)
+  const digits = Math.max(0, -Math.floor(Math.log10(interval)))
+  return { min: 0, max: +(Math.ceil(top / interval - 1e-9) * interval).toFixed(digits), interval }
 }
 
 const DAY = 86400_000
