@@ -443,6 +443,15 @@ describe('读数输错、同一时刻、并列（2026-10-08 审出来的）', ()
     expect(s2[1].from).not.toBe(s2[0].to)
   })
 
+  it('记读数时 10 分钟内刚记过一模一样的数：提醒「是不是存了两次」；数不一样、或者隔了 10 分钟以上，不提醒（用户 2026-10-25）', () => {
+    // 变异：preview 不看 dup → 第一个断言红；dup 不看时长 → 最后一个断言红
+    const rs = [R('2026-10-25 15:48', '3261.54'), R('2026-10-25 17:54', '3262.22')]
+    const last = Date.parse(rs[1].read_at)
+    expect(preview(rs, parseReading('3262.22')!, new Date(last + 15_000))!.dup?.id).toBe(rs[1].id)
+    expect(preview(rs, parseReading('3262.30')!, new Date(last + 15_000))!.dup).toBeNull()
+    expect(preview(rs, parseReading('3262.22')!, new Date(last + 11 * 60_000))!.dup).toBeNull()
+  })
+
   it('顶上三个数：日均按几个整天平均要说出来；这个月从哪天开始有读数要说出来', () => {
     // 变异：avgDays 写死 7 / monthFrom 永远 null → 红
     const rs = [R('2026-10-03 07:40', '3380.0'), R('2026-10-04 00:00', '3388.0'), R('2026-10-05 00:00', '3396.0'), R('2026-10-05 18:00', '3400.0')]

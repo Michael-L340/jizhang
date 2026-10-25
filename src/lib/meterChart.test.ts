@@ -233,6 +233,13 @@ describe('什么时候最费电：放大、拖动之后，跨在可见范围边�
     expect(x0).toBeLessThan(0)
   })
 
+  it('记读数弹层：保存中点外面关不掉（网慢时关掉重记会变成两条）；10 分钟内一样的数提醒（用户 2026-10-25）', () => {
+    // 变异：onClose 不看 busy → 红；去掉 dup 那句提醒 → 红
+    const src = readFileSync(new URL('../pages/Power.tsx', import.meta.url), 'utf8')
+    expect(src).toContain('<Sheet open onClose={busy ? () => {} : onClose} title="记一次电表读数">')
+    expect(src).toContain('刚记过一样的数，是不是存了两次？')
+  })
+
   it('拖动、两指缩放时页面把纵轴也换掉（onRateZoom 带上 rateYAxis）', () => {
     // 变异：onRateZoom 只换日期刻度 → 放大后纵轴还停在打开时那一段的高度，红
     const src = readFileSync(new URL('../pages/Power.tsx', import.meta.url), 'utf8')

@@ -1778,6 +1778,40 @@ describe('电表读数：待上传队列', () => {
     expect(ls.map.has(MR_OUTBOX_KEY)).toBe(false)
   })
 
+  it('网太慢（请求一直不回来）：最多等 WRITE_WAIT_MS 就先存本机进队列、返回 true（弹层关掉）；晚到的那次和补传是同一个 id，不会变两条（用户 2026-10-25）', async () => {
+    // 变异：writeSide 不设等待上限 → addMeterReading 一直不返回，红
+    let land!: () => void
+    api.insertMeterReading.mockImplementationOnce(() => new Promise<void>((r) => (land = r)))
+    let done: boolean | undefined
+    void st().addMeterReading(mr('m1')).then((v) => (done = v))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS - 100)
+    expect(done).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(done).toBe(true)
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+    expect(st().outboxCount).toBe(1)
+    expect(st().toast?.msg).toBe("网太慢，这条读数先存在本机，稍后自动上传")
+    land()
+    api.insertMeterReading.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.insertMeterReading).toHaveBeenLastCalledWith(mr('m1'))
+    expect(st().outboxCount).toBe(0)
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+  })
+
+  it('网太慢、原来那次过后才报错：不变成未处理的报错，读数照样在队列里', async () => {
+    // 变异：within 不给 p 挂 catch → 未处理的 rejection，vitest 整个红
+    let fail!: (e: unknown) => void
+    api.insertMeterReading.mockImplementationOnce(() => new Promise<void>((_, j) => (fail = j)))
+    const p = st().addMeterReading(mr('m1'))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
+    expect(await p).toBe(true)
+    fail(offline())
+    await vi.advanceTimersByTimeAsync(10)
+    expect(st().outboxCount).toBe(1)
+    expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
+  })
+
   it('同步回来的快照里没有它：队列里的读数不会被冲掉', async () => {
     // 变异：refresh 合并时读数不叠 outboxMr → 红
     api.insertMeterReading.mockRejectedValue(offline())

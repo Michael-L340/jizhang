@@ -436,7 +436,7 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
   const p = centi === null ? null : preview(readings, centi, new Date(at))
   const future = at > Date.now() + 60_000
   const ok = centi !== null && !future && !busy
-  // 八成输错了的三种情况：和后一条对不上、比上次多得离谱、这一分钟已有一条。照样能存，但按钮改名提醒
+  // 八成有问题的四种情况：和后一条对不上、比上次多得离谱、这一分钟已有一条、10 分钟内刚记过一样的数（存了两次）。照样能存，但按钮改名提醒
   const doubt = !p
     ? ''
     : p.aboveNext
@@ -445,10 +445,13 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
         ? '一小时十几度不太可能，是不是漏了小数点？'
         : p.sameTime
           ? '这个时间已经有一条读数了，存了会顶掉它。'
-          : ''
+          : p.dup
+            ? `${fmtIsoZh(p.dup.read_at)} 刚记过一样的数，是不是存了两次？`
+            : ''
 
   return (
-    <Sheet open onClose={onClose} title="记一次电表读数">
+    // 保存中点外面不关：网慢时关掉再开一个新弹层、再记一遍，就成了两条（2026-10-25）。最多等 WRITE_WAIT_MS 就有结果
+    <Sheet open onClose={busy ? () => {} : onClose} title="记一次电表读数">
       <div className="flex items-baseline justify-center gap-1.5 mt-3">
         <input
           autoFocus

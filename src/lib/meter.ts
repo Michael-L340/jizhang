@@ -218,6 +218,8 @@ export interface Preview {
   aboveNext: MeterReading | null
   /** 比上次多得离谱（每小时 ≥ BIG_PER_HOUR）：八成漏了小数点 */
   tooMuch: boolean
+  /** 10 分钟（MIN_STEP_MS）内刚记过一模一样的数：八成是网慢时存了两次（2026-10-25 的 17:54 / 17:55） */
+  dup: MeterReading | null
 }
 
 export function preview(rs: MeterReading[], centi: number, at: Date): Preview | null {
@@ -239,6 +241,7 @@ export function preview(rs: MeterReading[], centi: number, at: Date): Preview | 
     sameTime: Date.parse(prev.read_at) === t,
     aboveNext: next && centi > next.centi_kwh ? next : null,
     tooMuch: perHour !== null && perHour >= BIG_PER_HOUR,
+    dup: used === 0 && t !== Date.parse(prev.read_at) && t - Date.parse(prev.read_at) < MIN_STEP_MS ? prev : null,
   }
 }
 

@@ -390,6 +390,27 @@ function offlineToast(saved: boolean, what: string): string {
   return saved ? `没网，${what}已存在本机，联网后自动上传` : `没网，这台设备也存不下：先别关 App，联网后会自动上传`
 }
 
+/**
+ * 用电那两张表写云端最多等这么久（writeSide）。网太慢时「保存中…」一直转，用户关掉弹层再记一遍，
+ * 新弹层是新 id，两次都落了库就成了两条（2026-10-25 的 17:54 / 17:55，同一个数隔 15 秒）。
+ * 过了这个时间就当没网：先存本机进队列。补传用的是同一个 id，原来那次晚到了也只是覆盖同一行
+ */
+export const WRITE_WAIT_MS = 8_000
+const SLOW = new Error('网太慢')
+function slowToast(saved: boolean, what: string): string {
+  return saved ? `网太慢，${what}先存在本机，稍后自动上传` : `网太慢，这台设备也存不下：先别关 App，稍后会自动上传`
+}
+/** p 在 ms 内有结果就照它的结果；过了时间返回 false，p 之后成功失败都不管（失败那支必须接着，不然是未处理的报错） */
+function within(p: Promise<void>, ms: number): Promise<boolean> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => resolve(false), ms)
+    p.then(
+      () => (clearTimeout(timer), resolve(true)),
+      (e: unknown) => (clearTimeout(timer), reject(e)),
+    )
+  })
+}
+
 /** 队列最近一次落盘成功了没有。老缓存（里面包着一份队列）只在它为真时才许删 */
 let outboxOnDisk = true
 function noteOutboxUnsaved(): void {
@@ -486,8 +507,7 @@ async function writeSide<T extends { id: string }>(s: Side<T>, id: string, v: T 
   const st = useStore.getState()
   try {
     if (offlineNow()) throw offlineError()
-    if (v === DELETED) await s.del(id)
-    else await s.put(v)
+    if (!(await within(v === DELETED ? s.del(id) : s.put(v), WRITE_WAIT_MS))) throw SLOW
     // 登记为在途：紧接着的一次 refresh 可能还拉不到它（或者删之前就出门的那次还带着它）
     s.pending.set(id, v)
     settle(s.settled, s.pending, id)
@@ -505,7 +525,7 @@ async function writeSide<T extends { id: string }>(s: Side<T>, id: string, v: T 
     useStore.setState(patchSide(s, id, v))
     useStore.setState({ outboxCount: outboxSize() })
     st.persist()
-    st.showToast(offlineToast(saved, v === DELETED ? '删除' : s.what))
+    st.showToast((e === SLOW ? slowToast : offlineToast)(saved, v === DELETED ? '删除' : s.what))
     return true
   }
 }
