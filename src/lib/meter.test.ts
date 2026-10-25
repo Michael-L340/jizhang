@@ -424,6 +424,25 @@ describe('读数输错、同一时刻、并列（2026-10-08 审出来的）', ()
     expect(cut[0].start).toBe(Date.parse(rs[1].read_at))
   })
 
+  it('「什么时候最费电」两次读数挨得太近（同一个数 15 秒内存了两次）：中间那一小段不画，前后两段照样接上（用户 2026-10-25）', () => {
+    // 变异：改回「先过滤再各画各的」→ 后一段从 17:55:09 画起，和前一段的 17:54:54 对不上，红
+    const rs = [R('2026-10-25 15:48', '3261.54'), R('2026-10-25 17:54', '3262.22'), R('2026-10-25 17:54', '3262.22'), R('2026-10-25 20:47', '3262.96')]
+    rs[1].read_at = rs[1].created_at = '2026-10-25T09:54:54.580Z'
+    rs[2].read_at = rs[2].created_at = '2026-10-25T09:55:09.915Z'
+    rs[2].id = 'second-save'
+    const steps = rateSteps(rs, 0)
+    expect(steps).toHaveLength(2)
+    expect(steps[1].from).toBe(steps[0].to)
+    // 提示框照写真实的起点 17:55:09
+    expect(steps[1].start).toBe(Date.parse(rs[2].read_at))
+    // 读数倒退（换表）跳过的那段照旧断开：后一段从自己的起点画
+    const swapped = [R('2026-10-05 08:00', '3000.0'), R('2026-10-05 20:00', '3006.0'), R('2026-10-06 08:00', '12.0'), R('2026-10-06 20:00', '18.0')]
+    const s2 = rateSteps(swapped, 0)
+    expect(s2).toHaveLength(2)
+    expect(s2[1].from).toBe(Date.parse(swapped[2].read_at))
+    expect(s2[1].from).not.toBe(s2[0].to)
+  })
+
   it('顶上三个数：日均按几个整天平均要说出来；这个月从哪天开始有读数要说出来', () => {
     // 变异：avgDays 写死 7 / monthFrom 永远 null → 红
     const rs = [R('2026-10-03 07:40', '3380.0'), R('2026-10-04 00:00', '3388.0'), R('2026-10-05 00:00', '3396.0'), R('2026-10-05 18:00', '3400.0')]

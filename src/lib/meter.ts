@@ -432,11 +432,28 @@ export const MIN_STEP_MS = 10 * 60_000
 /**
  * 「什么时候最费电」那张图：从 since 起每一段读数的平均速度（度/小时），画成台阶。
  * from 是画图用的起点（被 since 截过），start 是这段真正的起点（提示框写它）。
+ * 不到 MIN_STEP_MS 的段不画，但它前后两段照样接上：后一段从前一段的终点画起（用户 2026-10-25：
+ * 同一个数 15 秒内存了两次，中间那一小段被跳过，图上把它当成「读数倒退」断开了，台阶少了一条竖线）。
+ * 只有读数倒退被 intervals 跳过的那段才真的断开。
  */
 export function rateSteps(rs: MeterReading[], since: number): { from: number; to: number; start: number; perHour: number }[] {
-  return intervals(rs)
-    .filter((iv) => Date.parse(iv.to.read_at) > since && Date.parse(iv.to.read_at) - Date.parse(iv.from.read_at) >= MIN_STEP_MS)
-    .map((iv) => ({ from: Math.max(since, Date.parse(iv.from.read_at)), to: Date.parse(iv.to.read_at), start: Date.parse(iv.from.read_at), perHour: iv.perHour / 100 }))
+  const out: { from: number; to: number; start: number; perHour: number }[] = []
+  // drawnTo：上一段画到哪；reach：上一段连同紧跟着的短段一直到哪（下一段从这里开始 = 接着的）
+  let drawnTo: number | null = null
+  let reach: number | null = null
+  for (const iv of intervals(rs)) {
+    const start = Date.parse(iv.from.read_at)
+    const to = Date.parse(iv.to.read_at)
+    const linked: boolean = drawnTo !== null && start === reach
+    if (to - start < MIN_STEP_MS) {
+      reach = linked ? to : null
+      continue
+    }
+    if (to > since) out.push({ from: Math.max(since, linked ? drawnTo! : start), to, start, perHour: iv.perHour / 100 })
+    drawnTo = to
+    reach = to
+  }
+  return out
 }
 
 // ── 每天用了多少度：按周 / 按月（2026-10-16 用户：「能不能切换频率，日/周/月」） ──
