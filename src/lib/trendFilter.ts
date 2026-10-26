@@ -145,15 +145,38 @@ export function layoutPeaks(peaks: Peak[], xOf: (i: number) => number, plotL: nu
 
 /**
  * 趋势图里第 i 个点的横坐标（页面画之前就要摆尖顶数字，没法先问 ECharts）：
- * 绘图区左边 = grid.left + 纵轴刻度字宽 + 8（ECharts 默认的刻度字到轴的间距），右边 = 宽 − grid.right。
+ * 绘图区左边 = grid.left 4 + 纵轴刻度字宽 + 8（ECharts 默认的刻度字到轴的间距），右边 = 宽 − grid.right 14；
+ * 再让出横轴字伸出去的那截：ECharts 6 的 containLabel 也管横轴，头尾那个日期以那一点为中心写，
+ * 伸出图外的半截会把绘图区往里挤（「26/10/26」挤掉 20 多像素，2026-10-26 复查量出来的，不让的话右半边数字的位置估偏、该错开的没错开）。
  * boundaryGap（柱子、点很少时的折线）：每个点在一格中间；否则头尾贴着绘图区两边。
  */
-export function trendGeometry(width: number, n: number, boundaryGap: boolean, yLabelW: number, gridLeft = 4, gridRight = 14): { plotL: number; plotR: number; xOf: (i: number) => number } {
-  const plotL = gridLeft + yLabelW + 8
-  const plotR = width - gridRight
-  const span = plotR - plotL
-  const xOf = boundaryGap || n < 2 ? (i: number) => plotL + (span / n) * (i + 0.5) : (i: number) => plotL + (span / (n - 1)) * i
-  return { plotL, plotR, xOf }
+export function trendGeometry(
+  width: number,
+  n: number,
+  boundaryGap: boolean,
+  yLabelW: number,
+  xLabels?: { text: string[]; show: boolean[] },
+  measure?: (s: string) => number,
+): { plotL: number; plotR: number; xOf: (i: number) => number } {
+  const GRID_LEFT = 4
+  const GRID_RIGHT = 14
+  const at = (l: number, r: number) => (boundaryGap || n < 2 ? (i: number) => l + ((r - l) / n) * (i + 0.5) : (i: number) => l + ((r - l) / (n - 1)) * i)
+  let plotL = GRID_LEFT + yLabelW + 8
+  let plotR = width - GRID_RIGHT
+  if (xLabels && measure) {
+    const x0 = at(plotL, plotR)
+    let right = 0
+    let left = 0
+    xLabels.text.forEach((t, i) => {
+      if (!xLabels.show[i]) return
+      const half = measure(t) / 2
+      right = Math.max(right, x0(i) + half - (width - GRID_RIGHT))
+      left = Math.max(left, GRID_LEFT - (x0(i) - half))
+    })
+    plotR -= right
+    plotL += left
+  }
+  return { plotL, plotR, xOf: at(plotL, plotR) }
 }
 
 /** 输入框里的元：只收正整数，别的一律当没填 */

@@ -198,7 +198,7 @@ export function Stats() {
           ? capCats.flatMap((c, j) => [...c.over].map((i) => ({ i, real: c.real[i], key: `c${j}` })))
           : [...capBars.over].map((i) => ({ i, real: capBars.totals[i], key: 't' }))
     const axis = peaks.length ? capAxis(capYuan) : null
-    const geo = axis ? trendGeometry(chartW, keys.length, boundaryGap, capLabelWidth(axis)) : null
+    const geo = axis ? trendGeometry(chartW, keys.length, boundaryGap, capLabelWidth(axis), trendAxis, measure10) : null
     const placed = geo ? layoutPeaks(peaks, geo.xOf, geo.plotL, geo.plotR, measure10) : []
     const labelAt = new Map(placed.map((l) => [`${l.key}#${l.i}`, l]))
     // 错开到第二行的数字要占图顶上一行的空
@@ -264,6 +264,9 @@ export function Stats() {
             smooth: true,
             // 只画末点（用户 2026-09-28 选的丙），样子是 2026-09-29 挑的乙：小实心点 + 白边；点中的那天靠轴指示线
             ...endDot(keys.length, CHART.gap),
+            // 每个点都建出来（看不见，大小 0）：默认 'auto' 点一多就隔几个才建一个，挂在点上的尖顶数字跟着没了
+            //（31 天、窄屏、按季度看时只剩最左那个，2026-10-26 复查量出来的）
+            showAllSymbol: true,
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
             // 点少时每个点都标金额；被压的点换成尖顶数字（摆不下的不标，不能露出压过的值）
@@ -365,6 +368,8 @@ export function Stats() {
         type: 'line',
         smooth: true,
         ...endDot(keys.length, CHART.gap),
+        // 同合计：点一多 ECharts 会隔几个才建一个点，尖顶数字挂在点上会跟着没
+        showAllSymbol: true,
         lineStyle: { width: 2 },
         // 被压的点顶上标这条线自己颜色的尖顶数字
         data: capCats[j].data.map((v, i) => {

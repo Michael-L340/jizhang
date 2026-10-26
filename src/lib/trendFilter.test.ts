@@ -1,4 +1,8 @@
 import { readFileSync } from 'node:fs'
+import * as echarts from 'echarts/core'
+import { LineChart } from 'echarts/charts'
+import { GridComponent } from 'echarts/components'
+import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it } from 'vitest'
 import type { Transaction } from '../types'
 import { CAP_PEAK, capAxis, capSeries, capStack, dropBig, layoutPeaks, normalizeTrendFilter, parseYuanInt, peakText, trendGeometry, type Peak } from './trendFilter'
@@ -166,6 +170,44 @@ describe('封顶的尖顶数字（用户 2026-10-26：「尖尖，会重叠，�
     const band = (bar.plotR - bar.plotL) / 26
     expect(bar.xOf(0)).toBeCloseTo(bar.plotL + band / 2, 9)
   })
+
+  it('横坐标：最后一天的日期写在最右那一点正中间，伸出去的半截要让出来（ECharts 6 会把绘图区往里挤），不写字的那天不让', () => {
+    // 变异：不管横轴字 → 右边多算 24px，右半边数字的位置全估偏，红
+    const text = Array.from({ length: 26 }, (_, i) => `26/10/${i + 1}`)
+    const lastShown = trendGeometry(296, 26, false, 17, { text, show: text.map((_, i) => i % 5 === 0) }, w6)
+    expect(lastShown.plotR).toBeCloseTo(296 - 14 - w6('26/10/26') / 2, 9)
+    const lastHidden = trendGeometry(296, 26, false, 17, { text, show: text.map((_, i) => i % 7 === 0) }, w6)
+    expect(lastHidden.plotR).toBeGreaterThan(lastShown.plotR)
+    expect(lastHidden.plotR).toBeLessThanOrEqual(296 - 14)
+  })
+
+  it('31 个点、窄屏：每个被压的点都在，尖顶数字一个不少（页面的折线要 showAllSymbol: true）', () => {
+    // 变异：去掉 showAllSymbol → ECharts 点一多隔几个才建一个点，挂在点上的数字只剩最左那个，红
+    echarts.use([LineChart, GridComponent, SVGRenderer])
+    const n = 31
+    const values = Array.from({ length: n }, (_, i) => (i === 0 ? 3911.99 : i === 16 ? 1035.37 : i === 18 ? 1336.4 : 50))
+    const capped = capSeries(values, 800)
+    const c = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 296, height: 230 })
+    c.setOption({
+      animation: false,
+      grid: { left: 4, right: 14, top: 28, bottom: 0, containLabel: true },
+      xAxis: { type: 'category', data: values.map((_, i) => `26/10/${i + 1}`), boundaryGap: false, axisLabel: { fontSize: 10, interval: (i: number) => i % 7 === 0 } },
+      yAxis: { type: 'value', ...capAxis(800), axisLabel: { fontSize: 10, showMaxLabel: false } },
+      series: [
+        {
+          type: 'line',
+          smooth: true,
+          showSymbol: true,
+          symbolSize: (_v: unknown, p: { dataIndex: number }) => (p.dataIndex === n - 1 ? 6 : 0),
+          showAllSymbol: true,
+          data: capped.data.map((v, i) => (capped.over.has(i) ? { value: v, label: { show: true, position: 'top', fontSize: 10, formatter: peakText(values[i]) } } : v)),
+        },
+      ],
+    })
+    const svg = c.renderToSVGString()
+    c.dispose()
+    for (const t of ['▲3912', '▲1035', '▲1336']) expect(svg).toContain(`>${t}<`)
+  })
 })
 
 describe('统计页接线（源码守卫）', () => {
@@ -177,6 +219,12 @@ describe('统计页接线（源码守卫）', () => {
     expect(src).toContain('capBars.data[j].map(')
     expect(src).toContain('layoutPeaks(')
     expect(src).not.toContain('只对「合计」')
+  })
+
+  it('合计、分类两条折线都 showAllSymbol: true；横坐标按横轴字修正（2026-10-26 复查量出来的两处）', () => {
+    // 变异：哪条线漏了 showAllSymbol → 点多时那一档的尖顶数字消失，红；不传横轴字 → 位置估偏，红
+    expect(src.match(/showAllSymbol: true/g)?.length).toBe(2)
+    expect(src).toContain('trendGeometry(chartW, keys.length, boundaryGap, capLabelWidth(axis), trendAxis, measure10)')
   })
 })
 
