@@ -6,7 +6,21 @@ import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
 import { Switch } from '../components/Switch'
-import { capSeries, DEFAULT_TREND_FILTER, dropBig, normalizeTrendFilter, parseYuanInt, type TrendFilter } from '../lib/trendFilter'
+import {
+  capAxis,
+  capSeries,
+  capStack,
+  DEFAULT_TREND_FILTER,
+  dropBig,
+  layoutPeaks,
+  normalizeTrendFilter,
+  parseYuanInt,
+  PEAK_ROW_PX,
+  trendGeometry,
+  type Peak,
+  type PeakLabel,
+  type TrendFilter,
+} from '../lib/trendFilter'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, positiveAgg, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { fmtYuan } from '../lib/money'
@@ -29,6 +43,23 @@ const TAP = '<div style="margin-top:5px;font-size:11px;opacity:.6">再点一下�
 /** y 轴那列数字要占掉的宽度（最宽四位数 + 轴间距），给 axisLabels 估「一格有多宽」用 */
 const AXIS_GUTTER = 44
 const axisMoney = (v: number) => (Math.abs(v) >= 10000 ? `${+(v / 10000).toFixed(1)}万` : String(v))
+
+/** 量 10px 字的宽度（尖顶数字、纵轴刻度），和 ECharts 默认字体一样：Windows 上是微软雅黑，别处 sans-serif */
+let measureCtx: CanvasRenderingContext2D | null | undefined
+function measure10(s: string): number {
+  if (measureCtx === undefined) {
+    measureCtx = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d')
+    if (measureCtx) measureCtx.font = `10px ${/^Win/.test(navigator.platform) ? 'Microsoft YaHei' : 'sans-serif'}`
+  }
+  return measureCtx ? measureCtx.measureText(s).width : s.length * 6
+}
+
+/** 封顶时纵轴那列刻度字最宽多宽（containLabel 连不写字的最高刻度也量），算尖顶数字的横坐标用 */
+function capLabelWidth(axis: { max: number; interval: number | undefined }): number {
+  const ticks = [axis.max]
+  if (axis.interval) for (let t = 0; t <= axis.max; t += axis.interval) ticks.push(t)
+  return Math.max(...ticks.map((t) => measure10(axisMoney(t))))
+}
 
 export function Stats() {
   const txs = useStore((s) => s.transactions)
@@ -144,8 +175,12 @@ export function Stats() {
   const trendTotal = useMemo(() => seriesTotals(bigCut.txs, keys, unit, trendKind), [bigCut, keys, unit, trendKind])
   const trendByCat = useMemo(() => seriesByCategory(bigCut.txs, cats, keys, unit, trendKind), [bigCut, cats, keys, unit, trendKind])
   const trendSum = useMemo(() => trendTotal.reduce((a, b) => a + b, 0), [trendTotal])
-  // 「封顶」只管合计那条线：超过的点压成一个小尖、顶上标真实数字；分类 / 堆叠不封
-  const capped = useMemo(() => capSeries(trendTotal.map((v) => v / 100), tf.cap && lineMode === 'total' ? tf.capYuan : 0), [trendTotal, tf.cap, tf.capYuan, lineMode])
+  // 「封顶」三档都管（用户 2026-10-26：「封顶，在分类中，没有用」）：超过的点压成顶到门槛那条线的小尖，尖顶标真实数字；
+  // 堆叠是整根柱子按比例压到门槛。下面三份都是元
+  const capYuan = tf.cap ? tf.capYuan : 0
+  const capped = useMemo(() => capSeries(trendTotal.map((v) => v / 100), capYuan), [trendTotal, capYuan])
+  const capCats = useMemo(() => trendByCat.map((c) => capSeries(c.data.map((v) => v / 100), capYuan)), [trendByCat, capYuan])
+  const capBars = useMemo(() => capStack(trendByCat.map((c) => c.data.map((v) => v / 100)), capYuan), [trendByCat, capYuan])
   const fewPoints = keys.length <= 3
   // x 轴标签：年份永远带着，装不下就逐级降密度（降级链在 lib/chart.ts 的 axisLabels）。
   // 堆叠档多一根右轴，可用宽度要多让出一列数字，所以两张图分开算。
@@ -154,19 +189,46 @@ export function Stats() {
 
   const trendOption = useMemo(() => {
     const full = (i: number) => (unit === 'day' ? fmtDateZh(keys[i], false) : `${+keys[i].slice(0, 4)}年${+keys[i].slice(5)}月`)
+    const boundaryGap = lineMode === 'stack' ? true : fewPoints
+    // 这一档有没有被压的尖。有就换封顶的纵轴（最高 = 门槛 ÷ 0.93、门槛那条线正好是刻度），再把尖顶数字摆开
+    const peaks: Peak[] =
+      lineMode === 'total'
+        ? [...capped.over].map((i) => ({ i, real: capped.real[i], key: 't' }))
+        : lineMode === 'category'
+          ? capCats.flatMap((c, j) => [...c.over].map((i) => ({ i, real: c.real[i], key: `c${j}` })))
+          : [...capBars.over].map((i) => ({ i, real: capBars.totals[i], key: 't' }))
+    const axis = peaks.length ? capAxis(capYuan) : null
+    const geo = axis ? trendGeometry(chartW, keys.length, boundaryGap, capLabelWidth(axis)) : null
+    const placed = geo ? layoutPeaks(peaks, geo.xOf, geo.plotL, geo.plotR, measure10) : []
+    const labelAt = new Map(placed.map((l) => [`${l.key}#${l.i}`, l]))
+    // 错开到第二行的数字要占图顶上一行的空
+    const bump = placed.some((l) => l.row === 1) ? PEAK_ROW_PX : 0
+    // 尖顶数字挂在那一点自己的 label 上：折线挂在被压的那个点，堆叠挂在那根柱子最上面一段
+    const peakLabel = (l: PeakLabel, color: string) => ({
+      show: true,
+      position: 'top' as const,
+      distance: 3,
+      fontSize: 10,
+      color,
+      formatter: l.text,
+      align: l.align,
+      offset: [0, -l.row * PEAK_ROW_PX],
+    })
+    // 封顶压下去的点，提示框里仍然是真实数字
+    const realOf = (p: { dataIndex: number; seriesName: string; value: number }) =>
+      lineMode === 'total' ? capped.real[p.dataIndex] : (capCats[trendByCat.findIndex((c) => c.name === p.seriesName)]?.real[p.dataIndex] ?? p.value)
     const base = {
       tooltip: {
         trigger: 'axis',
         confine: true,
-        order: 'valueDesc',
         formatter: (ps: { dataIndex: number; marker: string; seriesName: string; value: number }[]) => {
           if (!ps.length) return ''
           const head = full(ps[0].dataIndex)
-          // 封顶压下去的点，提示框里仍然是真实数字
-          const val = (p: { dataIndex: number; value: number }) => (capped.over.has(p.dataIndex) ? capped.real[p.dataIndex] : p.value)
+          // 按真实数字从大到小：被压的几条图上一样高，ECharts 自己的排序分不出谁大
           const rows = ps
-            .filter((p) => val(p) > 0)
-            .map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(val(p))}</span>`)
+            .filter((p) => realOf(p) > 0)
+            .sort((a, b) => realOf(b) - realOf(a))
+            .map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(realOf(p))}</span>`)
           return [head, ...(rows.length ? rows : [trendKind === 'expense' ? '无支出' : '无收入'])].join('<br/>') + TAP
         },
       },
@@ -175,19 +237,26 @@ export function Stats() {
         type: 'category',
         data: trendAxis.text,
         // 柱子必须留边距，否则首尾两根会被画到轴外面只剩一半
-        boundaryGap: lineMode === 'stack' ? true : fewPoints,
+        boundaryGap,
         axisTick: { show: false },
         axisLine: { lineStyle: { color: CHART.axis } },
         axisLabel: { fontSize: 10, color: CHART.label, interval: (i: number) => trendAxis.show[i] ?? false },
       },
-      yAxis: { type: 'value', max: capped.max, splitLine: { lineStyle: { color: CHART.axis } }, axisLabel: { fontSize: 10, color: CHART.label, formatter: axisMoney } },
+      yAxis: {
+        type: 'value',
+        max: axis?.max,
+        interval: axis?.interval,
+        splitLine: { lineStyle: { color: CHART.axis } },
+        // 封顶时最高那个刻度（门槛 ÷ 0.93，不是整数）不写字
+        axisLabel: { fontSize: 10, color: CHART.label, formatter: axisMoney, showMaxLabel: axis ? false : undefined },
+      },
     }
     if (lineMode === 'total') {
       return {
         ...base,
         color: [trendKind === 'expense' ? CHART.expense : CHART.income],
         legend: { show: false },
-        grid: { ...base.grid, top: 16 },
+        grid: { ...base.grid, top: 16 + bump },
         series: [
           {
             name: trendKind === 'expense' ? '支出' : '收入',
@@ -197,16 +266,13 @@ export function Stats() {
             ...endDot(keys.length, CHART.gap),
             lineStyle: { width: 2.5 },
             areaStyle: { opacity: 0.1 },
-            label: {
-              show: fewPoints || capped.over.size > 0,
-              position: 'top',
-              fontSize: 10,
-              color: CHART.label,
-              // 封顶的那几个尖顶上标真实数字（带 ▲），点少时每个点都标
-              formatter: (p: { dataIndex: number; value: number }) =>
-                capped.over.has(p.dataIndex) ? `▲${yuan(capped.real[p.dataIndex])}` : fewPoints ? yuan(p.value) : '',
-            },
-            data: capped.data,
+            // 点少时每个点都标金额；被压的点换成尖顶数字（摆不下的不标，不能露出压过的值）
+            label: { show: fewPoints, position: 'top', fontSize: 10, color: CHART.label, formatter: (p: { value: number }) => yuan(p.value) },
+            data: capped.data.map((v, i) => {
+              if (!capped.over.has(i)) return v
+              const l = labelAt.get(`t#${i}`)
+              return { value: v, label: l ? peakLabel(l, CHART.label) : { show: false } }
+            }),
           },
         ],
       }
@@ -236,10 +302,15 @@ export function Stats() {
         barBase.push(acc)
         acc = acc.map((v, i) => v + c.data[i])
       }
+      // 被压的柱子：尖顶数字挂在它最上面那一段（这一天自己有钱的最后一类）
+      const topOf = (i: number) => {
+        for (let j = trendByCat.length - 1; j >= 0; j--) if (trendByCat[j].data[i] > 0) return j
+        return -1
+      }
       return {
         ...base,
         color: names.map((n, i) => categoryColor(n, i)),
-        grid: { ...base.grid, top },
+        grid: { ...base.grid, top: top + bump },
         legend,
         tooltip: {
           ...base.tooltip,
@@ -247,12 +318,13 @@ export function Stats() {
           axisPointer: { type: 'shadow' },
           formatter: (ps: { dataIndex: number; marker: string; seriesName: string; value: number }[]) => {
             if (!ps.length) return ''
-            const bars = ps.filter((p) => p.value > 0).sort((a, b) => b.value - a.value)
+            // 封顶压过的柱子各段是按比例缩过的，提示框里写真实数字、占比也按真实数字算
+            const bars = ps.filter((p) => realOf(p) > 0).sort((a, b) => realOf(b) - realOf(a))
             if (!bars.length) return [full(ps[0].dataIndex), trendKind === 'expense' ? '无支出' : '无收入'].join('<br/>') + TAP
-            const sum = bars.reduce((t, p) => t + p.value, 0)
+            const sum = bars.reduce((t, p) => t + realOf(p), 0)
             const rows = bars.map(
               (p) =>
-                `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(p.value)}</span><span style="float:right;margin-left:16px;opacity:.6">${Math.round((p.value / sum) * 100)}%</span>`,
+                `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(realOf(p))}</span><span style="float:right;margin-left:16px;opacity:.6">${Math.round((realOf(p) / sum) * 100)}%</span>`,
             )
             const total = `<span style="opacity:.75">合计</span><span style="float:right;margin-left:16px;font-weight:600">${yuan(sum)}</span>`
             return [full(ps[0].dataIndex), ...rows, '<div style="border-top:1px solid rgba(255,255,255,.22);margin:5px 0"></div>', total].join('<br/>') + TAP
@@ -275,7 +347,10 @@ export function Stats() {
           animationDuration: (i: number) => (barTotal[i] > 0 ? Math.max(1, (c.data[i] / barTotal[i]) * GROW_MS) : 1),
           // 段与段之间留一道白缝，五段叠在一起才分得开（和饼图同一个做法）
           itemStyle: { borderColor: CHART.gap, borderWidth: 1 },
-          data: c.data.map((v) => v / 100),
+          data: capBars.data[j].map((v, i) => {
+            const l = capBars.over.has(i) && topOf(i) === j ? labelAt.get(`t#${i}`) : undefined
+            return l ? { value: v, label: peakLabel(l, CHART.label) } : v
+          }),
         })),
       }
     }
@@ -283,18 +358,22 @@ export function Stats() {
     return {
       ...base,
       color: names.map((n, i) => categoryColor(n, i)),
-      grid: { ...base.grid, top },
+      grid: { ...base.grid, top: top + bump },
       legend,
-      series: trendByCat.map((c) => ({
+      series: trendByCat.map((c, j) => ({
         name: c.name,
         type: 'line',
         smooth: true,
         ...endDot(keys.length, CHART.gap),
         lineStyle: { width: 2 },
-        data: c.data.map((v) => v / 100),
+        // 被压的点顶上标这条线自己颜色的尖顶数字
+        data: capCats[j].data.map((v, i) => {
+          const l = capCats[j].over.has(i) ? labelAt.get(`c${j}#${i}`) : undefined
+          return l ? { value: v, label: peakLabel(l, categoryColor(c.name, j)) } : v
+        }),
       })),
     }
-  }, [lineMode, keys, trendAxis, trendTotal, trendByCat, capped, fewPoints, unit, trendKind, chartW])
+  }, [lineMode, keys, trendAxis, trendByCat, capped, capCats, capBars, capYuan, fewPoints, unit, trendKind, chartW])
 
   // 余额曲线直接画那本账：外页面校准记录是 adjust，在它的日期上是一级台阶，以前的点不动
   //（2026-09-27 起；以前是整条平移，见 docs/里外页面.md）
@@ -548,7 +627,7 @@ export function Stats() {
         />
         <TrendFilterRow
           label="封顶"
-          sub="超过的画成一个小尖、标出数字（只对「合计」）"
+          sub="超过的画成一个小尖、标出数字"
           on={tf.cap}
           yuan={tf.capYuan}
           onToggle={(on) => setTf({ ...tf, cap: on })}
