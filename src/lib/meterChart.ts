@@ -136,6 +136,19 @@ const bjTime = (ms: number) => {
 }
 
 /**
+ * 「什么时候最费电」提示框第一行：起点带周几；同一天只写到几点，第二天写「次日」，隔两天以上照写日期和周几
+ * （用户 2026-10-26 选「丁」：「10/20 周二 19:48 – 次日 07:51」，一行写全日期和周几太宽、拆两行太丑）
+ */
+export function fmtStepSpan(start: number, to: number): string {
+  const day = (ms: number) => Math.floor((ms + 8 * 3600_000) / 86400_000)
+  const hm = (ms: number) => bjTime(ms).split(' ')[1]
+  const withWeek = (ms: number) => `${bjTime(ms).split(' ')[0]} ${WEEKDAY_NAMES[(new Date(ms + 8 * 3600_000).getUTCDay() + 6) % 7]} ${hm(ms)}`
+  const gap = day(to) - day(start)
+  if (gap === 0) return `${withWeek(start)}–${hm(to)}`
+  return `${withWeek(start)} – ${gap === 1 ? `次日 ${hm(to)}` : withWeek(to)}`
+}
+
+/**
  * 什么时候最费电：每一段读数的平均速度画成台阶（这段时间里每小时几度）。
  * 两段之间断开（中间有一段读数倒退被跳过了）就断开画，不连成一条斜线。
  *
@@ -165,7 +178,7 @@ export function rateOption(steps: { from: number; to: number; start: number; per
         const s = steps.find((x) => x.from <= t && t <= x.to)
         if (!s) return `${bjTime(t)}<br/>这段没有读数`
         // 写这段真正的起点（start）；「一共」也按整段算
-        return `${bjTime(s.start)} – ${bjTime(s.to)}<br/><b>每小时 ${s.perHour.toFixed(2)} 度</b><br/><span style="opacity:.7">这段一共 ${((s.perHour * (s.to - s.start)) / 3600_000).toFixed(1)} 度</span>`
+        return `${fmtStepSpan(s.start, s.to)}<br/><b>每小时 ${s.perHour.toFixed(2)} 度</b><br/><span style="opacity:.7">这段一共 ${((s.perHour * (s.to - s.start)) / 3600_000).toFixed(1)} 度</span>`
       },
     },
     xAxis: {

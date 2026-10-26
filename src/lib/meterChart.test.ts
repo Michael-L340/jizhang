@@ -8,7 +8,7 @@ import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
 import { bucketAverage, dailyUsage, hourProfile, parseReading, peakHours, rateSteps, summarize, usageBuckets, weekdayProfile } from './meter'
-import { bucketOption, dailyOption, hourOption, rateMarks, rateOption, rateYAxis, weekdayOption } from './meterChart'
+import { bucketOption, dailyOption, fmtStepSpan, hourOption, rateMarks, rateOption, rateYAxis, weekdayOption } from './meterChart'
 import { CHART } from './palette'
 
 echarts.use([BarChart, LineChart, GridComponent, TooltipComponent, DataZoomSliderComponent, DataZoomInsideComponent, SVGRenderer])
@@ -189,6 +189,16 @@ describe('提示框的措辞和找段', () => {
     expect(pts(swapped).filter((p) => p[1] === null)).toHaveLength(1)
   })
 
+  it('什么时候最费电：提示框第一行带周几，同一天只写到几点、第二天写「次日」、隔两天以上写全（用户 2026-10-26 选「丁」）', () => {
+    // 变异：改回「10/20 19:48 – 10/21 07:51」或者不分同一天 / 次日 → 红
+    const at = (s: string) => Date.parse(`${s.replace(' ', 'T')}:00+08:00`)
+    expect(fmtStepSpan(at('2026-10-20 19:48'), at('2026-10-21 07:51'))).toBe('10/20 周二 19:48 – 次日 07:51')
+    expect(fmtStepSpan(at('2026-10-20 12:05'), at('2026-10-20 19:48'))).toBe('10/20 周二 12:05–19:48')
+    expect(fmtStepSpan(at('2026-10-25 23:47'), at('2026-10-27 11:22'))).toBe('10/25 周日 23:47 – 10/27 周二 11:22')
+    // 正好到第二天零点也算次日
+    expect(fmtStepSpan(at('2026-10-20 18:00'), at('2026-10-21 00:00'))).toBe('10/20 周二 18:00 – 次日 00:00')
+  })
+
   it('什么时候最费电：接着的两段，第二段起点往右挪 1 毫秒，提示框在第二段左半边找到的是第二段；写的是整段的起点和总量', () => {
     // 变异：不挪 → 两段共用一个 x，find 先命中上一段，红
     const rs = [R('2026-10-05 20:00', '3000.0'), R('2026-10-06 08:00', '3006.0'), R('2026-10-06 20:00', '3012.0')]
@@ -198,10 +208,10 @@ describe('提示框的措辞和找段', () => {
     const pts = o.series[0].data
     expect(pts[2][0]).toBe(steps[1].from + 1)
     const tip = o.tooltip.formatter([{ value: pts[2] }])
-    expect(tip).toContain('10/6 08:00 – 10/6 20:00')
+    expect(tip).toContain('10/6 周二 08:00–20:00')
     expect(tip).toContain('一共 6.0 度')
     // 第一段被 since 截了起点，提示框仍写真正的起点 10/5 20:00、一共 6.0 度
-    expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('10/5 20:00 – 10/6 08:00')
+    expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('10/5 周一 20:00 – 次日 08:00')
     expect(o.tooltip.formatter([{ value: pts[0] }])).toContain('一共 6.0 度')
   })
 })
