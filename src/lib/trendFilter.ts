@@ -41,6 +41,17 @@ export function dropBig(txs: Transaction[], kind: 'expense' | 'income', cents: n
 }
 
 /**
+ * 退款（勾了「抵消」的收入）比当天花的还多，这天的支出算出来是负的。图上画成 0、提示框里写多出多少
+ *（用户 2026-11-03 选「乙」：线掉到 0 下面、纵轴多出一格 −200，提示框又写「无支出」，看着像出错；
+ * 各点加起来和顶上的合计差这一截，用户：「谁没事各点加起来」）。
+ * minus[i] = 低于 0 的那截（正数）。没有负数时 data 就是传进来的那个数组。单位随传入的值。
+ */
+export function floorZero(values: number[]): { data: number[]; minus: number[] } {
+  if (!values.some((v) => v < 0)) return { data: values, minus: values.map(() => 0) }
+  return { data: values.map((v) => (v < 0 ? 0 : v)), minus: values.map((v) => (v < 0 ? -v : 0)) }
+}
+
+/**
  * 封顶时被压的尖正好顶到门槛那条线，纵轴最高画到 门槛 ÷ CAP_PEAK：尖顶落在纵轴的九成多一点，不冲顶（用户「不冲顶」）。
  * 2026-10-26 前反过来：尖压到 门槛 × 0.93、纵轴最高 = 门槛，没超过门槛的普通一天（比如 761 对 800）反而画得比被压的尖还高。
  */

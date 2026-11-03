@@ -12,6 +12,7 @@ import {
   capStack,
   DEFAULT_TREND_FILTER,
   dropBig,
+  floorZero,
   layoutPeaks,
   normalizeTrendFilter,
   parseYuanInt,
@@ -178,9 +179,12 @@ export function Stats() {
   // 「封顶」三档都管（用户 2026-10-26：「封顶，在分类中，没有用」）：超过的点压成顶到门槛那条线的小尖，尖顶标真实数字；
   // 堆叠是整根柱子按比例压到门槛。下面三份都是元
   const capYuan = tf.cap ? tf.capYuan : 0
-  const capped = useMemo(() => capSeries(trendTotal.map((v) => v / 100), capYuan), [trendTotal, capYuan])
-  const capCats = useMemo(() => trendByCat.map((c) => capSeries(c.data.map((v) => v / 100), capYuan)), [trendByCat, capYuan])
-  const capBars = useMemo(() => capStack(trendByCat.map((c) => c.data.map((v) => v / 100)), capYuan), [trendByCat, capYuan])
+  // 退款比当天花的多（净额是负的）：图上画成 0，多出的那截写进提示框（用户 2026-11-03 选「乙」）。下面三档都画这两份
+  const plotTotal = useMemo(() => floorZero(trendTotal), [trendTotal])
+  const plotCats = useMemo(() => trendByCat.map((c) => floorZero(c.data)), [trendByCat])
+  const capped = useMemo(() => capSeries(plotTotal.data.map((v) => v / 100), capYuan), [plotTotal, capYuan])
+  const capCats = useMemo(() => plotCats.map((c) => capSeries(c.data.map((v) => v / 100), capYuan)), [plotCats, capYuan])
+  const capBars = useMemo(() => capStack(plotCats.map((c) => c.data.map((v) => v / 100)), capYuan), [plotCats, capYuan])
   const fewPoints = keys.length <= 3
   // x 轴标签：年份永远带着，装不下就逐级降密度（降级链在 lib/chart.ts 的 axisLabels）。
   // 堆叠档多一根右轴，可用宽度要多让出一列数字，所以两张图分开算。
@@ -217,6 +221,14 @@ export function Stats() {
     // 封顶压下去的点，提示框里仍然是真实数字
     const realOf = (p: { dataIndex: number; seriesName: string; value: number }) =>
       lineMode === 'total' ? capped.real[p.dataIndex] : (capCats[trendByCat.findIndex((c) => c.name === p.seriesName)]?.real[p.dataIndex] ?? p.value)
+    // 画成 0 的那天退款多出来的那截（分）：提示框里单独一行灰字，不然只看到「无支出」，以为是 0
+    const minusOf = (p: { dataIndex: number; seriesName: string }) =>
+      (lineMode === 'total' ? plotTotal : plotCats[trendByCat.findIndex((c) => c.name === p.seriesName)])?.minus[p.dataIndex] ?? 0
+    const overWord = trendKind === 'expense' ? '退款比花的多' : '抵掉的比收的多'
+    const minusNotes = (ps: { dataIndex: number; seriesName: string }[]) =>
+      ps
+        .filter((p) => minusOf(p) > 0)
+        .map((p) => `<span style="opacity:.6">${lineMode === 'total' ? '' : `${esc(p.seriesName)}：`}${overWord} ${yuan(minusOf(p) / 100)}</span>`)
     const base = {
       tooltip: {
         trigger: 'axis',
@@ -229,7 +241,7 @@ export function Stats() {
             .filter((p) => realOf(p) > 0)
             .sort((a, b) => realOf(b) - realOf(a))
             .map((p) => `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(realOf(p))}</span>`)
-          return [head, ...(rows.length ? rows : [trendKind === 'expense' ? '无支出' : '无收入'])].join('<br/>') + TAP
+          return [head, ...(rows.length ? rows : [trendKind === 'expense' ? '无支出' : '无收入']), ...minusNotes(ps)].join('<br/>') + TAP
         },
       },
       grid: { left: 4, right: 14, top: 34, bottom: 0, containLabel: true },
@@ -298,16 +310,17 @@ export function Stats() {
 
     if (lineMode === 'stack') {
       // 每根柱子的总高，和每一段下面压着多少——动画按这两个数分配延迟和时长
-      const barTotal = keys.map((_, i) => trendByCat.reduce((t, c) => t + c.data[i], 0))
+      // 动画按画出来的高度分（负的那截画成 0 了）
+      const barTotal = keys.map((_, i) => plotCats.reduce((t, c) => t + c.data[i], 0))
       const barBase: number[][] = []
       let acc = keys.map(() => 0)
-      for (const c of trendByCat) {
+      for (const c of plotCats) {
         barBase.push(acc)
         acc = acc.map((v, i) => v + c.data[i])
       }
       // 被压的柱子：尖顶数字挂在它最上面那一段（这一天自己有钱的最后一类）
       const topOf = (i: number) => {
-        for (let j = trendByCat.length - 1; j >= 0; j--) if (trendByCat[j].data[i] > 0) return j
+        for (let j = plotCats.length - 1; j >= 0; j--) if (plotCats[j].data[i] > 0) return j
         return -1
       }
       return {
@@ -323,14 +336,14 @@ export function Stats() {
             if (!ps.length) return ''
             // 封顶压过的柱子各段是按比例缩过的，提示框里写真实数字、占比也按真实数字算
             const bars = ps.filter((p) => realOf(p) > 0).sort((a, b) => realOf(b) - realOf(a))
-            if (!bars.length) return [full(ps[0].dataIndex), trendKind === 'expense' ? '无支出' : '无收入'].join('<br/>') + TAP
+            if (!bars.length) return [full(ps[0].dataIndex), trendKind === 'expense' ? '无支出' : '无收入', ...minusNotes(ps)].join('<br/>') + TAP
             const sum = bars.reduce((t, p) => t + realOf(p), 0)
             const rows = bars.map(
               (p) =>
                 `${p.marker}${esc(p.seriesName)}<span style="float:right;margin-left:16px;font-weight:600">${yuan(realOf(p))}</span><span style="float:right;margin-left:16px;opacity:.6">${Math.round((realOf(p) / sum) * 100)}%</span>`,
             )
             const total = `<span style="opacity:.75">合计</span><span style="float:right;margin-left:16px;font-weight:600">${yuan(sum)}</span>`
-            return [full(ps[0].dataIndex), ...rows, '<div style="border-top:1px solid rgba(255,255,255,.22);margin:5px 0"></div>', total].join('<br/>') + TAP
+            return [full(ps[0].dataIndex), ...rows, '<div style="border-top:1px solid rgba(255,255,255,.22);margin:5px 0"></div>', total, ...minusNotes(ps)].join('<br/>') + TAP
           },
         },
         series: trendByCat.map((c, j) => ({
@@ -347,7 +360,7 @@ export function Stats() {
           // 每根柱子各自按自己的总额归一，所以高矮不同的柱子同时起、同时到顶。
           animationEasing: 'linear' as const,
           animationDelay: (i: number) => (barTotal[i] > 0 ? (barBase[j][i] / barTotal[i]) * GROW_MS : 0),
-          animationDuration: (i: number) => (barTotal[i] > 0 ? Math.max(1, (c.data[i] / barTotal[i]) * GROW_MS) : 1),
+          animationDuration: (i: number) => (barTotal[i] > 0 ? Math.max(1, (plotCats[j].data[i] / barTotal[i]) * GROW_MS) : 1),
           // 段与段之间留一道白缝，五段叠在一起才分得开（和饼图同一个做法）
           itemStyle: { borderColor: CHART.gap, borderWidth: 1 },
           data: capBars.data[j].map((v, i) => {
@@ -378,7 +391,7 @@ export function Stats() {
         }),
       })),
     }
-  }, [lineMode, keys, trendAxis, trendByCat, capped, capCats, capBars, capYuan, fewPoints, unit, trendKind, chartW])
+  }, [lineMode, keys, trendAxis, trendByCat, plotTotal, plotCats, capped, capCats, capBars, capYuan, fewPoints, unit, trendKind, chartW])
 
   // 余额曲线直接画那本账：外页面校准记录是 adjust，在它的日期上是一级台阶，以前的点不动
   //（2026-09-27 起；以前是整条平移，见 docs/里外页面.md）

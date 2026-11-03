@@ -5,7 +5,7 @@ import { GridComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it } from 'vitest'
 import type { Transaction } from '../types'
-import { CAP_PEAK, capAxis, capSeries, capStack, dropBig, layoutPeaks, normalizeTrendFilter, parseYuanInt, peakText, trendGeometry, type Peak } from './trendFilter'
+import { CAP_PEAK, capAxis, capSeries, capStack, dropBig, floorZero, layoutPeaks, normalizeTrendFilter, parseYuanInt, peakText, trendGeometry, type Peak } from './trendFilter'
 
 let n = 0
 const tx = (o: Partial<Transaction>): Transaction => ({
@@ -210,6 +210,25 @@ describe('封顶的尖顶数字（用户 2026-10-26：「尖尖，会重叠，�
   })
 })
 
+describe('退款比花的多的那天（用户 2026-11-03：「感觉负了，但其实是0」）', () => {
+  it('负的画成 0，多出的那截记在 minus；没有负数时原样', () => {
+    expect(floorZero([500, -1500, 0, 70])).toEqual({ data: [500, 0, 0, 70], minus: [0, 1500, 0, 0] })
+    const v = [1, 0, 2]
+    expect(floorZero(v).data).toBe(v)
+    expect(floorZero(v).minus).toEqual([0, 0, 0])
+  })
+
+  it('真画一次：九月那种一天 −15 元，纵轴不再多出一格 −200', () => {
+    const days = [180, 500, 280, 240, 100, 120, 200, 90, 70, 120, 80, 60, 70, 220, 70, 120, 130, 80, 90, 70, 60, 280, -15, 70, 70, 80, 200, 140, 350, 180, 950, 30]
+    const c = echarts.init(null, null, { renderer: 'svg', ssr: true, width: 330, height: 220 })
+    c.setOption({ animation: false, xAxis: { type: 'category', data: days.map((_, i) => i) }, yAxis: { type: 'value' }, series: [{ type: 'line', smooth: true, data: floorZero(days).data }] })
+    type Inner = { getModel(): { getComponent(t: string): { axis: { scale: { getExtent(): number[] } } } } }
+    const ext = (c as unknown as Inner).getModel().getComponent('yAxis').axis.scale.getExtent()
+    c.dispose()
+    expect(ext[0]).toBe(0)
+  })
+})
+
 describe('统计页接线（源码守卫）', () => {
   const src = readFileSync(new URL('../pages/Stats.tsx', import.meta.url), 'utf8')
   it('封顶不再只管「合计」：分类、堆叠也用封顶后的数，尖顶数字走 layoutPeaks；设置里不写「只对合计」', () => {
@@ -225,6 +244,15 @@ describe('统计页接线（源码守卫）', () => {
     // 变异：哪条线漏了 showAllSymbol → 点多时那一档的尖顶数字消失，红；不传横轴字 → 位置估偏，红
     expect(src.match(/showAllSymbol: true/g)?.length).toBe(2)
     expect(src).toContain('trendGeometry(chartW, keys.length, boundaryGap, capLabelWidth(axis), trendAxis, measure10)')
+  })
+
+  it('三档都画 floorZero 之后的数，三个提示框都带上「退款比花的多」那行（2026-11-03）', () => {
+    // 变异：哪一档改回吃 trendTotal / trendByCat 的原始数 → 红；哪个提示框漏了 minusNotes → 红
+    expect(src).toContain('capSeries(plotTotal.data.map(')
+    expect(src).toContain('plotCats.map((c) => capSeries(')
+    expect(src).toContain('capStack(plotCats.map(')
+    expect(src.match(/\.\.\.minusNotes\(ps\)/g)?.length).toBe(3)
+    expect(src).toContain("'退款比花的多'")
   })
 })
 
