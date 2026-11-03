@@ -345,7 +345,7 @@ export function Stats() {
             const total = `<span style="opacity:.75">合计</span><span style="float:right;margin-left:16px;font-weight:600">${yuan(sum)}</span>`
             // 分隔线是块元素，自己就换行：别把它放进 join('<br/>') 里，前后各多一个 <br/> 会空出两三行（用户 2026-11-03 指出）。
             // 颜色用坐标轴那条浅灰：以前写的白色在白底提示框上看不见
-            const sep = `<div style="border-top:1px solid ${CHART.axis};margin:4px 0"></div>`
+            const sep = `<div style="border-top:1px solid ${CHART.axis};margin:12px 0"></div>`
             return [full(ps[0].dataIndex), ...rows].join('<br/>') + sep + [total, ...minusNotes(ps)].join('<br/>') + TAP
           },
         },

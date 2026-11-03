@@ -260,6 +260,8 @@ describe('统计页接线（源码守卫）', () => {
     expect(src).not.toMatch(/\.\.\.rows, '<div/)
     expect(src).toContain("join('<br/>') + sep + [total")
     expect(src).not.toContain('rgba(255,255,255,.22)')
+    // 线上下各空 12px（用户 2026-11-03 在 8 / 12 里选了「乙」，4px 嫌太紧凑）
+    expect(src).toContain('border-top:1px solid ${CHART.axis};margin:12px 0')
   })
 })
 
