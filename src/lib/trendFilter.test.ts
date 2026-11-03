@@ -254,6 +254,13 @@ describe('统计页接线（源码守卫）', () => {
     expect(src.match(/\.\.\.minusNotes\(ps\)/g)?.length).toBe(3)
     expect(src).toContain("'退款比花的多'")
   })
+
+  it('堆叠提示框的分隔线不夹在 <br/> 中间、颜色看得见（2026-11-03：「日常」和「合计」之间空一大块）', () => {
+    // 变异：分隔线放回 join('<br/>') 的数组里 → 红；改回白色 → 红
+    expect(src).not.toMatch(/\.\.\.rows, '<div/)
+    expect(src).toContain("join('<br/>') + sep + [total")
+    expect(src).not.toContain('rgba(255,255,255,.22)')
+  })
 })
 
 describe('输入与存储', () => {
