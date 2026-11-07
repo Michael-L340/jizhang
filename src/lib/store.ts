@@ -228,6 +228,8 @@ interface Side<T extends { id: string }> {
   settled: Map<string, number>
   /** 队列最近一次落盘成功了没有（只管 outboxUnsaved） */
   onDisk: boolean
+  /** 等不及先进了队列、原来那次请求还在路上的（见 sendWithin） */
+  late: Map<string, Promise<void>>
   unpack: (raw: unknown) => Pending<T>
   put: (v: T) => Promise<void>
   del: (id: string) => Promise<void>
@@ -245,6 +247,7 @@ const mrSide: Side<MeterReading> = {
   pending: pendingMr,
   settled: settledMr,
   onDisk: true,
+  late: new Map(),
   unpack: unpackMrOutbox,
   put: (v) => api.insertMeterReading(v),
   del: (id) => api.deleteMeterReading(id),
@@ -261,6 +264,7 @@ const mnSide: Side<MeterNote> = {
   pending: pendingMn,
   settled: settledMn,
   onDisk: true,
+  late: new Map(),
   unpack: unpackMnOutbox,
   put: (v) => api.saveMeterNote(v),
   del: (id) => api.deleteMeterNote(id),
@@ -391,11 +395,17 @@ function offlineToast(saved: boolean, what: string): string {
 }
 
 /**
- * 用电那两张表写云端最多等这么久（writeSide）。网太慢时「保存中…」一直转，用户关掉弹层再记一遍，
- * 新弹层是新 id，两次都落了库就成了两条（2026-10-25 的 17:54 / 17:55，同一个数隔 15 秒）。
- * 过了这个时间就当没网：先存本机进队列。补传用的是同一个 id，原来那次晚到了也只是覆盖同一行
+ * 写云端（记账、改账、删账、记读数、写备注）最多等这么久，过了就当没网：先存本机进队列。
+ *
+ * 用电那边 2026-10-25 先有：网太慢时「保存中…」一直转，用户关掉弹层再记一遍，新弹层是新 id，
+ * 两次都落了库就成了两条（17:54 / 17:55，同一个数隔 15 秒）。当时定 8 秒。
+ * 2026-11-07 记账也加上、两边一起缩到 4 秒（用户：「8s 有点久」）。记账以前没有上限：
+ * 保存键转到浏览器自己放弃为止，这期间划掉 App，那笔就丢了——它只在界面和在途补丁里，还没进队列。
+ *
+ * 判错（其实只是慢）没有坏处：补传用的是同一个 id，不会变两条；原来那次晚到怎么办见 sendWithin。
+ * 也别再往下压：隔久了打开 App 的第一下要先换一次 token，弱网下两三秒是常事，太短会动不动就说「网太慢」
  */
-export const WRITE_WAIT_MS = 8_000
+export const WRITE_WAIT_MS = 4_000
 const SLOW = new Error('网太慢')
 function slowToast(saved: boolean, what: string): string {
   return saved ? `网太慢，${what}先存在本机，稍后自动上传` : `网太慢，这台设备也存不下：先别关 App，稍后会自动上传`
@@ -409,6 +419,31 @@ function within(p: Promise<void>, ms: number): Promise<boolean> {
       (e: unknown) => (clearTimeout(timer), reject(e)),
     )
   })
+}
+
+/** 等不及先进了队列、原来那次请求还在路上的流水（id → 它有结果的那一刻）。用电那两张各有一份（Side.late） */
+const lateTx = new Map<string, Promise<void>>()
+
+/**
+ * 发一次写请求，最多等 WRITE_WAIT_MS：等到了就照它的结果（失败照常抛），等不到返回 false，调用方当没网进队列。
+ * 原来那次请求并没有撤回，它还会到，所以记进 late，**在它有结果之前补传跳过这个 id**：
+ * 不然补传先到、它后到，会把补传写的新状态顶掉——网慢时记错了马上删掉（用户 2026-11-07 问的就是这个），
+ * 「删除」先到、什么也没删，晚到的「新增」让记错的那笔回到云端，下次同步又冒出来；超时后又改了一次，同理被改回去。
+ * 它有了结果（成败都算）就再叫一次补传，这一笔才传上去
+ */
+async function sendWithin(late: Map<string, Promise<void>>, id: string, p: Promise<void>): Promise<boolean> {
+  // 测试里没设返回值的假 api 返回 undefined；真的 api 都是 async，Promise.resolve 原样返回它
+  const req = Promise.resolve(p)
+  if (await within(req, WRITE_WAIT_MS)) return true
+  const done: Promise<void> = req.then(
+    () => {},
+    () => {},
+  ).then(() => {
+    if (late.get(id) === done) late.delete(id)
+    void useStore.getState().flushOutbox()
+  })
+  late.set(id, done)
+  return false
 }
 
 /** 队列最近一次落盘成功了没有。老缓存（里面包着一份队列）只在它为真时才许删 */
@@ -469,6 +504,8 @@ function patchSide<T extends { id: string }>(s: Side<T>, id: string, v: T | type
  */
 async function flushSide<T extends { id: string }>(s: Side<T>): Promise<boolean> {
   for (const [id, v] of [...s.q.entries()]) {
+    // 原来那次请求还在路上：这会儿传上去会被它晚到时顶掉，等它有结果（sendWithin 到时候会再叫一次补传）
+    if (s.late.has(id)) continue
     try {
       if (v === DELETED) await s.del(id)
       else await s.put(v)
@@ -507,7 +544,7 @@ async function writeSide<T extends { id: string }>(s: Side<T>, id: string, v: T 
   const st = useStore.getState()
   try {
     if (offlineNow()) throw offlineError()
-    if (!(await within(v === DELETED ? s.del(id) : s.put(v), WRITE_WAIT_MS))) throw SLOW
+    if (!(await sendWithin(s.late, id, v === DELETED ? s.del(id) : s.put(v)))) throw SLOW
     // 登记为在途：紧接着的一次 refresh 可能还拉不到它（或者删之前就出门的那次还带着它）
     s.pending.set(id, v)
     settle(s.settled, s.pending, id)
@@ -814,6 +851,8 @@ export const useStore = create<State>((set, get) => ({
     try {
       // 先拷一份再遍历：循环体里会删 outboxTx，边删边遍历行为不确定
       for (const [id, v] of [...outboxTx.entries()]) {
+        // 原来那次请求还在路上：这会儿传上去会被它晚到时顶掉。等它有结果，sendWithin 会再叫一次补传
+        if (lateTx.has(id)) continue
         try {
           if (v === DELETED) await api.deleteTx(id)
           else await api.upsertTx(v)
@@ -965,7 +1004,9 @@ export const useStore = create<State>((set, get) => ({
     get().persist()
     try {
       if (offlineNow()) throw offlineError()
-      await api.insertTx(t)
+      // 最多等 WRITE_WAIT_MS：等不到就当没网先存本机。以前一直等，保存键转到浏览器自己放弃为止，
+      // 这期间划掉 App，这笔只在界面和在途补丁里、不在队列里，下次同步就没了
+      if (!(await sendWithin(lateTx, t.id, api.insertTx(t)))) throw SLOW
       // 成功不能立刻删补丁：可能有一次「比这次写入更早出门」的同步还在飞，
       // 它落地时会用一份没有这笔的快照把界面盖回去
       settle(settledTx, pendingTx, t.id)
@@ -985,7 +1026,7 @@ export const useStore = create<State>((set, get) => ({
       const saved = enqueue(t.id, t)
       set({ outboxCount: outboxSize() })
       get().persist()
-      get().showToast(offlineToast(saved, ''))
+      get().showToast((e === SLOW ? slowToast : offlineToast)(saved, ''))
       return true
     }
   },
@@ -998,7 +1039,7 @@ export const useStore = create<State>((set, get) => ({
     get().persist()
     try {
       if (offlineNow()) throw offlineError()
-      await api.updateTx(t)
+      if (!(await sendWithin(lateTx, t.id, api.updateTx(t)))) throw SLOW
       settle(settledTx, pendingTx, t.id)
       return true
     } catch (e) {
@@ -1015,7 +1056,7 @@ export const useStore = create<State>((set, get) => ({
       const saved = enqueue(t.id, t)
       set({ outboxCount: outboxSize() })
       get().persist()
-      get().showToast(offlineToast(saved, '改动'))
+      get().showToast((e === SLOW ? slowToast : offlineToast)(saved, '改动'))
       return true
     }
   },
@@ -1028,7 +1069,7 @@ export const useStore = create<State>((set, get) => ({
     get().persist()
     try {
       if (offlineNow()) throw offlineError()
-      await api.deleteTx(id)
+      if (!(await sendWithin(lateTx, id, api.deleteTx(id)))) throw SLOW
       settle(settledTx, pendingTx, id)
       return true
     } catch (e) {
@@ -1047,7 +1088,7 @@ export const useStore = create<State>((set, get) => ({
       const saved = enqueue(id, DELETED)
       set({ outboxCount: outboxSize() })
       get().persist()
-      get().showToast(offlineToast(saved, '删除'))
+      get().showToast((e === SLOW ? slowToast : offlineToast)(saved, '删除'))
       return true
     }
   },

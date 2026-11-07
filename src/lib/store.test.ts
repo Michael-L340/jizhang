@@ -1691,6 +1691,101 @@ describe('离线记账：待上传队列', () => {
 })
 
 // ══════════════════════════════════════════════════════════════
+// 2026-11-07：记账网太慢也和用电一样，最多等 WRITE_WAIT_MS 就先存本机
+//   以前一直等：保存键转到浏览器自己放弃为止，这期间划掉 App，那笔只在界面和在途补丁里，下次同步就没了
+// ══════════════════════════════════════════════════════════════
+describe('记账：网太慢', () => {
+  /** 一直不回来的请求 */
+  const hang = () => new Promise<void>(() => {})
+
+  it('记一笔：最多等 WRITE_WAIT_MS，过了就先存本机进队列、返回 true；队列当场落盘，这时划掉 App 也不丢', async () => {
+    // 变异：addTx 回到 await api.insertTx(t)（不设上限）→ 一直不返回、不进队列，红
+    api.insertTx.mockImplementationOnce(hang)
+    let done: boolean | undefined
+    void st().addTx(tx('t1')).then((v) => (done = v))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS - 100)
+    expect(done).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(done).toBe(true)
+    expect(ids()).toContain('t1')
+    expect(st().outboxCount).toBe(1)
+    expect(outboxIds()).toEqual(['t1'])
+    expect(st().toast?.msg).toBe('网太慢，先存在本机，稍后自动上传')
+  })
+
+  it('改一笔、删一笔：一样最多等 WRITE_WAIT_MS', async () => {
+    // 变异：editTx / removeTx 任一处回到不设上限 → 对应那句一直不返回，红
+    store.useStore.setState({ transactions: [tx('t1', { amount: 100 }), tx('t2')] })
+    api.updateTx.mockImplementationOnce(hang)
+    api.deleteTx.mockImplementationOnce(hang)
+    const edit = st().editTx(tx('t1', { amount: 200 }))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
+    expect(await edit).toBe(true)
+    expect(st().toast?.msg).toBe('网太慢，改动先存在本机，稍后自动上传')
+    const del = st().removeTx('t2')
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
+    expect(await del).toBe(true)
+    expect(st().toast?.msg).toBe('网太慢，删除先存在本机，稍后自动上传')
+    expect(st().transactions.map((t) => [t.id, t.amount])).toEqual([['t1', 200]])
+    expect(outboxIds().sort()).toEqual(['t1', 't2'])
+  })
+
+  it('网太慢时记错了马上删掉：原来那次「新增」有结果之前不发「删除」，否则删除先到、新增后到，记错的那笔回到云端（用户 2026-11-07）', async () => {
+    // 变异：flushOutbox 去掉「原来那次还在路上就跳过」→ 删除先发出去，红
+    const log: string[] = []
+    let land!: () => void
+    api.insertTx.mockImplementationOnce(() => new Promise<void>((r) => (land = () => (log.push('新增到了'), r()))))
+    api.deleteTx.mockImplementation(async (id: string) => void log.push(`删除 ${id}`))
+    const add = st().addTx(tx('t1'))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
+    expect(await add).toBe(true)
+
+    expect(await st().removeTx('t1')).toBe(true)
+    await st().flushOutbox() // 用户点「立即上传」也一样先不发
+    expect(log).toEqual([])
+    expect(ids()).not.toContain('t1') // 界面上马上就删了，只是上传晚一点
+    expect(st().outboxCount).toBe(1)
+
+    land()
+    await vi.waitFor(() => expect(st().outboxCount).toBe(0))
+    expect(log).toEqual(['新增到了', '删除 t1'])
+    expect(ids()).not.toContain('t1')
+  })
+
+  it('网太慢时改了又改：后一次等前一次的请求有结果才传，不被晚到的前一次顶回去', async () => {
+    // 变异：同上
+    store.useStore.setState({ transactions: [tx('t1', { amount: 100 })] })
+    const log: string[] = []
+    let land!: () => void
+    api.updateTx.mockImplementationOnce(() => new Promise<void>((r) => (land = () => (log.push('改成 200 到了'), r()))))
+    api.upsertTx.mockImplementation(async (t: Transaction) => void log.push(`补传 ${t.amount}`))
+    const first = st().editTx(tx('t1', { amount: 200 }))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
+    expect(await first).toBe(true)
+
+    await st().editTx(tx('t1', { amount: 300 }))
+    expect(log).toEqual([])
+    land()
+    await vi.waitFor(() => expect(st().outboxCount).toBe(0))
+    expect(log).toEqual(['改成 200 到了', '补传 300'])
+    expect(st().transactions[0].amount).toBe(300)
+  })
+
+  it('原来那次后来报错了（网断了一下）：不用等下一次同步，马上补传一次', async () => {
+    // 变异：sendWithin 在原来那次有结果之后不叫补传 → 一直留在队列里等别的时机，红
+    let fail!: (e: unknown) => void
+    api.insertTx.mockImplementationOnce(() => new Promise<void>((_, j) => (fail = j)))
+    const add = st().addTx(tx('t1'))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
+    expect(await add).toBe(true)
+    api.upsertTx.mockResolvedValue(undefined)
+    fail(offline())
+    await vi.waitFor(() => expect(st().outboxCount).toBe(0))
+    expect(api.upsertTx).toHaveBeenCalledWith(tx('t1'))
+  })
+})
+
+// ══════════════════════════════════════════════════════════════
 // 里外页面
 //   外页面（平时用的）显示修饰过的余额，里页面显示真的。两条安全性质在这里守：
 //   冷启动必须是外页面；里页面有时效，手机放下走开 60 秒回来就自动退回外页面。
@@ -1791,18 +1886,19 @@ describe('电表读数：待上传队列', () => {
     expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
     expect(st().outboxCount).toBe(1)
     expect(st().toast?.msg).toBe("网太慢，这条读数先存在本机，稍后自动上传")
-    land()
+    // 原来那次到了，补传自己跟上（2026-11-07 起：要等它有结果才补传，见 sendWithin）
     api.insertMeterReading.mockResolvedValue(undefined)
-    await st().flushOutbox()
+    land()
+    await vi.waitFor(() => expect(st().outboxCount).toBe(0))
     expect(api.insertMeterReading).toHaveBeenLastCalledWith(mr('m1'))
-    expect(st().outboxCount).toBe(0)
     expect(st().meter_readings.map((m) => m.id)).toEqual(['m1'])
   })
 
-  it('网太慢、原来那次过后才报错：不变成未处理的报错，读数照样在队列里', async () => {
+  it('网太慢、原来那次过后才报错：不变成未处理的报错，还是没网的话读数照样在队列里', async () => {
     // 变异：within 不给 p 挂 catch → 未处理的 rejection，vitest 整个红
     let fail!: (e: unknown) => void
-    api.insertMeterReading.mockImplementationOnce(() => new Promise<void>((_, j) => (fail = j)))
+    // 第一次一直挂着、过后报错；它报错之后马上补传的那一次也还是没网
+    api.insertMeterReading.mockRejectedValue(offline()).mockImplementationOnce(() => new Promise<void>((_, j) => (fail = j)))
     const p = st().addMeterReading(mr('m1'))
     await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
     expect(await p).toBe(true)
@@ -1926,6 +2022,24 @@ describe('用电备注', () => {
     api.saveMeterNote.mockResolvedValue(undefined)
     await st().saveMeterNote(note('2026-10-07'))
     await st().saveMeterNote(note('2026-10-07', '开了空调'))
+    expect(st().meter_notes).toEqual([note('2026-10-07', '开了空调')])
+  })
+
+  it('网太慢时写了又改：改的那次等第一次的请求有结果才传，不被晚到的第一次顶回去（2026-11-07）', async () => {
+    // 变异：flushSide 去掉「原来那次还在路上就跳过」→ 改的先传、第一次后到，红
+    const log: string[] = []
+    let land!: () => void
+    api.saveMeterNote
+      .mockImplementation(async (n: MeterNote) => void log.push(`补传 ${n.note}`))
+      .mockImplementationOnce(() => new Promise<void>((r) => (land = () => (log.push('第一次到了'), r()))))
+    const first = st().saveMeterNote(note('2026-10-07', '没开空调'))
+    await vi.advanceTimersByTimeAsync(store.WRITE_WAIT_MS + 10)
+    expect(await first).toBe(true)
+    await st().saveMeterNote(note('2026-10-07', '开了空调'))
+    expect(log).toEqual([])
+    land()
+    await vi.waitFor(() => expect(st().outboxCount).toBe(0))
+    expect(log).toEqual(['第一次到了', '补传 开了空调'])
     expect(st().meter_notes).toEqual([note('2026-10-07', '开了空调')])
   })
 
