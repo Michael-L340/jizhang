@@ -3,7 +3,7 @@ import { DatePicker } from './DatePicker'
 import { Sheet } from './Sheet'
 import { fmtDateZh, today } from '../lib/date'
 
-export type RangeKind = 'month' | 'ytd' | 'quarter' | 'half' | 'year' | 'all' | 'custom'
+export type RangeKind = 'month' | 'd30' | 'ytd' | 'quarter' | 'half' | 'year' | 'all' | 'custom'
 
 export interface RangeValue {
   kind: RangeKind
@@ -15,6 +15,7 @@ export interface RangeValue {
 /** 「本月 / 本年」和「近 N 个月」一样，都以顶部选中的月份为「现在」（用户 2026-09-21 加的两项） */
 export const RANGE_LABEL: Record<RangeKind, string> = {
   month: '本月',
+  d30: '近 30 天',
   ytd: '本年',
   quarter: '近三个月',
   half: '近半年',
@@ -36,12 +37,13 @@ export function RangeSheet({ open, value, earliest, onChange, onClose }: Props) 
   const [end, setEnd] = useState(value.end ?? today())
   const [pick, setPick] = useState<'start' | 'end' | null>(null)
 
-  const options: RangeKind[] = ['month', 'ytd', 'quarter', 'half', 'year', 'all']
+  const options: RangeKind[] = ['month', 'd30', 'ytd', 'quarter', 'half', 'year', 'all']
 
   return (
     <>
       <Sheet open={open} onClose={onClose} title="时间范围">
-        {/* 两列格子。曾是竖列，加到六项后整块 560px 高，小屏要顶到状态栏；两列三行和原来四行差不多高（用户 2026-09-21 选的乙） */}
+        {/* 两列格子。曾是竖列，加到六项后整块 560px 高，小屏要顶到状态栏；两列三行和原来四行差不多高（用户 2026-09-21 选的乙）。
+            2026-11-08 加「近 30 天」后七格：两列四行，最后一格「全部记录」占满一行 */}
         <div className="grid grid-cols-2 gap-2 mt-3">
           {options.map((k) => {
             const on = value.kind === k
@@ -49,7 +51,7 @@ export function RangeSheet({ open, value, earliest, onChange, onClose }: Props) 
               <button
                 key={k}
                 type="button"
-                className={`h-[52px] rounded-2xl text-[15px] ${on ? 'bg-brand text-on-brand font-semibold' : 'bg-bg text-ink'}`}
+                className={`h-[52px] rounded-2xl text-[15px] ${k === 'all' ? 'col-span-2 ' : ''}${on ? 'bg-brand text-on-brand font-semibold' : 'bg-bg text-ink'}`}
                 onClick={() => {
                   onChange({ kind: k })
                   onClose()

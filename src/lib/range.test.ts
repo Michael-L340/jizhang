@@ -5,8 +5,8 @@
 /// <reference types="node" />
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
-import { addDays, daysInMonth, monthOf, monthRange, shiftMonth } from './date'
-import { rangeBounds, type RangeSpec } from './range'
+import { addDays, daysBetween, daysInMonth, monthOf, monthRange, shiftMonth } from './date'
+import { rangeBounds, rangeDays, type RangeSpec } from './range'
 
 const TODAY = '2026-09-28'
 const at = (kind: RangeSpec['kind'], ym: string, earliest = '2025-03-14', today = TODAY) => rangeBounds({ kind }, ym, earliest, today)
@@ -87,7 +87,7 @@ function legacy(range: RangeSpec, ym: string, earliest: string, t: string) {
   return { start, end }
 }
 
-const KINDS: RangeSpec['kind'][] = ['month', 'ytd', 'quarter', 'half', 'year', 'all']
+const KINDS: RangeSpec['kind'][] = ['month', 'd30', 'ytd', 'quarter', 'half', 'year', 'all']
 const BACK: Partial<Record<RangeSpec['kind'], number>> = { month: 1, quarter: 3, half: 6, year: 12 }
 
 describe('不变量：今天换 40 个、月份往回翻 30 个、第一笔账换 3 个', () => {
@@ -103,6 +103,7 @@ describe('不变量：今天换 40 个、月份往回翻 30 个、第一笔账�
         const ym = shiftMonth(monthOf(t), -k)
         for (const e of earliests)
           for (const kind of KINDS) {
+            if (kind === 'd30') continue // 旧写法没有这一档（落到近一年），由下一条和「近 30 天」守
             const a = rangeBounds({ kind }, ym, e, t)
             const b = legacy({ kind }, ym, e, t)
             if (a.start !== b.start || a.end !== b.end) expect.fail(`${kind} ym=${ym} today=${t} earliest=${e}: ${JSON.stringify(a)} ≠ ${JSON.stringify(b)}`)
@@ -124,7 +125,8 @@ describe('不变量：今天换 40 个、月份往回翻 30 个、第一笔账�
               monthOf(end) !== ym ||
               (end !== t && end.slice(8) !== String(daysInMonth(ym))) ||
               (BACK[kind] !== undefined && (start.slice(8) !== '01' || monthOf(start) !== shiftMonth(ym, -(BACK[kind]! - 1)))) ||
-              (kind === 'ytd' && start !== `${ym.slice(0, 4)}-01-01`)
+              (kind === 'ytd' && start !== `${ym.slice(0, 4)}-01-01`) ||
+              (kind === 'd30' && (daysBetween(start, end) !== 29 || rangeDays(start, end, start) !== 30))
             if (bad) expect.fail(`${kind} ym=${ym} today=${t} earliest=${e}: ${start}..${end}`)
           }
       }
@@ -144,4 +146,34 @@ describe('两页读同一对钥匙、调同一个函数', () => {
       expect(src).toMatch(/const earliest = useMemo\(\(\) => firstFlowDate\(otxs\), \[otxs\]\)/)
     })
   }
+})
+
+describe('近 30 天（2026-11-08 加的）', () => {
+  it('今天 11/8、停在本月 = 10/10 到今天，含两头正好 30 天', () => {
+    // 变异：addDays(end, -30) → 10/09，红；落到「近一年」默认分支 → 2025-12-01，红
+    expect(at('d30', '2026-11', '2025-03-14', '2026-11-08')).toEqual({ start: '2026-10-10', end: '2026-11-08' })
+  })
+  it('今天 11/8、顶上选 9 月 = 9/1 到 9/30（终点是那个月的月底）', () => {
+    expect(at('d30', '2026-09', '2025-03-14', '2026-11-08')).toEqual({ start: '2026-09-01', end: '2026-09-30' })
+  })
+  it('顶上选 10 月（31 天）= 10/2 到 10/31，和「本月」分得开', () => {
+    // 变异：d30 走 month 那一支 → 10/01，红（9 月那条是 30 天的月，分不开）
+    expect(at('d30', '2026-10', '2025-03-14', '2026-11-08')).toEqual({ start: '2026-10-02', end: '2026-10-31' })
+  })
+})
+
+describe('rangeDays：日均的除数', () => {
+  it('含两头', () => {
+    // 变异：去掉 +1 → 7 / 29，红
+    expect(rangeDays('2026-11-01', '2026-11-08', '2025-03-14')).toBe(8)
+    expect(rangeDays('2026-10-10', '2026-11-08', '2025-03-14')).toBe(30)
+  })
+  it('起点早于第一笔收支时从第一笔那天数', () => {
+    // 变异：不看 earliest → 343，红
+    expect(rangeDays('2025-12-01', '2026-11-08', '2026-10-01')).toBe(39)
+  })
+  it('第一笔收支晚于终点时至少 1', () => {
+    // 变异：去掉 Math.max(1, …) → 负数，红
+    expect(rangeDays('2026-11-01', '2026-11-08', '2026-11-20')).toBe(1)
+  })
 })

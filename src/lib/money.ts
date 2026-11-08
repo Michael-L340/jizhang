@@ -33,6 +33,13 @@ export function fmtYuan(cents: number, opts: { sign?: boolean; symbol?: boolean 
   return opts.sign && cents > 0 ? `+${body}` : body
 }
 
+/** 分 → 四舍五入到元、千分位、带 ¥，如 25425 → 「¥254」、-500 → 「-¥5」。趋势卡的「日均」用 */
+export function fmtYuanWhole(cents: number): string {
+  const yuan = Math.round(Math.abs(cents) / 100)
+  const body = `¥${yuan.toLocaleString('en-US')}`
+  return cents < 0 && yuan > 0 ? `-${body}` : body
+}
+
 /** 分 → 不带千分位、去掉末尾零的元，如 1250 → 「12.5」、10000 → 「100」。给输入框回填和筛选标签用 */
 export function yuanPlain(cents: number): string {
   const s = centsToDb(cents)

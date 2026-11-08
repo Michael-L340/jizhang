@@ -25,10 +25,10 @@ import {
 } from '../lib/trendFilter'
 import { balanceSeries, bucketEnd, bucketKeys, byCategory, firstFlowDate, positiveAgg, monthTotals, seriesByCategory, seriesTotals, splitAccounts, UNCATEGORIZED_ID, type Unit } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
-import { fmtYuan } from '../lib/money'
+import { fmtYuan, fmtYuanWhole } from '../lib/money'
 import { axisLabels, endDot, gridTopFor, legendRows, shortLabels } from '../lib/chart'
 import { outerBook } from '../lib/facade'
-import { rangeBounds } from '../lib/range'
+import { rangeBounds, rangeDays } from '../lib/range'
 import { CHILD_NONE } from '../lib/filter'
 import { categoryColor, CHART, drillColors } from '../lib/palette'
 import { usePersistedState, useRecentState, useTabReset } from '../lib/hooks'
@@ -191,6 +191,8 @@ export function Stats() {
   const trendTotal = useMemo(() => seriesTotals(bigCut.txs, keys, unit, trendKind), [bigCut, keys, unit, trendKind])
   const trendByCat = useMemo(() => seriesByCategory(bigCut.txs, cats, keys, unit, trendKind), [bigCut, cats, keys, unit, trendKind])
   const trendSum = useMemo(() => trendTotal.reduce((a, b) => a + b, 0), [trendTotal])
+  // 日均跟着时间范围和「不看大额」走（trendSum 已经去掉大额）；第一笔收支之前的日子不算。只看支出时显示
+  const trendDays = useMemo(() => rangeDays(tStart, tEnd, earliest), [tStart, tEnd, earliest])
   // 「封顶」三档都管（用户 2026-10-26：「封顶，在分类中，没有用」）：超过的点压成顶到门槛那条线的小尖，尖顶标真实数字；
   // 堆叠是整根柱子按比例压到门槛。下面三份都是元
   const capYuan = tf.cap ? tf.capYuan : 0
@@ -638,6 +640,7 @@ export function Stats() {
         </div>
         <div className="num text-lg font-semibold leading-tight mb-2">
           {fmtYuan(trendSum, { symbol: true })}
+          {trendKind === 'expense' ? <span className="text-[13px] font-semibold text-brand-ink ml-2">日均 {fmtYuanWhole(trendSum / trendDays)}</span> : null}
           {bigCut.count ? <span className="text-[11px] font-normal text-muted ml-1.5">不含 {bigCut.count} 笔大额</span> : null}
         </div>
 
