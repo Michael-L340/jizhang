@@ -459,25 +459,47 @@ export function Ledger() {
           />
         ) : null}
         <div className="text-xs text-muted mb-2">分类</div>
+        {/* 支出、收入分成两组，组上各一行小字；「全部」「未分类」不属于哪一边，单独一排放最上面。
+            选了哪个一级，二级紧跟在那一组下面（用户 2026-11-08 选「甲」：「区分一下，不然容易混乱」；
+            以前接着排、二级排在所有分类后面，选了支出的「经常生活开支」，二级看着像收入「房租」底下的） */}
         <ChipGroup
-          options={[{ id: 'all', label: '全部' }, ...roots.map((c) => ({ id: c.id, label: label(c), icon: c.icon })), { id: 'none', label: '未分类' }]}
+          options={[{ id: 'all', label: '全部' }, { id: 'none', label: '未分类' }]}
           value={parentId}
           onChange={setParentId}
-          className={children.length ? 'mb-2' : 'mb-4'}
+          className="mb-3"
         />
-        {children.length ? (
-          <ChipGroup
-            options={[
-              { id: 'all', label: '全部' },
-              ...children.map((c) => ({ id: c.id, label: label(c), icon: c.icon })),
-              // 直接记在一级上、没选二级的那几笔，统计页饼图里也叫这个名字
-              { id: CHILD_NONE, label: '未细分' },
-            ]}
-            value={childId ?? 'all'}
-            onChange={setChildId}
-            className="mb-4 pl-2.5 border-l-2 border-brand"
-          />
-        ) : null}
+        {(['expense', 'income'] as const).map((kind) => {
+          const group = roots.filter((c) => c.kind === kind)
+          if (!group.length) return null
+          const here = children.length > 0 && roots.find((c) => c.id === parentId)?.kind === kind
+          return (
+            <div key={kind}>
+              <div className="flex items-center gap-2 text-[11px] text-muted mb-2">
+                <span>{kind === 'expense' ? '支出' : '收入'}</span>
+                <span className="flex-1 h-px bg-line" />
+              </div>
+              <ChipGroup
+                options={group.map((c) => ({ id: c.id, label: label(c), icon: c.icon }))}
+                value={parentId}
+                onChange={setParentId}
+                className={here ? 'mb-2' : 'mb-4'}
+              />
+              {here ? (
+                <ChipGroup
+                  options={[
+                    { id: 'all', label: '全部' },
+                    ...children.map((c) => ({ id: c.id, label: label(c), icon: c.icon })),
+                    // 直接记在一级上、没选二级的那几笔，统计页饼图里也叫这个名字
+                    { id: CHILD_NONE, label: '未细分' },
+                  ]}
+                  value={childId ?? 'all'}
+                  onChange={setChildId}
+                  className="mb-4 pl-2.5 border-l-2 border-brand"
+                />
+              ) : null}
+            </div>
+          )
+        })}
         <div className="text-xs text-muted mb-2">金额</div>
         {/* 一笔多少钱，两头都含；两个框撑满一行，和底下「清除」「完成」同一个样子（用户 2026-10-23 选的） */}
         <div className={`flex items-center gap-2 ${amountBad ? 'mb-1.5' : 'mb-4'}`}>
