@@ -1,9 +1,11 @@
 // 统计页趋势图的两个开关（用户 2026-10-09 定的，「甲 + 丙」，金额自己填）：
-//   不看大额单笔：超过门槛的单笔不算进当天 / 当月（那天剩下的小钱照画，合计也跟着少）。
-//   封顶：超过门槛的点画成顶到门槛那条线的小尖、顶上标真实数字——数据一笔不改。
+//   不看大额单笔：超过门槛的单笔支出不算进当天 / 当月（那天剩下的小钱照画，合计也跟着少）。
+//     2026-11-08 起饼图也用它，**和趋势图共用这一个开关、一个门槛**（用户选「甲」：两张卡拿掉的是同一批，上下的数对得上）。
+//   封顶：超过门槛的点画成顶到门槛那条线的小尖、顶上标真实数字——数据一笔不改。只管趋势图。
 //   两个开关合计 / 分类 / 堆叠三档都管（封顶 2026-10-26 前只管合计，用户：「封顶，在分类中，没有用」）。
 // 纯函数，不碰 store；页面只管把状态存在 jz_stats_trendFilter。
 import type { Transaction } from '../types'
+import { inMonth } from './compute'
 
 export interface TrendFilter {
   big: boolean
@@ -24,20 +26,35 @@ export function normalizeTrendFilter(v: unknown): TrendFilter {
 }
 
 /**
- * 去掉金额 ≥ cents 的那几笔（只看 kind 这一边、只看正数——「抵消」换过来的负数不是一笔开销）。
- * cents ≤ 0 = 不开，原样返回同一个数组。
+ * 去掉 ≥ cents 的大额支出（2026-11-08 用户点头的两条）：
+ * - **只管支出**，kind 是收入时原样返回：门槛按支出填（比如 500），生活费、工资每一笔都超过它，拿掉就没意义了；
+ * - **按绝对值比**：「抵消」换过来的大额退款（负数）也一起拿掉。不拿的话买的那笔拿掉了、退的那笔还在，
+ *   那一类被扣成负数，饼图上整块消失（positiveAgg），趋势那一点也凭空少一截。
+ * cents ≤ 0 = 不开，原样返回同一个数组。sum = 拿掉的那几笔加起来（退款是负的）。
  */
 export function dropBig(txs: Transaction[], kind: 'expense' | 'income', cents: number): { txs: Transaction[]; count: number; sum: number } {
-  if (cents <= 0) return { txs, count: 0, sum: 0 }
+  if (cents <= 0 || kind !== 'expense') return { txs, count: 0, sum: 0 }
   let count = 0
   let sum = 0
   const kept = txs.filter((t) => {
-    if (t.type !== kind || t.amount < cents) return true
+    if (t.type !== kind || Math.abs(t.amount) < cents) return true
     count++
     sum += t.amount
     return false
   })
   return count ? { txs: kept, count, sum } : { txs, count: 0, sum: 0 }
+}
+
+/**
+ * 饼图用：先裁出 ym 这个月，再 dropBig。dropBig 不看日期，整本传进去的话，
+ * 饼图中间的「不含 N 笔大额」会把别的月份的大额也数进来。
+ */
+export function dropBigInMonth(txs: Transaction[], ym: string, kind: 'expense' | 'income', cents: number): { txs: Transaction[]; count: number; sum: number } {
+  return dropBig(
+    txs.filter((t) => inMonth(t, ym)),
+    kind,
+    cents,
+  )
 }
 
 /**

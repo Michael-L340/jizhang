@@ -4,8 +4,9 @@ import { LineChart } from 'echarts/charts'
 import { GridComponent } from 'echarts/components'
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it } from 'vitest'
-import type { Transaction } from '../types'
-import { CAP_PEAK, capAxis, capSeries, capStack, dropBig, floorZero, layoutPeaks, normalizeTrendFilter, parseYuanInt, peakText, trendGeometry, type Peak } from './trendFilter'
+import type { Category, Transaction } from '../types'
+import { byCategory, positiveAgg } from './compute'
+import { CAP_PEAK, capAxis, capSeries, capStack, dropBig, dropBigInMonth, floorZero, layoutPeaks, normalizeTrendFilter, parseYuanInt, peakText, trendGeometry, type Peak } from './trendFilter'
 
 let n = 0
 const tx = (o: Partial<Transaction>): Transaction => ({
@@ -27,6 +28,36 @@ describe('不看大额单笔', () => {
     expect(dropBig(txs, 'expense', 0).txs).toBe(txs)
     expect(dropBig(txs, 'expense', 10000000).txs).toBe(txs)
     expect(dropBig(txs, 'income', 900000).count).toBe(0)
+  })
+
+  it('只管支出：看收入时一笔都不拿，门槛 500 不能把 8,000 的工资当大额拿掉（用户 2026-11-08 点头）', () => {
+    // 变异：去掉「kind 不是支出就原样返回」→ 工资被拿掉，红
+    const r = dropBig(txs, 'income', 50000)
+    expect(r.count).toBe(0)
+    expect(r.txs).toBe(txs)
+  })
+
+  it('大额退款（勾了「抵消」换过来的负数）也一起拿掉：同一个月买 800 又退 800，那一类不能被扣成负数、从饼图上整块消失', () => {
+    // 变异：改回 t.amount < cents（只看正数）→ 退款留下，日常餐饮 = 300 − 800 < 0，被 positiveAgg 拿掉，红
+    const cats: Category[] = [{ id: 'food', kind: 'expense', parent_id: null, name: '日常餐饮', icon: null, sort: 1, is_archived: false, note: null }]
+    const month = [
+      tx({ amount: 30000 }),
+      tx({ amount: 80000 }),
+      // 退款记成收入、勾了「抵消」，算账时换成这一类的负支出（compute.netFlow），dropBig 吃的就是换过之后的
+      tx({ amount: -80000 }),
+    ]
+    const r = dropBig(month, 'expense', 50000)
+    expect(r.count).toBe(2)
+    const pie = positiveAgg(byCategory(r.txs, cats, '2026-10', 'expense'))
+    expect(pie.map((a) => [a.name, a.amount])).toEqual([['日常餐饮', 30000]])
+  })
+
+  it('饼图只数这个月的：别的月份的大额不算进「不含 N 笔」', () => {
+    // 变异：dropBigInMonth 不先裁月份 → 9 月的房租也数进来，count 变 2，红
+    const two = [tx({ date: '2026-09-01', amount: 300000 }), tx({ date: '2026-10-01', amount: 300000 }), tx({ date: '2026-10-05', amount: 4500 })]
+    const r = dropBigInMonth(two, '2026-10', 'expense', 50000)
+    expect(r.count).toBe(1)
+    expect(r.txs.map((t) => t.amount)).toEqual([4500])
   })
 })
 

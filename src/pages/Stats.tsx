@@ -12,6 +12,7 @@ import {
   capStack,
   DEFAULT_TREND_FILTER,
   dropBig,
+  dropBigInMonth,
   floorZero,
   layoutPeaks,
   normalizeTrendFilter,
@@ -47,6 +48,9 @@ const axisMoney = (v: number) => (Math.abs(v) >= 10000 ? `${+(v / 10000).toFixed
 
 /** 量 10px 字的宽度（尖顶数字、纵轴刻度），和 ECharts 默认字体一样：Windows 上是微软雅黑，别处 sans-serif */
 let measureCtx: CanvasRenderingContext2D | null | undefined
+/** 「不看大额单笔」那一行的小字。两个面板里是同一个开关，都这么写（原来写「不算进当天」，按月看时其实是当月，不准） */
+const BIG_SUB = '超过这个数的单笔不算，饼图和趋势一起'
+
 function measure10(s: string): number {
   if (measureCtx === undefined) {
     measureCtx = typeof document === 'undefined' ? null : document.createElement('canvas').getContext('2d')
@@ -87,6 +91,7 @@ export function Stats() {
   const [tfRaw, setTf] = usePersistedState<TrendFilter>('jz_stats_trendFilter', DEFAULT_TREND_FILTER)
   const tf = useMemo(() => normalizeTrendFilter(tfRaw), [tfRaw])
   const [tfOpen, setTfOpen] = useState(false)
+  const [pieTfOpen, setPieTfOpen] = useState(false)
   const [balMode, setBalMode] = usePersistedState<'total' | 'account'>('jz_stats_balMode', 'total')
   const [help, setHelp] = useState(false)
 
@@ -99,7 +104,14 @@ export function Stats() {
   // 月份、收支、时间范围都是用户为了看某段趋势刚挑的，一起清掉反而烦人。
   useTabReset(() => setDrill(null))
 
-  const agg = useMemo(() => positiveAgg(byCategory(otxs, cats, ym, kind)), [otxs, cats, ym, kind])
+  // 饼图和趋势图共用「不看大额单笔」这一个开关、一个门槛（用户 2026-11-08 选「甲」：两张卡拿掉的是同一批，上下的数对得上）。
+  // 先裁出这个月再拿：dropBig 不看日期，「不含 N 笔」不能把别的月份的也数进来
+  const bigCents = tf.big ? tf.bigYuan * 100 : 0
+  const pieCut = useMemo(() => dropBigInMonth(otxs, ym, kind, bigCents), [otxs, ym, kind, bigCents])
+  const agg = useMemo(() => positiveAgg(byCategory(pieCut.txs, cats, ym, kind)), [pieCut, cats, ym, kind])
+  // 拿掉大额之前的各类，只在真拿掉了几笔时才算：下钻后「不含 N 笔」= 这一类前后的笔数之差；
+  // 「不分二级，查看全部 N 笔」点进去的流水页列的是全部（不跟着拿），笔数也按全部的写
+  const fullAgg = useMemo(() => (pieCut.count ? byCategory(otxs, cats, ym, kind) : null), [pieCut.count, otxs, cats, ym, kind])
   const rootColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
 
   const drillIdx = drill ? agg.findIndex((a) => a.id === drill) : -1
@@ -115,6 +127,9 @@ export function Stats() {
   // 而 drill 仍是 truthy：界面退回一级列表，却因为到处写着 !drill 而点不动。
   // 全页统一用这个派生值判断，drill 只作为原始状态存在。
   const drilled = Boolean(drillAgg)
+  const drillFullCount = drillAgg ? (fullAgg?.find((a) => a.id === drillAgg.id)?.count ?? drillAgg.count) : 0
+  // 饼图中间「不含 N 笔大额」：一级数这个月的，下钻后只数这一类的
+  const pieBigCount = drillAgg ? drillFullCount - drillAgg.count : pieCut.count
 
   const pieOption = useMemo(
     () => ({
@@ -172,7 +187,7 @@ export function Stats() {
   // 算出来的是整个 6 月。非自定义区间的端点本来就对齐月初月末，这一刀是空操作。
   const inRange = useMemo(() => otxs.filter((t) => t.date >= tStart && t.date <= tEnd), [otxs, tStart, tEnd])
   // 「不看大额单笔」：先把超过门槛的那几笔拿掉再算，合计和每个点都跟着少
-  const bigCut = useMemo(() => dropBig(inRange, trendKind, tf.big ? tf.bigYuan * 100 : 0), [inRange, trendKind, tf.big, tf.bigYuan])
+  const bigCut = useMemo(() => dropBig(inRange, trendKind, bigCents), [inRange, trendKind, bigCents])
   const trendTotal = useMemo(() => seriesTotals(bigCut.txs, keys, unit, trendKind), [bigCut, keys, unit, trendKind])
   const trendByCat = useMemo(() => seriesByCategory(bigCut.txs, cats, keys, unit, trendKind), [bigCut, cats, keys, unit, trendKind])
   const trendSum = useMemo(() => trendTotal.reduce((a, b) => a + b, 0), [trendTotal])
@@ -492,19 +507,27 @@ export function Stats() {
               </button>
             ))}
           </div>
-          {drilled ? (
-            <button type="button" className="text-sm text-brand-ink px-1" onClick={() => setDrill(null)}>
-              ‹ 返回
-            </button>
-          ) : (
-            <button type="button" className="text-xs text-muted border border-line rounded-full px-2.5 py-1" onClick={() => setHelp(true)}>
-              分类说明
-            </button>
-          )}
+          <div className="flex items-center gap-1.5">
+            {/* 下钻后也留着：点进「经常生活开支」正是最想拿掉房租的时候 */}
+            <FilterButton on={tf.big} label="饼图设置" onClick={() => setPieTfOpen(true)} />
+            {drilled ? (
+              <button type="button" className="text-sm text-brand-ink px-1" onClick={() => setDrill(null)}>
+                ‹ 返回
+              </button>
+            ) : (
+              <button type="button" className="text-xs text-muted border border-line rounded-full px-2.5 py-1" onClick={() => setHelp(true)}>
+                分类说明
+              </button>
+            )}
+          </div>
         </div>
 
         {pieRows.length === 0 ? (
-          <div className="text-sm text-muted py-12 text-center">{ym === monthOf(today()) ? '本月' : fmtMonthZh(ym)}没有数据</div>
+          <div className="text-sm text-muted py-12 text-center">
+            {ym === monthOf(today()) ? '本月' : fmtMonthZh(ym)}没有数据
+            {/* 月初只交了房租、又开着「不看大额」：写出来，别让人以为没记账 */}
+            {pieCut.count ? <div className="text-[11px] mt-1">不含 {pieCut.count} 笔大额</div> : null}
+          </div>
         ) : (
           <>
             <div className="relative mt-1">
@@ -516,6 +539,7 @@ export function Stats() {
                   {drillAgg ? drillAgg.name : `${ym === monthOf(today()) ? '本月' : fmtMonthZh(ym)}${kind === 'expense' ? '支出' : '收入'}`}
                 </div>
                 <div className="num text-[22px] font-bold leading-tight mt-0.5">{fmtYuan(pieTotal, { symbol: true })}</div>
+                {pieBigCount ? <div className="text-[11px] text-muted leading-tight mt-0.5">不含 {pieBigCount} 笔大额</div> : null}
               </div>
             </div>
 
@@ -546,7 +570,7 @@ export function Stats() {
                 onClick={() => gotoDetail(drillAgg.id)}
               >
                 <span className="flex-1 min-w-0 truncate">
-                  不分二级，查看「{drillAgg.name}」全部 {drillAgg.count} 笔
+                  不分二级，查看「{drillAgg.name}」全部 {drillFullCount} 笔
                 </span>
                 <span className="shrink-0">›</span>
               </button>
@@ -609,17 +633,7 @@ export function Stats() {
                 </button>
               ))}
             </div>
-            <button
-              type="button"
-              aria-label="趋势图设置"
-              onClick={() => setTfOpen(true)}
-              className={`relative w-7 h-7 rounded-full border inline-flex items-center justify-center ${tf.big || tf.cap ? 'border-brand bg-brand-soft text-brand-ink' : 'border-line text-muted'}`}
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
-                <path d="M4 6h16M7 12h10M10 18h4" />
-              </svg>
-              {tf.big || tf.cap ? <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-brand-ink" /> : null}
-            </button>
+            <FilterButton on={tf.big || tf.cap} label="趋势图设置" onClick={() => setTfOpen(true)} />
           </div>
         </div>
         <div className="num text-lg font-semibold leading-tight mb-2">
@@ -639,7 +653,7 @@ export function Stats() {
       <Sheet open={tfOpen} onClose={() => setTfOpen(false)} title="趋势图">
         <TrendFilterRow
           label="不看大额单笔"
-          sub="超过这个数的单笔不算进当天"
+          sub={BIG_SUB}
           on={tf.big}
           yuan={tf.bigYuan}
           prefix="≥"
@@ -653,6 +667,19 @@ export function Stats() {
           yuan={tf.capYuan}
           onToggle={(on) => setTf({ ...tf, cap: on })}
           onYuan={(n) => setTf({ ...tf, capYuan: n })}
+        />
+      </Sheet>
+
+      {/* 饼图那颗圆按钮的面板：只有「不看大额」这一行（封顶对饼图没有意义），改的和上面趋势图那一行是同一个值 */}
+      <Sheet open={pieTfOpen} onClose={() => setPieTfOpen(false)} title="饼图">
+        <TrendFilterRow
+          label="不看大额单笔"
+          sub={BIG_SUB}
+          on={tf.big}
+          yuan={tf.bigYuan}
+          prefix="≥"
+          onToggle={(on) => setTf({ ...tf, big: on })}
+          onYuan={(n) => setTf({ ...tf, bigYuan: n })}
         />
       </Sheet>
 
@@ -717,7 +744,27 @@ export function Stats() {
   )
 }
 
-/** 趋势图设置面板里的一行：开关 + 金额框。金额只收正整数，填坏了不改值 */
+/**
+ * 卡片右上那颗带设置的圆按钮，开着时带小点（CLAUDE.md「开关只有三种样子」的第三种）。
+ * 饼图卡和趋势卡各一颗，两颗必须长得一样：在一张卡上打开「不看大额」，另一颗跟着亮，一看就知道是同一个开关
+ */
+function FilterButton(props: { on: boolean; label: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={props.label}
+      onClick={props.onClick}
+      className={`relative w-7 h-7 rounded-full border inline-flex items-center justify-center ${props.on ? 'border-brand bg-brand-soft text-brand-ink' : 'border-line text-muted'}`}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round">
+        <path d="M4 6h16M7 12h10M10 18h4" />
+      </svg>
+      {props.on ? <span className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-brand-ink" /> : null}
+    </button>
+  )
+}
+
+/** 趋势图、饼图设置面板里的一行：开关 + 金额框。金额只收正整数，填坏了不改值 */
 function TrendFilterRow(props: { label: string; sub: string; on: boolean; yuan: number; prefix?: string; onToggle: (on: boolean) => void; onYuan: (n: number) => void }) {
   const [text, setText] = useState(String(props.yuan))
   return (
