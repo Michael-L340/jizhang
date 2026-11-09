@@ -608,7 +608,7 @@ export function Stats() {
       </div>
 
       <div className="card p-4 mb-3">
-        {/* 一排：左边支出 / 收入，右边合计 / 分类 / 堆叠 + 筛选按钮（开着任一项时带个小点）；合计数单独一行 */}
+        {/* 一排：左边支出 / 收入，右边合计 / 分类 / 堆叠 + 筛选按钮（开着任一项时带个小点）；合计数和日均在下面一行 */}
         <div className="flex items-center justify-between mb-1">
           <div className="inline-flex rounded-full bg-bg p-0.5">
             {(['expense', 'income'] as const).map((k) => (
@@ -638,10 +638,16 @@ export function Stats() {
             <FilterButton on={tf.big || tf.cap} label="趋势图设置" onClick={() => setTfOpen(true)} />
           </div>
         </div>
-        <div className="num text-lg font-semibold leading-tight mb-2">
-          {fmtYuan(trendSum, { symbol: true })}
-          {trendKind === 'expense' ? <span className="text-[13px] font-semibold text-brand-ink ml-2">日均 {fmtYuanWhole(trendSum / trendDays)}</span> : null}
-          {bigCut.count ? <span className="text-[11px] font-normal text-muted ml-1.5">不含 {bigCut.count} 笔大额</span> : null}
+        {/* 合计在左、日均在同一行最右，两边上下居中（用户 2026-11-09 看效果图选的「乙」：紧跟在合计后面挤成一串、
+            大小两种字按底边对齐看着往下坠）。日均颜色照旧金色（用户：「颜色不变」）。窄屏开着「不看大额」时那行小字折到合计下面 */}
+        <div className="flex items-center justify-between gap-3 mb-2">
+          <div className="num flex flex-wrap items-baseline gap-x-1.5 min-w-0">
+            <span className="text-lg font-semibold leading-tight">{fmtYuan(trendSum, { symbol: true })}</span>
+            {bigCut.count ? <span className="text-[11px] text-muted">不含 {bigCut.count} 笔大额</span> : null}
+          </div>
+          {trendKind === 'expense' ? (
+            <span className="num text-[13px] font-semibold text-brand-ink whitespace-nowrap shrink-0">日均 {fmtYuanWhole(trendSum / trendDays)}</span>
+          ) : null}
         </div>
 
         {lineMode !== 'total' && trendByCat.length === 0 ? (
