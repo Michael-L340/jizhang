@@ -609,7 +609,7 @@ export function Stats() {
 
       <div className="card p-4 mb-3">
         {/* 一排：左边支出 / 收入，右边合计 / 分类 / 堆叠 + 筛选按钮（开着任一项时带个小点）；合计数和日均在下面一行 */}
-        <div className="flex items-center justify-between mb-1">
+        <div className="flex items-center justify-between mb-[9px]">
           <div className="inline-flex rounded-full bg-bg p-0.5">
             {(['expense', 'income'] as const).map((k) => (
               <button
@@ -639,8 +639,10 @@ export function Stats() {
           </div>
         </div>
         {/* 合计在左、日均在同一行最右，两边上下居中（用户 2026-11-09 看效果图选的「乙」：紧跟在合计后面挤成一串、
-            大小两种字按底边对齐看着往下坠）。日均颜色照旧金色（用户：「颜色不变」）。窄屏开着「不看大额」时那行小字折到合计下面 */}
-        <div className="flex items-center justify-between gap-3 mb-2">
+            大小两种字按底边对齐看着往下坠）。日均颜色照旧金色（用户：「颜色不变」）。窄屏开着「不看大额」时那行小字折到合计下面。
+            这一行比上下两条 mb 原来（4 / 8）整体下移 5px（9 / 3），图不动：用户嫌偏上，按 App 样式真截图量过，
+            按钮下沿 → 数字上沿 = 数字下沿 → 图上最高刻度字上沿 = 16px（原来 11 / 21） */}
+        <div className="flex items-center justify-between gap-3 mb-[3px]">
           <div className="num flex flex-wrap items-baseline gap-x-1.5 min-w-0">
             <span className="text-lg font-semibold leading-tight">{fmtYuan(trendSum, { symbol: true })}</span>
             {bigCut.count ? <span className="text-[11px] text-muted">不含 {bigCut.count} 笔大额</span> : null}
