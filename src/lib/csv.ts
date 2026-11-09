@@ -1,5 +1,5 @@
 // 导出 / 导入。导出优先走系统分享（iOS 主屏 App 里 <a download> 不可靠）。
-import type { Account, Category, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction } from '../types'
+import type { Account, Category, FacadeAdjust, MeterNote, MeterReading, Pref, Snapshot, Transaction } from '../types'
 import { migrateFacade } from './facade'
 import { fmtYuan } from './money'
 import { TX_TYPE_LABEL } from '../types'
@@ -68,6 +68,8 @@ export interface ExportFile {
   meter_readings?: MeterReading[]
   /** 0013：用电每日备注。0013 之前导出的没有，按空的收。CSV 不带它 */
   meter_notes?: MeterNote[]
+  /** 0014：设置 → 参数。0014 之前导出的没有，按空的收。CSV 不带它 */
+  prefs?: Pref[]
 }
 
 /** meta 不传就不写同步标记（给测试和老调用方留的口子） */
@@ -83,6 +85,7 @@ export function buildJson(snap: Snapshot, meta?: { synced: boolean; lastSync: st
     // 键的顺序要紧：备份脚本（私有仓库）的 buildJson 也是紧跟在 facade_adjusts 后面，两边导出的文件才能逐字节对得上
     meter_readings: snap.meter_readings,
     meter_notes: snap.meter_notes,
+    prefs: snap.prefs,
   }
   return JSON.stringify(file, null, 2)
 }
@@ -107,6 +110,7 @@ export function parseImport(text: string): Snapshot {
   // 电表读数同理：缺失 = 0011 之前的老文件，按空的收；有但不是数组 = 文件坏了
   if (obj.meter_readings !== undefined && !Array.isArray(obj.meter_readings)) throw new Error('不是本应用导出的 JSON 文件')
   if (obj.meter_notes !== undefined && !Array.isArray(obj.meter_notes)) throw new Error('不是本应用导出的 JSON 文件')
+  if (obj.prefs !== undefined && !Array.isArray(obj.prefs)) throw new Error('不是本应用导出的 JSON 文件')
   const snap = validateImport({
     accounts: obj.accounts,
     categories: obj.categories,
@@ -114,6 +118,7 @@ export function parseImport(text: string): Snapshot {
     facade_adjusts: hasFacade ? obj.facade_adjusts : [],
     meter_readings: obj.meter_readings ?? [],
     meter_notes: obj.meter_notes ?? [],
+    prefs: obj.prefs ?? [],
   })
   // 老文件按老偏移量换算出外页面校准记录，否则整库恢复完外页面就不修饰了（露馅）。
   // 换算出来的 id 由来源 id 推出，和一次性 SQL 迁移写进云端的是同一批，合并导入不会翻倍。

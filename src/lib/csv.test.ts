@@ -33,7 +33,7 @@ const fadj: FacadeAdjust = { id: F1, account_id: A1, date: '2026-09-27', cents: 
 const M1 = '66666666-6666-4666-8666-666666666666'
 const M2 = '77777777-7777-4777-8777-777777777777'
 const reading: MeterReading = { id: M1, read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 339340, created_at: '2026-10-03T13:40:05.000Z' }
-const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [], meter_notes: [], meter_readings: [] }
+const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [] }
 
 function file(over: Record<string, unknown> = {}): string {
   return JSON.stringify({ version: 1, exported_at: '2026-09-04T00:00:00.000Z', accounts: [acc], categories: [cat], transactions: [tx], facade_adjusts: [], meter_readings: [], ...over })
@@ -84,7 +84,7 @@ describe('parseImport', () => {
   it('JSON 里电表读数紧跟在外页面校准后面——备份脚本的 buildJson 也是这个键序，两边的文件要能逐字节对上', () => {
     // 变异：把 meter_readings 挪到 transactions 前面 → 红
     const obj = JSON.parse(buildJson({ ...snap, meter_readings: [reading] }, { synced: true, lastSync: null })) as Record<string, unknown>
-    expect(Object.keys(obj)).toEqual(['version', 'exported_at', 'synced', 'last_sync', 'accounts', 'categories', 'transactions', 'facade_adjusts', 'meter_readings', 'meter_notes'])
+    expect(Object.keys(obj)).toEqual(['version', 'exported_at', 'synced', 'last_sync', 'accounts', 'categories', 'transactions', 'facade_adjusts', 'meter_readings', 'meter_notes', 'prefs'])
     // centi_kwh 原样是整数，不过任何换算
     expect(obj.meter_readings).toEqual([reading])
   })
@@ -101,6 +101,32 @@ describe('parseImport', () => {
     expect(() => parseImport(file({ meter_notes: 'x' }))).toThrow('不是本应用导出的 JSON 文件')
     // 100 个 emoji 是 100 个字（数据库按字符数算，不按 UTF-16）
     expect(parseImport(file({ meter_notes: [{ ...note, note: '😀'.repeat(100) }] })).meter_notes).toHaveLength(1)
+  })
+
+  it('参数（0014）：读得进来、写得出去；老文件没有这一节按空的收；不认识的 key 照收；坏的拒绝', () => {
+    // 变异：parseImport 不把 prefs 交给 validateImport → 读回来是空的，红
+    const pf = { id: '70726566-0000-4000-8000-000000000006', key: 'power.price', value: '', updated_at: '2026-11-09T05:00:00.000Z' }
+    expect(parseImport(file({ prefs: [pf] })).prefs).toEqual([pf])
+    expect(parseImport(file()).prefs).toEqual([])
+    expect(JSON.parse(buildJson({ ...snap, prefs: [pf] })).prefs).toEqual([pf])
+    // 新版本加的参数，老版本恢复时照样原样写回去：不能因为不认识这个 key 就拒掉整份备份
+    const future = { ...pf, id: '70726566-0000-4000-8000-000000000099', key: 'stats.something', value: '{"a":1}' }
+    expect(parseImport(file({ prefs: [future] })).prefs).toEqual([future])
+    // 200 个 emoji 是 200 个字（数据库按字符数算）
+    expect(parseImport(file({ prefs: [{ ...pf, value: '😀'.repeat(200) }] })).prefs).toHaveLength(1)
+    expect(() => parseImport(file({ prefs: [{ ...pf, value: '字'.repeat(201) }] }))).toThrow(/第 1 项参数.*不超过 200 个字/)
+    expect(() => parseImport(file({ prefs: [{ ...pf, value: 7 }] }))).toThrow(/第 1 项参数.*文字/)
+    expect(() => parseImport(file({ prefs: [{ ...pf, key: '' }] }))).toThrow(/第 1 项参数.*1 到 64 个字/)
+    expect(() => parseImport(file({ prefs: [{ ...pf, id: 'price' }] }))).toThrow(/第 1 项参数.*UUID/)
+    expect(() => parseImport(file({ prefs: [{ ...pf, updated_at: '2026-11-09 05:00' }] }))).toThrow(/第 1 项参数.*修改时间/)
+    expect(() => parseImport(file({ prefs: [pf, pf] }))).toThrow(/第 2 项参数.*重复/)
+    expect(() => parseImport(file({ prefs: 'x' }))).toThrow('不是本应用导出的 JSON 文件')
+  })
+
+  it('CSV 不带参数', () => {
+    const csv = buildCsv({ ...snap, prefs: [{ id: '70726566-0000-4000-8000-000000000001', key: 'power.avgDays', value: '7', updated_at: '2026-11-09T05:00:00.000Z' }] })
+    expect(csv).not.toContain('power.avgDays')
+    expect(csv.split('\n')).toHaveLength(2)
   })
 
   it('0011 之前的老文件没有这一节：按空的收，不报错', () => {
@@ -271,7 +297,7 @@ describe('导出可不可信', () => {
 describe('CSV 里的公式注入（2026-10-08 审出来的）', () => {
   it('备注以 = + - @ 开头的，前面垫一个单引号，Excel 就当文字不当公式；带回车的加引号', () => {
     // 变异：去掉垫引号那行 → 红
-    const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [{ ...tx, note: '=HYPERLINK("http://x")' }, { ...tx, id: T2, note: '+86 打车' }, { ...tx, id: '66666666-6666-4666-8666-666666666666', note: '第一行\r第二行' }], facade_adjusts: [], meter_notes: [], meter_readings: [] }
+    const snap: Snapshot = { accounts: [acc], categories: [cat], transactions: [{ ...tx, note: '=HYPERLINK("http://x")' }, { ...tx, id: T2, note: '+86 打车' }, { ...tx, id: '66666666-6666-4666-8666-666666666666', note: '第一行\r第二行' }], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [] }
     const csv = buildCsv(snap)
     expect(csv).toContain(',"\'=HYPERLINK(""http://x"")"')
     expect(csv).toContain(",'+86 打车,")

@@ -155,6 +155,17 @@ describe('一周里哪天最费电', () => {
     for (let i = 0; i < titles.length; i++) if (idx[i] < 0) expect.fail(`找不到「${titles[i]}」这张卡`)
     for (let i = 1; i < titles.length; i++) if (idx[i] < idx[i - 1]) expect.fail(`「${titles[i]}」排在「${titles[i - 1]}」前面了`)
   })
+
+  it('电价和往回看几天都在「设置 → 参数」里改（2026-11-09）：用电页底下不再有电价卡，也不再写死 30 天 / 半年 / 12 周', () => {
+    // 变异：把电价卡或任何一处写死的窗口放回来 → 红
+    const src = readFileSync(new URL('../pages/Power.tsx', import.meta.url), 'utf8')
+    for (const bad of ['PriceSheet', 'PRICE_KEY', 'localStorage', '>电价<', '最近 30 天', '最近半年', '最近 12 周', '最近 12 个月', '29 * DAY_MS', '30 * DAY_MS']) {
+      if (src.includes(bad)) expect.fail(`Power.tsx 里还有「${bad}」`)
+    }
+    for (const key of ['power.avgDays', 'power.hourDays', 'power.weekdayWeeks', 'power.usageDays', 'power.usageSegs']) {
+      if (!src.includes(`numPref(prefs, '${key}')`)) expect.fail(`Power.tsx 没读参数 ${key}`)
+    }
+  })
 })
 
 describe('提示框的措辞和找段', () => {

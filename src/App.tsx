@@ -8,6 +8,7 @@ import { useStore } from './lib/store'
 import { ledgerPosition } from './lib/ledgerPosition'
 import { Accounts } from './pages/Accounts'
 import { Categories } from './pages/Categories'
+import { Params } from './pages/Params'
 import { Power } from './pages/Power'
 import { Entry } from './pages/Entry'
 import { Home } from './pages/Home'
@@ -149,6 +150,7 @@ const router = createHashRouter([
           { path: 'settings', element: page('设置', <Settings />) },
           { path: 'categories', element: page('分类管理', <Categories />) },
           { path: 'power', element: page('用电记录', <Power />) },
+          { path: 'params', element: page('参数', <Params />) },
         ],
       },
       { path: 'add', element: page('记一笔', <Entry />) },

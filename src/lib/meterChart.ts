@@ -11,7 +11,7 @@ const SPLIT = { lineStyle: { color: CHART.axis } }
 const md = (ymd: string) => `${Number(ymd.slice(5, 7))}.${Number(ymd.slice(8, 10))}`
 
 /**
- * 每天用了多少度（柱子）+ 近 AVG_DAYS 天日均（虚线）。
+ * 每天用了多少度（柱子）+ 近 N 天日均（虚线；N 是「设置 → 参数」里的日均天数，avgDays 传实际平均了几个整天）。
  * 一点没被读数盖住的天画成空（第一次记之前），只盖住一部分的天（今天、刚开始记的那天）画浅色：数是对的，只是这天还没算全。
  */
 export function dailyOption(days: DayUsage[], avg: number | null, avgDays = AVG_DAYS, notes: ReadonlyMap<string, string> = new Map()) {

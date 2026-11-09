@@ -7,6 +7,7 @@ import { backupHealth, backupLine, CACHE_WARN_RATIO } from '../lib/backup'
 import { backupFilename, buildCsv, buildJson, exportTrustworthy, parseImport, readExportMeta, shareOrDownload, STALE_EXPORT_WARNING } from '../lib/csv'
 import { fmtIsoZh, nowIso, today } from '../lib/date'
 import { fmtReading, sortReadings } from '../lib/meter'
+import { changedCount, numPref } from '../lib/prefs'
 import { checkForUpdate, hardReload } from '../lib/sw'
 import { RestoreFailed, useStore } from '../lib/store'
 import type { Snapshot } from '../types'
@@ -69,11 +70,14 @@ export function Settings() {
   const facade_adjusts = useStore((st) => st.facade_adjusts)
   const meter_readings = useStore((st) => st.meter_readings)
   const meter_notes = useStore((st) => st.meter_notes)
+  const prefs = useStore((st) => st.prefs)
+  // 「参数」那一行的副标题：最常看的那一项 + 改过几项
+  const prefsChanged = changedCount(prefs)
   // 「生活」那组里用电记录的副标题：电表上次读数
   const lastMeter = useMemo(() => sortReadings(meter_readings).at(-1), [meter_readings])
   const snapshot = useMemo(
-    () => ({ accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes }),
-    [accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes],
+    () => ({ accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes, prefs }),
+    [accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes, prefs],
   )
   // 外页面导出的 CSV 只有外页面那本账（藏掉的、校准行都不在）：导出不能成为绕过外页面的口子
   const csvSnapshot = useMemo(() => ({ ...snapshot, transactions: outerList(transactions, accounts, mode) }), [snapshot, transactions, accounts, mode])
@@ -190,6 +194,11 @@ export function Settings() {
         if (!/"meter_notes"\s*:/.test(text) && meter_notes.length) {
           snap = { ...snap, meter_notes }
           warn.push(`这个备份文件里没有用电备注；现在的 ${meter_notes.length} 条备注会原样保留。`)
+        }
+        // 0014 之前的备份没有参数这一节，同理原样保留
+        if (!/"prefs"\s*:/.test(text) && prefs.length) {
+          snap = { ...snap, prefs }
+          warn.push(`这个备份文件里没有参数设置；现在的 ${prefs.length} 项参数会原样保留。`)
         }
         if (meta.synced === false) warn.push('注意：这个备份文件导出时本机还没同步过云端，它自己标了「未同步」，里面的账可能不全。')
         if (!trustworthy) warn.push('注意：这次打开 App 后还没成功同步过。万一恢复中途失败，自动退回用的是本机现在这份数据，可能比云端少几条。')
@@ -318,6 +327,11 @@ export function Settings() {
 
       <Group title="生活">
         <Item icon="⚡" label="用电记录" hint={lastMeter ? `电表上次 ${fmtReading(lastMeter.centi_kwh)} · ${fmtIsoZh(lastMeter.read_at)}` : '记电表读数，看每天用多少电'} onClick={() => nav('/power')} />
+      </Group>
+
+      {/* 设置 → 参数（2026-11-09，用户看效果图选「甲 · 单独一页」：以后参数会越来越多，设置页只多这一行）。和里外页面无关，两边一样 */}
+      <Group title="参数">
+        <Item icon="🎚️" label="参数" hint={`用电日均看近 ${numPref(prefs, 'power.avgDays')} 天 · ${prefsChanged ? `改过 ${prefsChanged} 项` : '都是默认'}`} onClick={() => nav('/params')} />
       </Group>
 
       <Group title="备份与恢复">

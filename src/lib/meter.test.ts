@@ -164,6 +164,26 @@ describe('顶上三个大数字', () => {
     expect(fmtKwh(s.projected!)).toBe('155.0')
   })
 
+  it('日均天数能改（设置 → 参数，2026-11-09）：同一份读数传 7 → 只看后一周 8 度、预计按 8 度估；传 30 → 15 天全算进来', () => {
+    // 变异：summarize 里改回写死 AVG_DAYS（不吃第三个参数）→ 日均还是 5，红
+    const rs = [R('2026-09-30 00:00', '1000.0')]
+    let v = 1100
+    for (let d = 1; d <= 15; d++) {
+      rs.push(R(`2026-10-${String(d).padStart(2, '0')} 00:00`, v.toFixed(1)))
+      v += d <= 7 ? 2 : 8
+    }
+    const s7 = summarize(rs, at('2026-10-15 21:40'), 7)
+    expect(fmtKwh(s7.avg!)).toBe('8.0')
+    expect(s7.avgDays).toBe(7)
+    expect(fmtKwh(s7.projected!)).toBe(fmtKwh(7000 + 800 * 17))
+    // 30 天：9/30 那天（100 度）也盖满了，15 个整天都算
+    const s30 = summarize(rs, at('2026-10-15 21:40'), 30)
+    expect(s30.avgDays).toBe(15)
+    expect(s30.avg!).toBeCloseTo((10000 + 7 * 200 + 7 * 800) / 15, 6)
+    // 不传 = 默认 14，和改成可调之前一样
+    expect(summarize(rs, at('2026-10-15 21:40')).avgDays).toBe(14)
+  })
+
   it('才记了一次 → 今天 0 度、没有日均、不预计', () => {
     const s = summarize([R('2026-10-03 08:00', '3000.0')], at('2026-10-03 21:40'))
     expect(s.today).toBe(0)
@@ -291,6 +311,18 @@ describe('一周里哪天最费电', () => {
     const outWin = weekdayProfile(spike('2026-04-08'), '2026-10-08')
     expect(outWin.map((x) => x.perDay)).toEqual([800, 800, 800, 800, 800, 800, 800])
     expect(outWin.map((x) => x.days)).toEqual([26, 26, 26, 26, 26, 26, 26])
+  })
+
+  it('往回看几周能改（设置 → 参数）：今天 10/8 传 4 周 → 窗口 9/10–10/7，每个星期几 4 个整天；9/10 的 100 度算进来，9/9 的不算', () => {
+    // 变异：weekdayProfile 里改回写死 WEEKDAY_WEEKS（不吃第三个参数）→ days 是 26，红
+    const spike = (day: string) => daily('2026-01-01', '2026-10-08', (_, ymd) => (ymd === day ? 100 : 8))
+    const inWin = weekdayProfile(spike('2026-09-10'), '2026-10-08', 4)
+    expect(inWin.map((x) => x.days)).toEqual([4, 4, 4, 4, 4, 4, 4])
+    expect(inWin[3].perDay).toBeCloseTo((3 * 800 + 10000) / 4, 6)
+    const outWin = weekdayProfile(spike('2026-09-09'), '2026-10-08', 4)
+    expect(outWin.map((x) => x.perDay)).toEqual([800, 800, 800, 800, 800, 800, 800])
+    // 多看一周，9/9（周三）就进来了
+    expect(weekdayProfile(spike('2026-09-09'), '2026-10-08', 5)[2].perDay).toBeCloseTo((4 * 800 + 10000) / 5, 6)
   })
 
   it('最费电的那一两天：周末明显高 → 两天；七天差不多 → 不挑；三天都高也只标两根；只有一天有数 → 不挑', () => {
@@ -503,6 +535,16 @@ describe('每天用了多少度：按周 / 按月（2026-10-16）', () => {
 
   it('一次读数都没有：留一段空的，不是空数组（图照样画得出坐标轴）', () => {
     expect(usageBuckets([], 'week', TODAY)).toHaveLength(12)
+  })
+
+  it('看几段能改（设置 → 参数）：传 24 → 往前 24 周 / 24 个月，最后一段还是今天所在的那段', () => {
+    const w = usageBuckets([], 'week', TODAY, 24)
+    expect(w).toHaveLength(24)
+    expect(w[0].from).toBe('2026-05-04')
+    expect(w[23].from).toBe('2026-10-12')
+    const m = usageBuckets([], 'month', TODAY, 24)
+    expect(m.map((b) => b.from).slice(0, 2)).toEqual(['2024-11-01', '2024-12-01'])
+    expect(m[23].from).toBe('2026-10-01')
   })
 })
 

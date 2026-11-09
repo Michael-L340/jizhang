@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { HelpTip } from '../components/HelpTip'
 import { usePersistedState } from '../lib/hooks'
@@ -19,10 +19,8 @@ import {
   peakHours,
   peakWeekdays,
   intervals,
-  parsePrice,
   parseReading,
   preview,
-  PRICE_KEY,
   rateSteps,
   readingIssues,
   sortReadings,
@@ -39,6 +37,9 @@ import {
 } from '../lib/meter'
 import { bucketOption, dailyOption, hourOption, RATE_SPANS, rateMarks, rateOption, rateYAxis, weekdayOption, type RateSpan } from '../lib/meterChart'
 import { fmtYuan } from '../lib/money'
+import { usageWindowLabel, weeksWindowLabel } from '../lib/paramsView'
+import { effectivePrice } from '../lib/powerPrice'
+import { numPref } from '../lib/prefs'
 import { useStore } from '../lib/store'
 import type { MeterNote, MeterReading } from '../types'
 
@@ -49,15 +50,6 @@ const LIST_FIRST = 8
 /** 列表里没连上的读数那一行写什么（lib/meter.ts 的 readingIssues） */
 const ISSUE_TEXT = { first: '第一次记录', same_time: '同一时刻有两条，按后记的算', outlier: '和前后读数对不上，没算', backward: '比上一次还小，没算' } as const
 
-function readPrice(): number | null {
-  try {
-    const v = parsePrice(localStorage.getItem(PRICE_KEY) ?? '')
-    return v ?? null
-  } catch {
-    return null
-  }
-}
-
 /** 北京时间的 datetime-local 值（2026-10-03T21:40）↔ 时间戳 */
 const toLocalInput = (ms: number) => new Date(ms + 8 * 3600_000).toISOString().slice(0, 16)
 const fromLocalInput = (v: string) => Date.parse(`${v}:00+08:00`)
@@ -66,15 +58,22 @@ const fromLocalInput = (v: string) => Date.parse(`${v}:00+08:00`)
  * 设置 → 用电记录（2026-10-03）：看一眼电表、输入累计读数，一天几次都行；
  * 页面把读数换算成「今天用了几度、每天多少、一天里几点最费电、这个月大概多少钱」。算法全在 lib/meter.ts。
  * 和里外页面无关，两边看到的一样。
+ * 往回看几天、电价都在「设置 → 参数」里改（2026-11-09，存云端，lib/prefs.ts）；这一页只读，底下原来那张「电价」卡去掉了。
  */
 export function Power() {
   const nav = useNavigate()
   const readings = useStore((s) => s.meter_readings)
   const addMeterReading = useStore((s) => s.addMeterReading)
   const removeMeterReading = useStore((s) => s.removeMeterReading)
-  const [price, setPriceState] = useState(readPrice)
+  const prefs = useStore((s) => s.prefs)
+  const avgDays = numPref(prefs, 'power.avgDays')
+  const hourDays = numPref(prefs, 'power.hourDays')
+  const weekdayWeeks = numPref(prefs, 'power.weekdayWeeks')
+  const usageDays = numPref(prefs, 'power.usageDays')
+  const usageSegs = numPref(prefs, 'power.usageSegs')
+  // 云端还没有电价那一行（刚装上新版本、没同步过）时用这台手机以前存的兜底
+  const price = useMemo(() => effectivePrice(prefs), [prefs])
   const [entryOpen, setEntryOpen] = useState(false)
-  const [priceOpen, setPriceOpen] = useState(false)
   const [picked, setPicked] = useState<MeterReading | null>(null)
   const [showAll, setShowAll] = useState(false)
   // 页面打开那一刻算「今天」「这个月」；记了一次之后跟着读数重算
@@ -82,9 +81,10 @@ export function Power() {
 
   const sorted = useMemo(() => sortReadings(readings), [readings])
   const last = sorted[sorted.length - 1]
-  const sum = useMemo(() => summarize(readings, now), [readings, now])
+  const sum = useMemo(() => summarize(readings, now, avgDays), [readings, now, avgDays])
   const todayYmd = beijingDayOf(now.getTime())
-  const days = useMemo(() => dailyUsage(readings, beijingDayOf(now.getTime() - 29 * DAY_MS), todayYmd), [readings, now, todayYmd])
+  // 按日画几天（含今天）
+  const days = useMemo(() => dailyUsage(readings, beijingDayOf(now.getTime() - (usageDays - 1) * DAY_MS), todayYmd), [readings, now, todayYmd, usageDays])
   // 什么时候最费电：横轴是有记录以来，打开看最近 span 天（3 / 7 / 30，记住上次选的）；拖了条子就哪档都不亮，点一档回到最近那段
   const [spanRaw, setSpan] = usePersistedState<RateSpan>('jz_power_rateSpan', 3)
   const span: RateSpan = RATE_SPANS.includes(spanRaw) ? spanRaw : 3
@@ -108,12 +108,12 @@ export function Power() {
     // 纵轴跟着看得见的那几段走（缩放条不扔窗口外的点，ECharts 不会自己换）
     return { xAxis: { axisLabel: { customValues: m }, axisTick: { customValues: m } }, yAxis: rateYAxis(steps, a, b) }
   }
-  // 一天里几点最费电：最近 30 天
-  const slots = useMemo(() => hourProfile(readings, now.getTime() - 30 * DAY_MS, now.getTime()), [readings, now])
+  // 一天里几点最费电：最近 hourDays 天
+  const slots = useMemo(() => hourProfile(readings, now.getTime() - hourDays * DAY_MS, now.getTime()), [readings, now, hourDays])
   const topHours = useMemo(() => peakHours(slots), [slots])
   const hasSlots = slots.some((x) => x.perHour !== null)
-  // 一周里哪天最费电：最近半年，只算记满的整天
-  const wdays = useMemo(() => weekdayProfile(readings, todayYmd), [readings, todayYmd])
+  // 一周里哪天最费电：最近 weekdayWeeks 周（默认半年），只算记满的整天
+  const wdays = useMemo(() => weekdayProfile(readings, todayYmd, weekdayWeeks), [readings, todayYmd, weekdayWeeks])
   const topDays = useMemo(() => peakWeekdays(wdays), [wdays])
   const wdAny = wdays.some((x) => x.perDay !== null)
   const wdFull = wdays.every((x) => x.perDay !== null)
@@ -130,7 +130,7 @@ export function Power() {
   const unit: UsageUnit = unitRaw === 'week' || unitRaw === 'month' ? unitRaw : 'day'
   const notesRaw = useStore((s) => s.meter_notes)
   const notes = useMemo(() => new Map(notesRaw.map((n) => [n.day, n.note])), [notesRaw])
-  const buckets = useMemo(() => (unit === 'day' ? [] : usageBuckets(readings, unit, todayYmd)), [readings, unit, todayYmd])
+  const buckets = useMemo(() => (unit === 'day' ? [] : usageBuckets(readings, unit, todayYmd, usageSegs)), [readings, unit, todayYmd, usageSegs])
   const usageOpt = useMemo(
     () => (unit === 'day' ? dailyOption(days, sum.avg, sum.avgDays, notes) : bucketOption(buckets, unit, bucketAverage(buckets), notes)),
     [unit, days, sum.avg, sum.avgDays, notes, buckets],
@@ -141,16 +141,6 @@ export function Power() {
   const ivTo = useMemo(() => new Map(ivs.map((iv) => [iv.to.id, iv])), [ivs])
   const newestFirst = useMemo(() => [...sorted].reverse(), [sorted])
   const money = (centi: number | null) => (price && centi !== null ? ` · 今天约 ¥${fmtYuan(costCents(centi, price))}` : '')
-
-  function savePrice(v: number | null) {
-    try {
-      if (v === null) localStorage.removeItem(PRICE_KEY)
-      else localStorage.setItem(PRICE_KEY, String(v))
-    } catch {
-      /* 存储被禁用：这次打开里照样用 */
-    }
-    setPriceState(v)
-  }
 
   return (
     <div className="px-4 pb-8">
@@ -223,7 +213,7 @@ export function Power() {
               </div>
             </div>
             <div className="flex items-center gap-2 text-[11px] text-muted mt-1 mb-1">
-              {unit === 'day' ? '最近 30 天' : unit === 'week' ? '最近 12 周 · 周一到周日' : '最近 12 个月'}
+              {usageWindowLabel(unit, usageDays, usageSegs)}
               <HelpTip title="每天用了多少度">
                 <p>读数不用在零点记：两次读数之间用的电按时间平均分到每一天。</p>
                 <p>浅色的柱子是还没算全的那段（比如今天、这周）。</p>
@@ -243,7 +233,7 @@ export function Power() {
             <div className="flex items-baseline justify-between mb-1">
               <span className="font-semibold">一周里哪天最费电</span>
               <span className="flex items-center gap-2 text-[11px] text-muted">
-                最近半年 · 平均每天几度
+                {weeksWindowLabel(weekdayWeeks)} · 平均每天几度
                 <HelpTip title="一周里哪天最费电">
                   <p>只算被读数盖满的整天（今天这种还没记完的不算），同一个星期几合起来平均。</p>
                   <p>每个星期几至少要有一个记满的整天才算记满一周。</p>
@@ -306,9 +296,9 @@ export function Power() {
             <div className="flex items-baseline justify-between mb-1">
               <span className="font-semibold">一天里几点最费电</span>
               <span className="flex items-center gap-2 text-[11px] text-muted">
-                最近 30 天 · 平均每小时几度
+                最近 {hourDays} 天 · 平均每小时几度
                 <HelpTip title="一天里几点最费电">
-                  <p>两次读数之间用的电按时间平均分到每个钟点，再把 30 天里同一个钟点合起来平均。</p>
+                  <p>两次读数之间用的电按时间平均分到每个钟点，再把 {hourDays} 天里同一个钟点合起来平均。</p>
                   <p>一天记得越勤越准；两次读数隔得久，各钟点就会差不多高。</p>
                 </HelpTip>
               </span>
@@ -318,7 +308,7 @@ export function Power() {
                 <Chart option={hourOption(slots)} height={170} />
               </Suspense>
             ) : (
-              <div className="text-sm text-muted py-8 text-center">{ivs.length ? '最近 30 天没有读数' : '记两次以上才画得出来'}</div>
+              <div className="text-sm text-muted py-8 text-center">{ivs.length ? `最近 ${hourDays} 天没有读数` : '记两次以上才画得出来'}</div>
             )}
             <div className="text-[11px] text-muted leading-relaxed mt-1">
               {topHours.length
@@ -374,14 +364,6 @@ export function Power() {
         </>
       )}
 
-      <button type="button" className="card w-full mt-3 px-4 py-3 flex justify-between items-center text-left" onClick={() => setPriceOpen(true)}>
-        <span>
-          <span className="block text-[15px]">电价</span>
-          <span className="block text-xs text-muted">填了就按它估电费；存在这台手机上</span>
-        </span>
-        <span className="text-sm text-brand-ink num">{price ? `${price} 元/度` : '没填 ›'}</span>
-      </button>
-
       {entryOpen ? (
         <EntrySheet
           readings={readings}
@@ -392,8 +374,6 @@ export function Power() {
           }}
         />
       ) : null}
-
-      <PriceSheet open={priceOpen} price={price} onClose={() => setPriceOpen(false)} onSave={(v) => (savePrice(v), setPriceOpen(false))} />
 
       {noteDay ? <NoteSheet day={noteDay} current={notesRaw.find((n) => n.day === noteDay) ?? null} onClose={() => setNoteDay(null)} /> : null}
       <Sheet open={picked !== null} onClose={() => setPicked(null)} title="这条读数">
@@ -531,27 +511,6 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
         }}
       >
         {busy ? '保存中…' : doubt ? '照样保存' : '保存'}
-      </button>
-    </Sheet>
-  )
-}
-
-function PriceSheet({ open, price, onClose, onSave }: { open: boolean; price: number | null; onClose: () => void; onSave: (v: number | null) => void }) {
-  const [text, setText] = useState(price ? String(price) : '')
-  // 每次打开都从现在的电价开始：上次没保存就关掉的输入不能留到这次，不然一点保存就把电价改掉
-  useEffect(() => {
-    if (open) setText(price ? String(price) : '')
-  }, [open, price])
-  const v = parsePrice(text)
-  return (
-    <Sheet open={open} onClose={onClose} title="电价">
-      <div className="flex items-baseline justify-center gap-1.5 mt-3">
-        <input inputMode="decimal" className="num text-[28px] font-semibold text-center bg-transparent outline-none w-36 border-b border-line" placeholder="比如 1.2" value={text} onChange={(e) => setText(e.target.value)} />
-        <span className="text-sm text-muted">元/度</span>
-      </div>
-      <div className="text-xs text-muted text-center mt-2 mb-4">{v === undefined ? '只能填正数，最多四位小数' : '问房东每度电多少钱。清空就只显示度数'}</div>
-      <button type="button" disabled={v === undefined} className={`w-full py-3 rounded-xl font-semibold ${v === undefined ? 'bg-bg text-muted' : 'bg-brand text-on-brand'}`} onClick={() => v !== undefined && onSave(v)}>
-        保存
       </button>
     </Sheet>
   )

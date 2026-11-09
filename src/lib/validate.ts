@@ -12,10 +12,12 @@
 //   transactions  tx_shape（0002 版）、tx_category_kind_guard、三个外键、numeric(12,2)、date
 //   facade_adjusts（0010）account_id 外键、date、cents bigint、id 是 uuid 列
 //   meter_readings（0011）read_at timestamptz、centi_kwh bigint check (>= 0)、id 是 uuid 列
+//   meter_notes（0013）day date、note check (char_length between 1 and 100)、id 是 uuid 列
+//   prefs（0014）key check (char_length between 1 and 64)、value check (char_length <= 200)、updated_at timestamptz、id 是 uuid 列
 //
 // 报错必须是人话，还要指出第几条、哪个字段、什么问题：真出事那天，用户是一个人
 // 举着手机看着这句话决定下一步怎么办的。只报第一个错，报一串没人看得完。
-import type { Account, CatKind, Category, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction, TxType } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, MeterNote, MeterReading, Pref, Snapshot, Transaction, TxType } from '../types'
 import { TX_TYPE_LABEL } from '../types'
 import { categoryKindOf } from './compute'
 
@@ -311,6 +313,25 @@ function readMeterNote(v: unknown, i: number): MeterNote {
   return { id: r.id as string, day: day as string, note: note as string, created_at: r.created_at as string }
 }
 
+/**
+ * 0014：设置 → 参数的一项。key 对应 check (char_length(key) between 1 and 64)、value 对应 check (char_length(value) <= 200)，
+ * 都按字符数（不是 UTF-16 码元）算。value 可以是空串（电价「没填」）。认不认得这个 key 不管：
+ * 新版本加的参数，老版本恢复时照样原样写回去，不能因为不认识就拒掉整份备份。
+ */
+function readPref(v: unknown, i: number): Pref {
+  const fail: Fail = failer(`备份文件第 ${i + 1} 项参数`)
+  const r = asRow(v)
+  if (!r) fail('不是一条记录，文件可能已损坏')
+  if (typeof r.id !== 'string') fail('缺少 id，文件可能已损坏')
+  if (!isUuid(r.id)) fail(`的 id「${String(r.id)}」不是合法的 UUID，数据库不接受`)
+  const key: unknown = r.key
+  if (typeof key !== 'string' || [...key].length < 1 || [...key].length > 64) fail('的名字要是 1 到 64 个字')
+  const value: unknown = r.value
+  if (typeof value !== 'string' || [...value].length > 200) fail('的值要是不超过 200 个字的文字')
+  if (!isTimestamp(r.updated_at)) fail(`的修改时间不是合法的时间（读到 ${JSON.stringify(r.updated_at)}）`)
+  return { id: r.id as string, key: key as string, value: value as string, updated_at: r.updated_at as string }
+}
+
 // ── 跨行：外键、唯一索引、触发器，这些都要看过整份文件才知道 ──
 
 function checkAccounts(accounts: Account[]): void {
@@ -424,13 +445,21 @@ function checkMeterNotes(rows: MeterNote[]): void {
   })
 }
 
+function checkPrefs(rows: Pref[]): void {
+  const ids = new Set<string>()
+  rows.forEach((p, i) => {
+    if (ids.has(p.id)) failer(`备份文件第 ${i + 1} 项参数`)(`的 id 和前面某一项重复了（${p.id}）`)
+    ids.add(p.id)
+  })
+}
+
 /**
- * 校验并归一化一份备份文件的六张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
+ * 校验并归一化一份备份文件的七张表。任何一条不合法都抛错，抛错时调用方一个字节都还没往云端发。
  * 返回的对象只含数据库真有的那几列，字段齐全（缺的按数据库默认值补），可以直接交给 importAll。
  * facade_adjusts 缺失按空处理（0010 之前的文件）；要不要按老偏移量换算，是 csv.ts parseImport 的事。
- * meter_readings 缺失按空处理（0011 之前的文件），没有什么可换算的；meter_notes 同理（0013）。
+ * meter_readings 缺失按空处理（0011 之前的文件），没有什么可换算的；meter_notes 同理（0013），prefs 同理（0014）。
  */
-export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[]; facade_adjusts?: unknown[]; meter_readings?: unknown[]; meter_notes?: unknown[] }): Snapshot {
+export function validateImport(raw: { accounts: unknown[]; categories: unknown[]; transactions: unknown[]; facade_adjusts?: unknown[]; meter_readings?: unknown[]; meter_notes?: unknown[]; prefs?: unknown[] }): Snapshot {
   const accounts = raw.accounts.map(readAccount)
   checkAccounts(accounts)
   const categories = raw.categories.map(readCategory)
@@ -443,5 +472,7 @@ export function validateImport(raw: { accounts: unknown[]; categories: unknown[]
   checkMeterReadings(meter_readings)
   const meter_notes = (raw.meter_notes ?? []).map(readMeterNote)
   checkMeterNotes(meter_notes)
-  return { accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes }
+  const prefs = (raw.prefs ?? []).map(readPref)
+  checkPrefs(prefs)
+  return { accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes, prefs }
 }

@@ -168,9 +168,9 @@ export interface PowerSummary {
   today: number
   /** 这个月到最后一次读数用了多少（0.01 度） */
   month: number
-  /** 最近 AVG_DAYS 天里被读数盖满的整天的平均（0.01 度）；一个整天都没有就 null */
+  /** 最近 avgDays 天（参数，默认 AVG_DAYS）里被读数盖满的整天的平均（0.01 度）；一个整天都没有就 null */
   avg: number | null
-  /** 日均是按几个整天平均的（0–AVG_DAYS），标题要写「近 N 天日均」，别在只有两天时说「近 14 天」 */
+  /** 日均是按几个整天平均的（0–avgDays），标题要写「近 N 天日均」，别在只有两天时说「近 14 天」 */
   avgDays: number
   /** 本月预计 = 已用 + 日均 × 最后一次读数到月底；没有日均就 null */
   projected: number | null
@@ -178,12 +178,13 @@ export interface PowerSummary {
   monthFrom: string | null
 }
 
-/** 日均看近几天（只记满的整天），首页、用电页、日用量图、本月预计全用这一个。
- *  7 天太跳（一两天开空调预计就跳十几度），30 天换季慢半拍，用户 2026-10-19 选折中 14 天 */
+/** 日均默认看近几天（只记满的整天），首页、用电页、日用量图、本月预计全用这一个。
+ *  7 天太跳（一两天开空调预计就跳十几度），30 天换季慢半拍，用户 2026-10-19 选折中 14 天。
+ *  2026-11-09 起能在「设置 → 参数」里改（lib/prefs.ts 的 power.avgDays），这里只是没设过时的默认 */
 export const AVG_DAYS = 14
 
-/** 顶上三个大数字。now 只用来定「今天」「这个月」是哪天 */
-export function summarize(rs: MeterReading[], now: Date): PowerSummary {
+/** 顶上三个大数字。now 只用来定「今天」「这个月」是哪天；avgDays = 日均看近几天（设置 → 参数） */
+export function summarize(rs: MeterReading[], now: Date, avgDays: number = AVG_DAYS): PowerSummary {
   const ivs = intervals(rs)
   const todayYmd = dayOf(now.getTime())
   const t0 = dayStart(todayYmd)
@@ -192,7 +193,7 @@ export function summarize(rs: MeterReading[], now: Date): PowerSummary {
   const m1 = Date.UTC(y, mo, 1) - BJ_OFFSET_MS
   const today = usedBetween(ivs, t0, t0 + DAY_MS)
   const month = usedBetween(ivs, m0, m1)
-  const full = dailyUsage(rs, dayOf(t0 - AVG_DAYS * DAY_MS), dayOf(t0 - DAY_MS)).filter((d) => d.coveredHours >= 24 - 1e-9)
+  const full = dailyUsage(rs, dayOf(t0 - avgDays * DAY_MS), dayOf(t0 - DAY_MS)).filter((d) => d.coveredHours >= 24 - 1e-9)
   const avg = full.length ? full.reduce((s, d) => s + d.used, 0) / full.length : null
   const last = ivs.length ? Date.parse(ivs[ivs.length - 1].to.read_at) : null
   const projected = avg === null || last === null ? null : month + (avg * Math.max(0, m1 - Math.max(last, m0))) / DAY_MS
@@ -368,7 +369,8 @@ export interface WeekdaySlot {
   days: number
 }
 
-/** 「一周里哪天最费电」往回看多少周：半年。每个星期几能攒 26 个样本，比 3 个月稳；每周七天都齐，冷热季节对七天一视同仁 */
+/** 「一周里哪天最费电」默认往回看多少周：半年。每个星期几能攒 26 个样本，比 3 个月稳；每周七天都齐，冷热季节对七天一视同仁。
+ *  2026-11-09 起能在「设置 → 参数」里改（power.weekdayWeeks），这里只是没设过时的默认 */
 export const WEEKDAY_WEEKS = 26
 export const WEEKDAY_NAMES = ['周一', '周二', '周三', '周四', '周五', '周六', '周日'] as const
 
@@ -378,14 +380,14 @@ export function weekdayOf(ymd: string): number {
 }
 
 /**
- * 一周里哪天最费电：today 的前一天往回数整整 WEEKDAY_WEEKS 周（182 天，每个星期几恰好 26 个位置），
- * 只拿被读数盖满的整天（和「近 14 天日均」同一口径；today 还没记完，不算），按星期几归堆平均。
+ * 一周里哪天最费电：today 的前一天往回数整整 weeks 周（weeks × 7 天，每个星期几恰好 weeks 个位置；默认 WEEKDAY_WEEKS），
+ * 只拿被读数盖满的整天（和日均同一口径；today 还没记完，不算），按星期几归堆平均。
  */
-export function weekdayProfile(rs: MeterReading[], today: string): WeekdaySlot[] {
+export function weekdayProfile(rs: MeterReading[], today: string, weeks: number = WEEKDAY_WEEKS): WeekdaySlot[] {
   const t0 = dayStart(today)
   const used = new Array<number>(7).fill(0)
   const count = new Array<number>(7).fill(0)
-  for (const d of dailyUsage(rs, dayOf(t0 - WEEKDAY_WEEKS * 7 * DAY_MS), dayOf(t0 - DAY_MS))) {
+  for (const d of dailyUsage(rs, dayOf(t0 - weeks * 7 * DAY_MS), dayOf(t0 - DAY_MS))) {
     if (d.coveredHours < 24 - 1e-9) continue
     const i = weekdayOf(d.date) - 1
     used[i] += d.used
@@ -414,7 +416,10 @@ export function weekdayLead(slots: WeekdaySlot[], peaks: number[]): number | nul
   return base > 0 ? mean(top) / base - 1 : null
 }
 
-/** 电价（元/度）存本机，没填就是 null（只显示度数） */
+/**
+ * 电价（元/度）以前存本机的那个键。2026-11-09 起电价存云端（设置 → 参数，lib/prefs.ts 的 power.price）；
+ * 云端还没有那一行时先读它兜底（lib/powerPrice.ts），同步之后 store 把它传上去。回退旧版本时旧代码照旧读它
+ */
 export const PRICE_KEY = 'jz_power_price'
 
 /** 输入框里的电价 → 元/度；空串 = 不填 */
@@ -485,7 +490,7 @@ function mondayOf(ymd: string): string {
 }
 
 /**
- * 最近 count 周（周一到周日）/ count 个月，每段用了多少。今天所在的那段在最后（还没过完，算没记满）。
+ * 最近 count 周（周一到周日）/ count 个月，每段用了多少（count 默认 12，「设置 → 参数」的 power.usageSegs）。今天所在的那段在最后（还没过完，算没记满）。
  * 最前面一次读数都没盖到的那几段去掉（至少留一段）：刚开始记的头几个月，别画一排空位。
  */
 export function usageBuckets(rs: MeterReading[], unit: 'week' | 'month', todayYmd: string, count = 12): UsageBucket[] {

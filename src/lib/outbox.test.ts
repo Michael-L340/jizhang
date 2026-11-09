@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { packOutbox, unpackMnOutbox, unpackOutbox, type Outbox } from './outbox'
+import { packOutbox, unpackMnOutbox, unpackOutbox, unpackPfOutbox, type Outbox } from './outbox'
 import { DELETED } from './pending'
 import type { Transaction } from '../types'
 
@@ -70,3 +70,13 @@ describe('用电备注的待传队列（0013）', () => {
   })
 })
 
+
+describe('参数的待传队列（0014）', () => {
+  it('空串的值留下（电价「没填」就是 \'\'）；缺字段、值不是文字、id 对不上的丢掉；「已删除」照留', () => {
+    // 变异：isPfLike 照抄 isMnLike 要求值非空 → 清空电价那一项丢了，红
+    const ok = { id: 'p6', key: 'power.price', value: '', updated_at: '2026-11-09T05:00:00.000Z' }
+    const q = unpackPfOutbox([['p6', ok], ['p1', { ...ok, id: 'p1', value: 7 }], ['p2', { ...ok }], ['p3', '__deleted__'], ['p4', { ...ok, id: 'p4', key: '' }], ['p5', { id: 'p5', key: 'k', value: '1' }]])
+    expect([...q.keys()]).toEqual(['p6', 'p3'])
+    expect(q.get('p6')).toEqual(ok)
+  })
+})

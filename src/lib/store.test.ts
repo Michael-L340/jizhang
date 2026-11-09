@@ -6,9 +6,11 @@
 import 'fake-indexeddb/auto'
 import { IDBFactory, IDBObjectStore } from 'fake-indexeddb'
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from 'vitest'
-import type { Category, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction } from '../types'
+import type { Category, FacadeAdjust, MeterNote, MeterReading, Pref, Snapshot, Transaction } from '../types'
 import { CACHE_LIMIT_BYTES, IDB_LIMIT_BYTES } from './backup'
-import { DB_NAME, LEDGER_KEY, LEGACY_KEY, MN_OUTBOX_KEY, MR_OUTBOX_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, STORE } from './cache'
+import { DB_NAME, LEDGER_KEY, LEGACY_KEY, MN_OUTBOX_KEY, MR_OUTBOX_KEY, OPEN_TIMEOUT_MS, OUTBOX_KEY, PF_OUTBOX_KEY, STORE } from './cache'
+import { PRICE_KEY } from './meter'
+import { PRICE_PREF, pricePref, prefRow } from './prefs'
 
 // ---------- 假的 api.ts ----------
 // vi.hoisted 保证这个对象在 vi.mock 提升后仍是同一个引用，resetModules 之后也不会换。
@@ -27,6 +29,9 @@ const api = vi.hoisted(() => ({
   deleteMeterNote: vi.fn(),
   upsertMeterReadings: vi.fn(),
   upsertMeterNotes: vi.fn(),
+  savePref: vi.fn(),
+  deletePref: vi.fn(),
+  upsertPrefs: vi.fn(),
   importAll: vi.fn(),
   wipeAll: vi.fn(),
   fetchBackupStatus: vi.fn(),
@@ -199,7 +204,7 @@ function cat(id: string, over: Partial<Category> = {}): Category {
 }
 
 function snap(transactions: Transaction[] = [], categories: Category[] = []): Snapshot {
-  return { accounts: [], categories, transactions, facade_adjusts: [], meter_notes: [], meter_readings: [] }
+  return { accounts: [], categories, transactions, facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [] }
 }
 
 function fa(id: string, cents = -800000): FacadeAdjust {
@@ -410,7 +415,7 @@ describe('S2 本机缓存（账本在 IndexedDB）', () => {
     st().showToast('随便一句')
     st().persist()
     await flushed()
-    expect(Object.keys(await cached()).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'meter_notes', 'meter_readings', 'transactions'])
+    expect(Object.keys(await cached()).sort()).toEqual(['accounts', 'at', 'categories', 'facade_adjusts', 'meter_notes', 'meter_readings', 'prefs', 'transactions'])
   })
 
   it('缓存占用按 UTF-16 算：(键长 + 值长) × 2', async () => {
@@ -838,7 +843,7 @@ describe('同步失败留痕', () => {
 //   恢复是唯一会主动删数据的路径，顺序错一步就是删了没导回来。
 // ══════════════════════════════════════════════════════════════
 describe('导入与整库恢复', () => {
-  const snapshot: Snapshot = { accounts: [], categories: [], transactions: [tx('t1')] , facade_adjusts: [], meter_notes: [], meter_readings: [] }
+  const snapshot: Snapshot = { accounts: [], categories: [], transactions: [tx('t1')] , facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [] }
 
   it('整库恢复必须先清空再导入，最后把界面拉到云端', async () => {
     const order: string[] = []
@@ -1479,6 +1484,9 @@ describe('旧版本写的缓存', () => {
     expect(s2.accounts[0].repay_day).toBeNull()
     expect(s2.transactions[0].settles).toBeNull()
     expect(s2.transactions[0].installments).toBeNull()
+    // 0014 之前写的缓存没有参数这一节：补成空数组（全按默认），不能是 undefined（页面上 prefs.find 会炸）
+    // 变异：parseCache 不补 prefs、init 也不兜（`cache.prefs` 直接用）→ undefined，红（只去掉其中一处是绿的：两处互为兜底）
+    expect(s2.prefs).toEqual([])
   })
 })
 
@@ -2127,3 +2135,167 @@ describe('用电备注', () => {
   })
 })
 
+
+// ══════════════════════════════════════════════════════════════
+// 2026-11-09：设置 → 参数（0014），「放在云上保存」：和用电备注同一套
+// ══════════════════════════════════════════════════════════════
+describe('设置 → 参数', () => {
+  const AT = '2026-11-09T05:00:00.000Z'
+  const AVG_ID = '70726566-0000-4000-8000-000000000001'
+  const avg = (v: string): Pref => prefRow(AVG_ID, 'power.avgDays', v, AT)
+
+  it('有网改一项：先写云端再进 state、落缓存', async () => {
+    // 变异：savePref 不走 pfSide（不进 state）→ 红
+    api.savePref.mockResolvedValueOnce(undefined)
+    expect(await st().savePref(avg('7'))).toBe(true)
+    expect(api.savePref).toHaveBeenCalledWith(avg('7'))
+    expect(st().prefs).toEqual([avg('7')])
+    await vi.advanceTimersByTimeAsync(600)
+    expect((await cached()).prefs).toEqual([avg('7')])
+  })
+
+  it('恢复默认 = 删掉那一行；删之前就出门的那次同步落地时不许复活', async () => {
+    store.useStore.setState({ prefs: [avg('7')] })
+    const d = deferred<Snapshot>()
+    api.fetchAll.mockReturnValueOnce(d.promise)
+    const rp = st().refresh()
+    api.deletePref.mockResolvedValueOnce(undefined)
+    expect(await st().removePref(AVG_ID)).toBe(true)
+    expect(api.deletePref).toHaveBeenCalledWith(AVG_ID)
+    d.resolve({ ...snap(), prefs: [avg('7')] })
+    await rp
+    expect(st().prefs).toEqual([])
+  })
+
+  it('没网改一项：照样生效、进本机队列；同步回来的快照没有它也不冲掉；联网补传后清空', async () => {
+    // 变异：refresh 合并时参数不叠队列 → 同步后回到默认，红；flushOutbox 不补传参数队列 → outboxCount 还是 1，红
+    api.savePref.mockRejectedValueOnce(offline())
+    expect(await st().savePref(avg('7'))).toBe(true)
+    expect(st().prefs).toEqual([avg('7')])
+    expect(st().outboxCount).toBe(1)
+    expect(JSON.parse(ls.map.get(PF_OUTBOX_KEY)!).entries[0][0]).toBe(AVG_ID)
+    api.savePref.mockRejectedValue(offline())
+    api.fetchAll.mockResolvedValueOnce(snap())
+    await st().refresh()
+    expect(st().prefs).toEqual([avg('7')])
+    api.savePref.mockResolvedValue(undefined)
+    await st().flushOutbox()
+    expect(api.savePref).toHaveBeenLastCalledWith(avg('7'))
+    expect(st().outboxCount).toBe(0)
+    expect(ls.map.has(PF_OUTBOX_KEY)).toBe(false)
+  })
+
+  it('冷启动：参数队列从本机装回来，叠在缓存上', async () => {
+    // 变异：eachSide 不带 pfSide（init 不读 PF_OUTBOX_KEY）→ 红
+    ls.map.set(PF_OUTBOX_KEY, JSON.stringify({ at: AT, entries: [[AVG_ID, avg('30')]] }))
+    await st().init()
+    expect(st().prefs).toEqual([avg('30')])
+    expect(st().outboxCount).toBe(1)
+  })
+
+  it('补传时备注那边就断了：参数这轮也不试', async () => {
+    // 变异：flushOutbox 里备注那一步的结果不赋给 stopped → 参数照样去试，红
+    api.saveMeterNote.mockRejectedValueOnce(offline())
+    await st().saveMeterNote({ id: 'n1', day: '2026-11-08', note: '没开空调', created_at: AT })
+    api.savePref.mockRejectedValueOnce(offline())
+    await st().savePref(avg('7'))
+    api.savePref.mockClear()
+    api.saveMeterNote.mockRejectedValueOnce(offline())
+    await st().flushOutbox()
+    expect(api.savePref).not.toHaveBeenCalled()
+    expect(st().outboxCount).toBe(2)
+  })
+
+  it('退出登录：参数和参数队列一起清掉', async () => {
+    // 变异：signOut 不清 pfSide（eachSide 漏掉它）→ 队列键还在，红
+    api.savePref.mockRejectedValueOnce(offline())
+    await st().savePref(avg('7'))
+    expect(ls.map.has(PF_OUTBOX_KEY)).toBe(true)
+    api.signOut.mockResolvedValue(undefined)
+    await st().signOut()
+    expect(st().prefs).toEqual([])
+    expect(ls.map.has(PF_OUTBOX_KEY)).toBe(false)
+    expect(st().outboxCount).toBe(0)
+  })
+
+  it('整库恢复第一句就失败：参数也按原样写回去', async () => {
+    // 变异：restoreSnapshot 第一句失败那段不写回 prefs → 红
+    store.useStore.setState({ prefs: [avg('7')] })
+    api.wipeAll.mockRejectedValueOnce(Object.assign(new Error('网络不通'), { step: 'meter_readings' }))
+    api.upsertPrefs.mockResolvedValue(undefined)
+    await expect(st().restoreSnapshot(snap())).rejects.toThrow(/一条数据都没删/)
+    expect(api.upsertPrefs).toHaveBeenCalledWith([avg('7')])
+  })
+
+  it('整库恢复中途失败：只改过参数的账号也要回滚（hadData 算上参数）', async () => {
+    // 变异：hadData 不看 prefs → 不回滚，importAll 只被调用一次，红
+    store.useStore.setState({ prefs: [avg('7')] })
+    api.wipeAll.mockResolvedValueOnce(undefined)
+    api.importAll.mockRejectedValueOnce(new Error('网络不通')).mockResolvedValueOnce(undefined)
+    await expect(st().restoreSnapshot(snap())).rejects.toThrow(/退回操作前/)
+    expect(api.importAll).toHaveBeenCalledTimes(2)
+    expect(api.importAll.mock.calls[1][0].prefs).toEqual([avg('7')])
+  })
+
+  describe('电价搬到云端（以前只存在这台手机上）', () => {
+    const price = (v: string): Pref => prefRow(PRICE_PREF.id, PRICE_PREF.key, v, AT)
+
+    it('云端还没有电价：同步之后把本机那个传上去，传成了才删本机键', async () => {
+      // 变异：adoptLocalPrice 不写云端 → savePref 没被调用，红
+      ls.map.set(PRICE_KEY, '0.56')
+      api.savePref.mockResolvedValue(undefined)
+      await st().refresh()
+      await vi.waitFor(() => expect(ls.map.has(PRICE_KEY)).toBe(false))
+      expect(api.savePref).toHaveBeenCalledWith(expect.objectContaining({ id: PRICE_PREF.id, key: 'power.price', value: '0.56' }))
+      expect(pricePref(st().prefs)).toBe(0.56)
+    })
+
+    it('没网也算搬了：进队列、删本机键，联网后补传', async () => {
+      ls.map.set(PRICE_KEY, '1.2')
+      api.savePref.mockRejectedValue(offline())
+      await st().refresh()
+      await vi.waitFor(() => expect(ls.map.has(PRICE_KEY)).toBe(false))
+      expect(pricePref(st().prefs)).toBe(1.2)
+      expect(JSON.parse(ls.map.get(PF_OUTBOX_KEY)!).entries[0][0]).toBe(PRICE_PREF.id)
+    })
+
+    it('云端已经有电价（哪怕是「没填」的空串）：云端为准，本机键删掉、不上传', async () => {
+      // 变异：去掉「云端已经有就只删本机键」→ 本机的 0.56 盖掉云端，savePref 被调用，红
+      for (const v of ['0.6', '']) {
+        ls.map.set(PRICE_KEY, '0.56')
+        api.savePref.mockClear()
+        api.fetchAll.mockResolvedValueOnce({ ...snap(), prefs: [price(v)] })
+        await st().refresh()
+        await vi.waitFor(() => expect(ls.map.has(PRICE_KEY)).toBe(false))
+        expect(api.savePref).not.toHaveBeenCalled()
+        expect(st().prefs).toEqual([price(v)])
+      }
+    })
+
+    it('本机键是坏的：删掉，不上传', async () => {
+      // 变异：去掉「本机键解析不了就删」→ 把 'abc' 当电价传上去，红
+      ls.map.set(PRICE_KEY, 'abc')
+      await st().refresh()
+      await vi.waitFor(() => expect(ls.map.has(PRICE_KEY)).toBe(false))
+      expect(api.savePref).not.toHaveBeenCalled()
+      expect(st().prefs).toEqual([])
+    })
+
+    it('云端拒收（数据被拒，不是没网）：本机键留着，下次同步再试', async () => {
+      // 变异：不看 writeSide 的结果、一律删本机键 → 电价就这么丢了，红
+      ls.map.set(PRICE_KEY, '0.56')
+      api.savePref.mockRejectedValueOnce(denied())
+      await st().refresh()
+      await vi.waitFor(() => expect(st().toast?.msg).toMatch(/保存设置失败/))
+      expect(ls.map.get(PRICE_KEY)).toBe('0.56')
+      expect(st().prefs).toEqual([])
+    })
+
+    it('本机没有电价：什么都不做', async () => {
+      await st().refresh()
+      await drain()
+      expect(api.savePref).not.toHaveBeenCalled()
+      expect(st().prefs).toEqual([])
+    })
+  })
+})

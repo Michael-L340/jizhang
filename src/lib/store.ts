@@ -1,13 +1,15 @@
 // 全局状态。页面只从这里读数据、只调这里的动作；这里是唯一调用 api.ts 的地方。
 import { useMemo } from 'react'
 import { create } from 'zustand'
-import type { Account, CatKind, Category, FacadeAdjust, MeterNote, MeterReading, Snapshot, Transaction } from '../types'
+import type { Account, CatKind, Category, FacadeAdjust, MeterNote, MeterReading, Pref, Snapshot, Transaction } from '../types'
 import * as api from './api'
 import { CACHE_LIMIT_BYTES, cacheBytes, IDB_LIMIT_BYTES, type BackupStatus } from './backup'
-import { dropLegacy, LEDGER_KEY, MN_OUTBOX_KEY, MR_OUTBOX_KEY, readLedger, readOutboxDump, removeLedger, removeOutboxDump, storageQuota, writeLedger, writeOutboxDump, type Backend } from './cache'
+import { dropLegacy, LEDGER_KEY, MN_OUTBOX_KEY, MR_OUTBOX_KEY, PF_OUTBOX_KEY, readLedger, readOutboxDump, removeLedger, removeOutboxDump, storageQuota, writeLedger, writeOutboxDump, type Backend } from './cache'
 import { nowIso } from './date'
 import { applyPending, DELETED, type Pending } from './pending'
-import { packOutbox, unpackMnOutbox, unpackMrOutbox, unpackOutbox, type Outbox, type OutboxDump } from './outbox'
+import { packOutbox, unpackMnOutbox, unpackMrOutbox, unpackOutbox, unpackPfOutbox, type Outbox, type OutboxDump } from './outbox'
+import { parsePrice, PRICE_KEY } from './meter'
+import { PRICE_PREF, pricePref, prefRow } from './prefs'
 import { INNER_TTL_MS, type Mode } from './facade'
 
 // 账本快照存 IndexedDB、待传队列存 localStorage，存哪、怎么兜底都在 cache.ts；这里只管内容。
@@ -38,6 +40,8 @@ function parseCache(raw: string | null): Cache | null {
       meter_readings: Array.isArray(c.meter_readings) ? c.meter_readings : [],
       // 0013 之前写的缓存没有用电备注，同上
       meter_notes: Array.isArray(c.meter_notes) ? c.meter_notes : [],
+      // 0014 之前写的缓存没有参数，同上（没有就是全按默认）
+      prefs: Array.isArray(c.prefs) ? c.prefs : [],
     }
   } catch {
     return null
@@ -78,6 +82,7 @@ function serializeCache(s: Snapshot): string {
     facade_adjusts: s.facade_adjusts,
     meter_readings: s.meter_readings,
     meter_notes: s.meter_notes,
+    prefs: s.prefs,
     at: nowIso(),
   }
   return JSON.stringify(c)
@@ -170,6 +175,10 @@ export interface State extends Snapshot {
   /** 写 / 改一天的用电备注（0013）。和读数同一套：先写云端，没网进队列（2026-10-16「云端 + 本地」） */
   saveMeterNote: (n: MeterNote) => Promise<boolean>
   removeMeterNote: (id: string) => Promise<boolean>
+  /** 设置 → 参数里改一项（0014）。和用电备注同一套：先写云端，没网 / 网太慢进队列 */
+  savePref: (p: Pref) => Promise<boolean>
+  /** 删掉一项 = 回到默认（「恢复默认」） */
+  removePref: (id: string) => Promise<boolean>
   /** 合并导入：同 id 覆盖，不删任何东西 */
   importSnapshot: (snap: Snapshot) => Promise<void>
   /**
@@ -203,9 +212,11 @@ const pendingCat: Pending<Category> = new Map()
 const pendingFa: Pending<FacadeAdjust> = new Map()
 const pendingMr: Pending<MeterReading> = new Map()
 const pendingMn: Pending<MeterNote> = new Map()
-// 用电那两张的「哪次同步之后才能退休」编号（settle / retirePatches，见下面流水那几张的说明）
+const pendingPf: Pending<Pref> = new Map()
+// 用电那两张、参数的「哪次同步之后才能退休」编号（settle / retirePatches，见下面流水那几张的说明）
 const settledMr = new Map<string, number>()
 const settledMn = new Map<string, number>()
+const settledPf = new Map<string, number>()
 
 // ── 待上传队列 ────────────────────────────────────────────────
 // 上面那两张补丁表管的是「请求飞在路上」，60 秒就过期；这一张管的是「请求根本没发出去」，
@@ -213,13 +224,13 @@ const settledMn = new Map<string, number>()
 const outboxTx: Outbox = new Map()
 
 /**
- * 用电那两张表（电表读数、每日备注）的待传队列。规矩全照流水那份，只是各存一个 localStorage 键：
- * 读数 2026-10-15（用户：「和记账一样」），备注 2026-10-16（「云端 + 本地」）。
- * 两张表写法一样（按 id 覆盖、按 id 删），所以写成一份通用的，别再各抄一遍。
+ * 用电那两张表（电表读数、每日备注）和参数（0014）的待传队列。规矩全照流水那份，只是各存一个 localStorage 键：
+ * 读数 2026-10-15（用户：「和记账一样」），备注 2026-10-16（「云端 + 本地」），参数 2026-11-09（「放在云上保存」）。
+ * 三张表写法一样（按 id 覆盖、按 id 删），所以写成一份通用的，别再各抄一遍。
  */
 interface Side<T extends { id: string }> {
   /** state 里那一节 */
-  key: 'meter_readings' | 'meter_notes'
+  key: 'meter_readings' | 'meter_notes' | 'prefs'
   /** localStorage 的键 */
   storage: string
   /** 待传队列 */
@@ -274,10 +285,28 @@ const mnSide: Side<MeterNote> = {
   rejected: '有 1 条备注上传被拒绝',
 }
 
-/** 对两张表各做一遍（泛型函数不能直接吃联合类型，所以这么转一手） */
+const pfSide: Side<Pref> = {
+  key: 'prefs',
+  storage: PF_OUTBOX_KEY,
+  q: new Map(),
+  pending: pendingPf,
+  settled: settledPf,
+  onDisk: true,
+  late: new Map(),
+  unpack: unpackPfOutbox,
+  put: (v) => api.savePref(v),
+  del: (id) => api.deletePref(id),
+  what: '这项设置',
+  failPut: '保存设置失败',
+  failDel: '恢复默认失败',
+  rejected: '有 1 项设置上传被拒绝',
+}
+
+/** 对三张表各做一遍（泛型函数不能直接吃联合类型，所以这么转一手） */
 function eachSide(f: <T extends { id: string }>(s: Side<T>) => void): void {
   f(mrSide)
   f(mnSide)
+  f(pfSide)
 }
 
 /** state 里那一节，按 Side 的类型读 */
@@ -285,9 +314,9 @@ function rowsOf<T extends { id: string }>(st: State, s: Side<T>): T[] {
   return st[s.key] as unknown as T[]
 }
 
-/** 首页、设置页「N 笔没上传」：流水、读数、备注加起来 */
+/** 首页、设置页「N 笔没上传」：流水、读数、备注、参数加起来（参数也算：退出登录前要拦，不然改的那项就丢了） */
 function outboxSize(): number {
-  return outboxTx.size + mrSide.q.size + mnSide.q.size
+  return outboxTx.size + mrSide.q.size + mnSide.q.size + pfSide.q.size
 }
 
 /**
@@ -355,6 +384,11 @@ function retirePatches(my: number): void {
     if (g >= my) continue
     pendingMn.delete(id)
     settledMn.delete(id)
+  }
+  for (const [id, g] of settledPf) {
+    if (g >= my) continue
+    pendingPf.delete(id)
+    settledPf.delete(id)
   }
 }
 
@@ -449,7 +483,7 @@ async function sendWithin(late: Map<string, Promise<void>>, id: string, p: Promi
 /** 队列最近一次落盘成功了没有。老缓存（里面包着一份队列）只在它为真时才许删 */
 let outboxOnDisk = true
 function noteOutboxUnsaved(): void {
-  const unsaved = !outboxOnDisk || !mrSide.onDisk || !mnSide.onDisk
+  const unsaved = !outboxOnDisk || !mrSide.onDisk || !mnSide.onDisk || !pfSide.onDisk
   if (useStore.getState().outboxUnsaved !== unsaved) useStore.setState({ outboxUnsaved: unsaved })
 }
 
@@ -565,6 +599,46 @@ async function writeSide<T extends { id: string }>(s: Side<T>, id: string, v: T 
     st.showToast((e === SLOW ? slowToast : offlineToast)(saved, v === DELETED ? '删除' : s.what))
     return true
   }
+}
+
+/**
+ * 电价搬到云端（0014，2026-11-09 用户：「电价，一起搬进去吧」）：以前只存在这台手机的 localStorage（meter.PRICE_KEY）。
+ * 每次同步成功之后看一眼本机那个键：
+ * - 云端还没有电价那一行 → 把本机这个传上去（网不好进了队列也算），成了才删本机键；
+ * - 云端已经有了 → 云端为准，本机键删掉；本机键是坏的 → 也删掉。
+ * 本机键删掉之后这里什么都不做。本机键一定要删：留着的话，哪天云端那一行没了（比如整库恢复成一份没有电价的备份），
+ * 这台手机上的老电价会悄悄复活。
+ * 两台手机各存了一个不同的电价：先同步的那台说了算。同一时间只跑一个，两次同步挨着落地时别传两遍。
+ * 读写 localStorage 全包着：绝不抛（它挂在 refresh 后面，抛了就是一条没人接的 rejection）。
+ */
+let adopting: Promise<void> | null = null
+function adoptLocalPrice(): Promise<void> {
+  if (adopting) return adopting
+  const drop = (): void => {
+    try {
+      localStorage.removeItem(PRICE_KEY)
+    } catch {
+      /* ignore */
+    }
+  }
+  adopting = (async () => {
+    let raw: string | null = null
+    try {
+      raw = localStorage.getItem(PRICE_KEY)
+    } catch {
+      return
+    }
+    if (raw === null) return
+    if (pricePref(useStore.getState().prefs) !== undefined) return drop()
+    const price = parsePrice(raw)
+    if (typeof price !== 'number') return drop()
+    if (await writeSide(pfSide, PRICE_PREF.id, prefRow(PRICE_PREF.id, PRICE_PREF.key, String(price), nowIso()))) drop()
+  })()
+    .catch(() => {})
+    .finally(() => {
+      adopting = null
+    })
+  return adopting
 }
 
 /** 账本写不进去：标降级，只提示一次。云端数据不受影响，但离线看到的会是旧的，必须让用户知道 */
@@ -703,6 +777,7 @@ export const useStore = create<State>((set, get) => ({
   facade_adjusts: [],
   meter_readings: [],
   meter_notes: [],
+  prefs: [],
   auth: 'loading',
   loaded: false,
   syncing: false,
@@ -749,6 +824,7 @@ export const useStore = create<State>((set, get) => ({
         facade_adjusts: cache?.facade_adjusts ?? [],
         meter_readings: applyPending(cache?.meter_readings ?? [], mrSide.q),
         meter_notes: applyPending(cache?.meter_notes ?? [], mnSide.q),
+        prefs: applyPending(cache?.prefs ?? [], pfSide.q),
         lastSync: cache?.at ?? null,
         cacheBytes: raw ? cacheBytes([[LEDGER_KEY, raw]]) : 0,
       })
@@ -805,6 +881,7 @@ export const useStore = create<State>((set, get) => ({
         facade_adjusts: applyPending(snap.facade_adjusts, pendingFa),
         meter_readings: applyPending(applyPending(snap.meter_readings, pendingMr), mrSide.q),
         meter_notes: applyPending(applyPending(snap.meter_notes, pendingMn), mnSide.q),
+        prefs: applyPending(applyPending(snap.prefs, pendingPf), pfSide.q),
       }
       cancelRetry()
       retryAt = 0
@@ -813,6 +890,8 @@ export const useStore = create<State>((set, get) => ({
       get().persist()
       // 网通了，把欠的补上。不 await：补传失败不该让这次同步显示成失败
       void get().flushOutbox()
+      // 电价搬到云端之后第一次同步：云端还没有，就把这台手机上原来存的那个传上去
+      void adoptLocalPrice()
     } catch (e) {
       if (my !== fetchSeq) return
       // 首次加载成功之后失败也要留痕，否则断网/登录过期/项目休眠全都无声。
@@ -881,9 +960,10 @@ export const useStore = create<State>((set, get) => ({
           get().showToast(`有 1 笔上传被拒绝，已从本机移除：${api.friendlyError(e)}`)
         }
       }
-      // 电表读数、用电备注：同一套（按 id 覆盖写入，传几次都是同一条）。前面断了，后面这轮都不试
+      // 电表读数、用电备注、参数：同一套（按 id 覆盖写入，传几次都是同一条）。前面断了，后面这轮都不试
       if (!stopped) stopped = !(await flushSide(mrSide))
-      if (!stopped) await flushSide(mnSide)
+      if (!stopped) stopped = !(await flushSide(mnSide))
+      if (!stopped) await flushSide(pfSide)
     } finally {
       flushing = null
       set({ outboxCount: outboxSize() })
@@ -900,9 +980,9 @@ export const useStore = create<State>((set, get) => ({
       persistTimer = null
       // 冷启动没读出缓存、又还没同步成功过：内存里是白纸，写下去会盖掉本机那份好的
       if (!ledgerTrusted) return
-      const { accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes } = get()
+      const { accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes, prefs } = get()
       // 序列化在这里同步做（现读 state），落盘是异步的；多次写入由 cache.ts 排成一队，后写的后落地
-      const json = serializeCache({ accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes })
+      const json = serializeCache({ accounts, categories, transactions, facade_adjusts, meter_readings, meter_notes, prefs })
       const gen = cacheGen
       const my = ++writeSeq
       writeLedger(json, { dropLegacy: outboxOnDisk }).then(
@@ -951,11 +1031,13 @@ export const useStore = create<State>((set, get) => ({
     pendingFa.clear()
     pendingMr.clear()
     pendingMn.clear()
+    pendingPf.clear()
     settledTx.clear()
     settledCat.clear()
     settledFa.clear()
     settledMr.clear()
     settledMn.clear()
+    settledPf.clear()
     // 换个人登录进来必须是外页面
     hiddenAt = null
     set({ mode: 'outer' })
@@ -988,7 +1070,7 @@ export const useStore = create<State>((set, get) => ({
     // 退出登录之后别有个定时器还挂在那儿。
     cancelRetry()
     retryAt = 0
-    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], meter_notes: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0, outboxUnsaved: false })
+    set({ auth: 'out', accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_readings: [], meter_notes: [], prefs: [], loaded: false, lastSync: null, cacheBytes: 0, cacheDegraded: false, syncFailed: false, syncError: null, syncRetrying: false, syncing: false, syncingSince: null, backup: null, backupFailed: false, outboxCount: 0, outboxUnsaved: false })
   },
 
   /**
@@ -1187,6 +1269,8 @@ export const useStore = create<State>((set, get) => ({
   removeMeterReading: (id) => writeSide(mrSide, id, DELETED),
   saveMeterNote: (n) => writeSide(mnSide, n.id, n),
   removeMeterNote: (id) => writeSide(mnSide, id, DELETED),
+  savePref: (p) => writeSide(pfSide, p.id, p),
+  removePref: (id) => writeSide(pfSide, id, DELETED),
 
   async importSnapshot(snap) {
     try {
@@ -1209,9 +1293,10 @@ export const useStore = create<State>((set, get) => ({
       facade_adjusts: get().facade_adjusts,
       meter_readings: get().meter_readings,
       meter_notes: get().meter_notes,
+      prefs: get().prefs,
     }
-    // 电表读数、用电备注也算：只记过电表、没记过账的话，失败时同样要写回去，否则「已经退回操作前的样子」是假话
-    const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0 || before.meter_readings.length > 0 || before.meter_notes.length > 0
+    // 电表读数、用电备注、参数也算：只记过电表、没记过账的话，失败时同样要写回去，否则「已经退回操作前的样子」是假话
+    const hadData = before.accounts.length > 0 || before.categories.length > 0 || before.transactions.length > 0 || before.meter_readings.length > 0 || before.meter_notes.length > 0 || before.prefs.length > 0
     try {
       await api.wipeAll()
       await api.importAll(snap)
@@ -1233,6 +1318,14 @@ export const useStore = create<State>((set, get) => ({
         if (before.meter_notes.length) {
           try {
             await api.upsertMeterNotes(before.meter_notes)
+          } catch {
+            /* 同上 */
+          }
+        }
+        // 参数排在第三句删，同上
+        if (before.prefs.length) {
+          try {
+            await api.upsertPrefs(before.prefs)
           } catch {
             /* 同上 */
           }

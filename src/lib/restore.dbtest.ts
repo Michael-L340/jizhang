@@ -23,6 +23,7 @@ import mig0010 from '../../supabase/migrations/0010_facade_adjusts.sql?raw'
 import mig0011 from '../../supabase/migrations/0011_meter_readings.sql?raw'
 import mig0012 from '../../supabase/migrations/0012_offset_transaction.sql?raw'
 import mig0013 from '../../supabase/migrations/0013_meter_notes.sql?raw'
+import mig0014 from '../../supabase/migrations/0014_prefs.sql?raw'
 import migrateSql from '../../scripts/migrate-facade.sql?raw'
 import type { Account, Snapshot, Transaction } from '../types'
 import { migrateFacade } from './facade'
@@ -54,6 +55,7 @@ async function freshDb(): Promise<PGlite> {
   await db.exec(mig0011)
   await db.exec(mig0012)
   await db.exec(mig0013)
+  await db.exec(mig0014)
   return db
 }
 
@@ -70,6 +72,8 @@ interface Snap {
   meter_readings?: Row[]
   /** 0013。可缺，同上 */
   meter_notes?: Row[]
+  /** 0014。可缺，同上 */
+  prefs?: Row[]
 }
 
 /** 对应 csv.ts 的 buildJson：库里存的是「元」，备份文件里是整数「分」 */
@@ -87,6 +91,8 @@ async function exportBackup(db: PGlite): Promise<Snap> {
     meter_readings: (await q(db, 'select id,read_at,centi_kwh,created_at from meter_readings order by id')).map((m) => ({ ...m, centi_kwh: Number(m.centi_kwh) })),
     // 0013：day 是 date 列，按字符串取（PostgREST 也是给 YYYY-MM-DD）
     meter_notes: await q(db, 'select id,day::text as day,note,created_at from meter_notes order by id'),
+    // 0014：参数，按 id 升序和 api.ts、备份脚本一致
+    prefs: await q(db, 'select id,key,value,updated_at from prefs order by id'),
   }
 }
 
@@ -118,6 +124,13 @@ async function importRefs(db: PGlite, snap: Snap): Promise<void> {
       `insert into meter_notes (id,day,note,created_at) values ($1,$2,$3,$4)
        on conflict (id) do update set day=excluded.day,note=excluded.note`,
       [n.id, n.day, n.note, n.created_at],
+    )
+  }
+  for (const p of snap.prefs ?? []) {
+    await db.query(
+      `insert into prefs (id,key,value,updated_at) values ($1,$2,$3,$4)
+       on conflict (id) do update set key=excluded.key,value=excluded.value,updated_at=excluded.updated_at`,
+      [p.id, p.key, p.value, p.updated_at],
     )
   }
   const ordered = [...snap.categories.filter((c) => !c.parent_id), ...snap.categories.filter((c) => c.parent_id)]
@@ -157,6 +170,7 @@ async function importFailingAtBatch(db: PGlite, snap: Snap, failAt: number, batc
 async function wipeAll(db: PGlite): Promise<void> {
   await db.exec('delete from meter_readings where id is not null')
   await db.exec('delete from meter_notes where id is not null')
+  await db.exec('delete from prefs where id is not null')
   await db.exec('delete from facade_adjusts where id is not null')
   await db.exec('delete from transactions where id is not null')
   await db.exec('delete from categories where parent_id is not null')
@@ -190,6 +204,9 @@ async function seed(db: PGlite): Promise<void> {
   // 0013：用电备注，id 由日期推出（App 的 noteIdFor）；带 emoji 的那条按字符数算
   await db.query('insert into meter_notes (id,day,note) values ($1,$2,$3)', ['6d6e6f74-0000-4000-8000-000020261007', '2026-10-07', '没开空调'])
   await db.query('insert into meter_notes (id,day,note) values ($1,$2,$3)', ['6d6e6f74-0000-4000-8000-000020261008', '2026-10-08', '😀'.repeat(100)])
+  // 0014：参数，id 是 prefs.ts 登记表写死的；电价「没填」是空串
+  await db.query('insert into prefs (id,key,value) values ($1,$2,$3)', ['70726566-0000-4000-8000-000000000001', 'power.avgDays', '7'])
+  await db.query('insert into prefs (id,key,value) values ($1,$2,$3)', ['70726566-0000-4000-8000-000000000006', 'power.price', ''])
 }
 
 const byId = (rows: Row[]) => [...rows].sort((a, b) => String(a.id).localeCompare(String(b.id)))
@@ -232,6 +249,12 @@ describe('整库恢复', () => {
     // 用电备注：一个字不差，日期还是那一天
     expect(back.meter_notes).toEqual(backup.meter_notes)
     expect(back.meter_notes!.map((n) => n.day)).toEqual(['2026-10-07', '2026-10-08'])
+    // 参数：一项不少，空串的电价还是空串（不是 null）
+    expect(back.prefs).toEqual(backup.prefs)
+    expect(back.prefs!.map((p) => [p.key, p.value])).toEqual([
+      ['power.avgDays', '7'],
+      ['power.price', ''],
+    ])
   })
 
   it('金额往返零误差：大额小数、1 分、负数校准都不能变', async () => {
@@ -391,6 +414,7 @@ const asSnap = (s: Snapshot): Snap => ({
   facade_adjusts: s.facade_adjusts as unknown as Row[],
   meter_readings: s.meter_readings as unknown as Row[],
   meter_notes: s.meter_notes as unknown as Row[],
+  prefs: s.prefs as unknown as Row[],
 })
 
 /** 完整走一遍 store.ts 的 restoreSnapshot：**先校验**，不过就一个字节都不动云端；过了才 wipe→import */
@@ -407,6 +431,7 @@ interface RawFile {
   facade_adjusts?: unknown[]
   meter_readings?: unknown[]
   meter_notes?: unknown[]
+  prefs?: unknown[]
 }
 
 const uid = (n: number): string => `${String(n).padStart(8, '0')}-0000-4000-8000-000000000000`
@@ -481,6 +506,12 @@ function legalBackup(): RawFile {
     meter_notes: [
       { id: '6d6e6f74-0000-4000-8000-000020261007', day: '2026-10-07', note: '没开空调', created_at: '2026-10-07T12:00:00.000Z' },
       { id: '6d6e6f74-0000-4000-8000-000020261008', day: '2026-10-08', note: '😀'.repeat(100), created_at: '2026-10-08T12:00:00.000Z' },
+    ],
+    // 0014：一项普通的、一项空串（电价没填）、一项名字正好 64 个字、值正好 200 个 emoji（按字符数算）
+    prefs: [
+      { id: '70726566-0000-4000-8000-000000000001', key: 'power.avgDays', value: '7', updated_at: '2026-11-09T05:00:00.000Z' },
+      { id: '70726566-0000-4000-8000-000000000006', key: 'power.price', value: '', updated_at: '2026-11-09T05:01:00.000Z' },
+      { id: '70726566-0000-4000-8000-000000000099', key: '键'.repeat(64), value: '😀'.repeat(200), updated_at: '2026-11-09T05:02:00+08:00' },
     ],
   }
 }
@@ -598,6 +629,14 @@ const BAD_CASES: BadCase[] = [
   { name: '用电备注 101 个字（check char_length between 1 and 100）', mutate: (f) => ((f.meter_notes![0] as Row).note = '字'.repeat(101)), msg: /用电备注.*1 到 100 个字/, dbRejects: true },
   { name: '用电备注是空的', mutate: (f) => ((f.meter_notes![0] as Row).note = ''), msg: /用电备注.*1 到 100 个字/, dbRejects: true },
   { name: '用电备注的日期是 2025-02-30', mutate: (f) => ((f.meter_notes![0] as Row).day = '2025-02-30'), msg: /用电备注.*这一天不存在/, dbRejects: true },
+  // 0014 参数
+  { name: '参数的值 201 个字（check char_length(value) <= 200）', mutate: (f) => ((f.prefs![0] as Row).value = '字'.repeat(201)), msg: /参数.*不超过 200 个字/, dbRejects: true },
+  { name: '参数的名字是空的（check char_length(key) between 1 and 64）', mutate: (f) => ((f.prefs![0] as Row).key = ''), msg: /参数.*1 到 64 个字/, dbRejects: true },
+  { name: '参数的名字 65 个字', mutate: (f) => ((f.prefs![0] as Row).key = '键'.repeat(65)), msg: /参数.*1 到 64 个字/, dbRejects: true },
+  { name: '参数的值是 null（value not null）', mutate: (f) => ((f.prefs![0] as Row).value = null), msg: /参数.*不超过 200 个字的文字/, dbRejects: true },
+  { name: '参数的修改时间不是时间', mutate: (f) => ((f.prefs![0] as Row).updated_at = '刚才'), msg: /参数.*修改时间/, dbRejects: true },
+  { name: '参数的 id 不是 UUID', mutate: (f) => ((f.prefs![0] as Row).id = 'avg'), msg: /参数.*UUID/, dbRejects: true },
+  { name: '两项参数同一个 id', mutate: (f) => f.prefs!.push({ ...(f.prefs![0] as Row) }), msg: /参数.*重复/, dbRejects: false },
 ]
 
 describe('落地前校验：凡是通过的都能真的导进去', () => {
@@ -605,12 +644,12 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
   // 四十多个用例各起一个就是三分钟。校验拦下的用例根本不写库，共用完全安全；
   // 硬导那一组每次先 wipeAll 清干净再开始。
   let shared: PGlite
-  let seeded: { a: number; c: number; t: number; m: number }
+  let seeded: { a: number; c: number; t: number; m: number; p: number }
 
   beforeAll(async () => {
     shared = await freshDb()
     await seed(shared)
-    seeded = { a: await count(shared, 'accounts'), c: await count(shared, 'categories'), t: await count(shared, 'transactions'), m: await count(shared, 'meter_readings') }
+    seeded = { a: await count(shared, 'accounts'), c: await count(shared, 'categories'), t: await count(shared, 'transactions'), m: await count(shared, 'meter_readings'), p: await count(shared, 'prefs') }
   })
 
   it('一批覆盖边界的合法样本：校验放行，wipe→import 之后一条不少、一分不差', async () => {
@@ -624,6 +663,7 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     expect(await count(db, 'transactions')).toBe(14)
     expect(await count(db, 'facade_adjusts')).toBe(2)
     expect(await count(db, 'meter_readings')).toBe(3)
+    expect(await count(db, 'prefs')).toBe(3)
 
     const back = await exportBackup(db)
     expect(byId(back.accounts)).toEqual(byId(snap.accounts as unknown as Row[]))
@@ -632,6 +672,8 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     expect(isoTx(back.facade_adjusts)).toEqual(isoTx(snap.facade_adjusts as unknown as Row[]))
     const isoMr = (rows: Row[]) => isoTx(rows).map((r) => ({ ...r, read_at: new Date(r.read_at as string).toISOString() }))
     expect(isoMr(back.meter_readings!)).toEqual(isoMr(snap.meter_readings as unknown as Row[]))
+    const isoPf = (rows: Row[]) => byId(rows).map((r) => ({ ...r, updated_at: new Date(r.updated_at as string).toISOString() }))
+    expect(isoPf(back.prefs!)).toEqual(isoPf(snap.prefs as unknown as Row[]))
   })
 
   it('金额边界逐个核对：1 分、上限、负数校准、0 元校准都不能变样', async () => {
@@ -658,6 +700,7 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
     expect(await count(shared, 'categories')).toBe(seeded.c)
     expect(await count(shared, 'transactions')).toBe(seeded.t)
     expect(await count(shared, 'meter_readings')).toBe(seeded.m)
+    expect(await count(shared, 'prefs')).toBe(seeded.p)
   })
 
   it.each(BAD_CASES.filter((c) => c.dbRejects).map((c) => [c.name, c] as const))('非法样本「%s」硬导进去，Postgres 自己也会拒收', async (_name, c) => {
@@ -694,6 +737,7 @@ describe('落地前校验：凡是通过的都能真的导进去', () => {
       facade_adjusts: iso(snap.facade_adjusts),
       meter_readings: iso(snap.meter_readings!).map((m) => ({ ...m, read_at: new Date(m.read_at as string).toISOString() })),
       meter_notes: iso(snap.meter_notes!),
+      prefs: snap.prefs!.map((p) => ({ ...p, updated_at: new Date(p.updated_at as string).toISOString() })),
     }
     expect(() => validateImport(asFile)).not.toThrow()
   })

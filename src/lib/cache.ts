@@ -28,6 +28,8 @@ export const OUTBOX_KEY = 'jz_outbox_v1'
 export const MR_OUTBOX_KEY = 'jz_outbox_mr_v1'
 /** 用电每日备注的待传队列（2026-10-16），同上 */
 export const MN_OUTBOX_KEY = 'jz_outbox_mn_v1'
+/** 设置 → 参数的待传队列（2026-11-09，0014），同上 */
+export const PF_OUTBOX_KEY = 'jz_outbox_pf_v1'
 /**
  * 退出登录时同步写下的「待删」记号。IndexedDB 的删除是异步的，可能删不掉（挂起、页面马上被关）；
  * 记号在，下次冷启动就不认 IndexedDB 那份、再删一次。删成功、或之后有一次写入成功（同一个键被盖掉）才清

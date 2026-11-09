@@ -136,6 +136,19 @@ export interface Snapshot {
   meter_readings: MeterReading[]
   /** 0013：用电每日备注。老备份文件没有这一节，按空的收（整库恢复时现在的备注原样保留） */
   meter_notes: MeterNote[]
+  /** 0014：设置 → 参数。老备份文件没有这一节，按空的收（整库恢复时现在的参数原样保留） */
+  prefs: Pref[]
+}
+
+/**
+ * 0014：设置 → 参数里的一项。id 是 lib/prefs.ts 登记表里写死的（两台手机改同一项是同一行），
+ * key 只给人看（备份文件里认得出是哪项）；value 是文字，每一项自己解析，解析不了按默认算。
+ */
+export interface Pref {
+  id: string
+  key: string
+  value: string
+  updated_at: string // ISO
 }
 
 export const TX_TYPE_LABEL: Record<TxType, string> = {

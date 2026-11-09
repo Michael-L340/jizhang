@@ -4,7 +4,7 @@
 // 断言我们发出去的请求长什么样、按什么顺序发。真正的数据库行为由 SQL 约束保证，
 // 这里守的是「前端有没有按约束要求的顺序去做」。
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import type { FacadeAdjust, MeterReading, Snapshot, Transaction } from '../types'
+import type { FacadeAdjust, MeterReading, Pref, Snapshot, Transaction } from '../types'
 
 interface Call {
   table: string
@@ -199,6 +199,7 @@ describe('wipeAll 的删除顺序', () => {
     expect(shape()).toEqual([
       'meter_readings:delete:not.id.is.null',
       'meter_notes:delete:not.id.is.null',
+      'prefs:delete:not.id.is.null',
       'facade_adjusts:delete:not.id.is.null',
       'transactions:delete:not.id.is.null',
       'categories:delete:not.parent_id.is.null',
@@ -230,13 +231,17 @@ describe('wipeAll 的删除顺序', () => {
     h.results.push({}, { error: { message: '网络不通' } })
     await expect(wipeAll()).rejects.toMatchObject({ step: 'meter_notes' })
 
+    // 0014 的参数排第三句
     h.results.push({}, {}, { error: { message: '网络不通' } })
-    await expect(wipeAll()).rejects.toMatchObject({ step: 'facade_adjusts' })
+    await expect(wipeAll()).rejects.toMatchObject({ step: 'prefs' })
 
     h.results.push({}, {}, {}, { error: { message: '网络不通' } })
-    await expect(wipeAll()).rejects.toMatchObject({ step: 'transactions' })
+    await expect(wipeAll()).rejects.toMatchObject({ step: 'facade_adjusts' })
 
     h.results.push({}, {}, {}, {}, { error: { message: '网络不通' } })
+    await expect(wipeAll()).rejects.toMatchObject({ step: 'transactions' })
+
+    h.results.push({}, {}, {}, {}, {}, { error: { message: '网络不通' } })
     await expect(wipeAll()).rejects.toMatchObject({ step: 'child_categories' })
   })
 })
@@ -245,13 +250,13 @@ describe('importAll', () => {
   it('金额按整数分转成 numeric 字符串，不能原样发出去', async () => {
     // 备份 JSON 里 12.50 元存的是 1250。直接塞进 numeric(12,2) 会变成 1250 元。
     // 这是唯一一处元↔分转换，错了不报错，只是金额全变一百倍。
-    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], transactions: [tx({ amount: 1250 })] })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [], transactions: [tx({ amount: 1250 })] })
     const rows = h.calls.find((c) => c.table === 'transactions')?.rows as { amount: string }[]
     expect(rows[0].amount).toBe('12.50')
   })
 
   it('负数校准也要转对', async () => {
-    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], transactions: [tx({ id: 'a1', type: 'adjust', amount: -5, category_id: null })] })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [], transactions: [tx({ id: 'a1', type: 'adjust', amount: -5, category_id: null })] })
     const rows = h.calls.find((c) => c.table === 'transactions')?.rows as { amount: string }[]
     expect(rows[0].amount).toBe('-0.05')
   })
@@ -265,7 +270,7 @@ describe('importAll', () => {
       ],
       transactions: [],
       facade_adjusts: [],
-      meter_notes: [], meter_readings: [],
+      meter_notes: [], meter_readings: [], prefs: [],
     }
     await importAll(snap)
     const catCalls = h.calls.filter((c) => c.table === 'categories')
@@ -276,7 +281,7 @@ describe('importAll', () => {
   it('外页面校准记录在账户之后、分类之前写；cents 原样发，不过元↔分换算', async () => {
     // 变异：importAll 把 facade 那段挪到 accounts 之前 → 顺序断言红；对 cents 也做 centsToDb → 值断言红
     const f: FacadeAdjust = { id: 'f1', account_id: 'acc1', date: '2026-09-27', cents: -800000, created_at: '2026-09-27T02:00:00.000Z' }
-    await importAll({ accounts: [{ id: 'acc1', name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }], categories: [], transactions: [], facade_adjusts: [f], meter_notes: [], meter_readings: [] })
+    await importAll({ accounts: [{ id: 'acc1', name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }], categories: [], transactions: [], facade_adjusts: [f], meter_notes: [], meter_readings: [], prefs: [] })
     expect(h.calls.map((c) => c.table)).toEqual(['accounts', 'facade_adjusts', 'categories'])
     const rows = h.calls.find((c) => c.table === 'facade_adjusts')?.rows as FacadeAdjust[]
     expect(rows[0]).toEqual(f)
@@ -286,32 +291,44 @@ describe('importAll', () => {
   it('电表读数：centi_kwh 原样发、不过任何换算；超过 500 条同样分批', async () => {
     // 变异：importAll 不写 meter_readings → 找不到这张表的调用，红；对 centi_kwh 做 centsToDb → 值断言红
     const r: MeterReading = { id: 'm1', read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 339340, created_at: '2026-10-03T13:40:05.000Z' }
-    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [], meter_readings: [r] })
+    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [], meter_readings: [r], prefs: [] })
     const rows = h.calls.find((c) => c.table === 'meter_readings')?.rows as MeterReading[]
     expect(rows).toEqual([r])
     expect((h.calls.find((c) => c.table === 'meter_readings')?.opts as { onConflict: string }).onConflict).toBe('id')
 
     h.calls.length = 0
     const many = Array.from({ length: 1001 }, (_, i) => ({ ...r, id: `m${i}` }))
-    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [], meter_readings: many })
+    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [], meter_readings: many, prefs: [] })
     expect(h.calls.filter((c) => c.table === 'meter_readings').map((b) => (b.rows as unknown[]).length)).toEqual([500, 500, 1])
   })
 
   it('用电备注（0013）：原样写进 meter_notes，按 id 覆盖；合并导入带 ignoreDuplicates', async () => {
     // 变异：importAll 不写 meter_notes → 找不到这张表的调用，红
     const n = { id: '6d6e6f74-0000-4000-8000-000020261007', day: '2026-10-07', note: '没开空调', created_at: '2026-10-07T12:00:00.000Z' }
-    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [n], meter_readings: [] })
+    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [n], meter_readings: [], prefs: [] })
     const call = h.calls.find((c) => c.table === 'meter_notes')
     expect(call?.rows).toEqual([n])
     expect(call?.opts).toMatchObject({ onConflict: 'id', ignoreDuplicates: false })
     h.calls.length = 0
-    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [n], meter_readings: [] }, { onlyNew: true })
+    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [n], meter_readings: [], prefs: [] }, { onlyNew: true })
     expect(h.calls.find((c) => c.table === 'meter_notes')?.opts).toMatchObject({ ignoreDuplicates: true })
+  })
+
+  it('参数（0014）：原样写进 prefs（空串的电价也是空串），按 id 覆盖；合并导入带 ignoreDuplicates', async () => {
+    // 变异：importAll 不写 prefs → 找不到这张表的调用，红
+    const p: Pref = { id: '70726566-0000-4000-8000-000000000006', key: 'power.price', value: '', updated_at: '2026-11-09T05:00:00.000Z' }
+    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [p] })
+    const call = h.calls.find((c) => c.table === 'prefs')
+    expect(call?.rows).toEqual([p])
+    expect(call?.opts).toMatchObject({ onConflict: 'id', ignoreDuplicates: false })
+    h.calls.length = 0
+    await importAll({ accounts: [], categories: [], transactions: [], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [p] }, { onlyNew: true })
+    expect(h.calls.find((c) => c.table === 'prefs')?.opts).toMatchObject({ ignoreDuplicates: true })
   })
 
   it('合并导入（onlyNew）只插入云端没有的 id：每张表的 upsert 都带 ignoreDuplicates，整库恢复不带', async () => {
     // 变异：up 不看 opts.onlyNew → 红
-    const snap: Snapshot = { accounts: [{ id: 'acc1', name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }], categories: [{ id: 'c1', kind: 'expense', parent_id: null, name: '吃', icon: null, sort: 1, is_archived: false, note: null }], transactions: [tx()], facade_adjusts: [], meter_notes: [], meter_readings: [{ id: 'm1', read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 1, created_at: '2026-10-03T13:40:00.000Z' }] }
+    const snap: Snapshot = { accounts: [{ id: 'acc1', name: '微信', kind: 'wallet', sort: 1, is_archived: false, repay_day: null, facade_offset: null, defer_after_repay: null }], categories: [{ id: 'c1', kind: 'expense', parent_id: null, name: '吃', icon: null, sort: 1, is_archived: false, note: null }], transactions: [tx()], facade_adjusts: [], meter_notes: [], meter_readings: [{ id: 'm1', read_at: '2026-10-03T13:40:00.000Z', centi_kwh: 1, created_at: '2026-10-03T13:40:00.000Z' }], prefs: [] }
     await importAll(snap, { onlyNew: true })
     expect(h.calls.length).toBeGreaterThanOrEqual(4)
     expect(h.calls.every((c) => c.op === 'upsert' && (c.opts as { ignoreDuplicates: boolean }).ignoreDuplicates === true)).toBe(true)
@@ -321,14 +338,14 @@ describe('importAll', () => {
   })
 
   it('全部是按 id 合并，一条删除都不发', async () => {
-    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], transactions: [tx()] })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [], transactions: [tx()] })
     expect(h.calls.every((c) => c.op === 'upsert')).toBe(true)
     expect(h.calls.every((c) => (c.opts as { onConflict: string }).onConflict === 'id')).toBe(true)
   })
 
   it('超过 500 条要分批', async () => {
     const many = Array.from({ length: 1200 }, (_, i) => tx({ id: `t${i}` }))
-    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], transactions: many })
+    await importAll({ accounts: [], categories: [], facade_adjusts: [], meter_notes: [], meter_readings: [], prefs: [], transactions: many })
     const batches = h.calls.filter((c) => c.table === 'transactions')
     expect(batches.map((b) => (b.rows as unknown[]).length)).toEqual([500, 500, 200])
   })
@@ -363,7 +380,7 @@ describe('fetchAll 的中止信号', () => {
     // 永远不 settle。最容易卡住的恰恰是分页循环里那个 transactions 查询。
     const ac = new AbortController()
     await fetchAll(ac.signal)
-    expect(h.calls.map((c) => c.table)).toEqual(['accounts', 'categories', 'transactions', 'facade_adjusts', 'meter_readings', 'meter_notes'])
+    expect(h.calls.map((c) => c.table)).toEqual(['accounts', 'categories', 'transactions', 'facade_adjusts', 'meter_readings', 'meter_notes', 'prefs'])
     expect(h.calls.every((c) => c.aborted === true)).toBe(true)
   })
 
@@ -377,7 +394,7 @@ describe('fetchAll 的中止信号', () => {
     const tx = h.calls.find((c) => c.table === 'transactions')
     expect(tx?.filters).toContain('order.id')
     expect(tx?.filters).toContain('range.0.999')
-    for (const t of ['facade_adjusts', 'meter_readings']) {
+    for (const t of ['facade_adjusts', 'meter_readings', 'meter_notes', 'prefs']) {
       const c = h.calls.find((x) => x.table === t)
       expect(c?.filters.some((f) => f.startsWith('gt.')), t).toBe(false)
       expect(c?.filters, t).toContain('order.id')

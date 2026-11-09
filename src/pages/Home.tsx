@@ -8,6 +8,7 @@ import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
 import { outerBook, outerList } from '../lib/facade'
 import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
 import { fmtKwh, summarize } from '../lib/meter'
+import { numPref } from '../lib/prefs'
 import { fmtYuan } from '../lib/money'
 import { categoryColor } from '../lib/palette'
 import { useActiveAccounts, useStore } from '../lib/store'
@@ -40,7 +41,9 @@ export function Home() {
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(otxs, ym), [otxs, ym])
   const readings = useStore((s) => s.meter_readings)
-  const power = useMemo(() => (readings.length ? summarize(readings, new Date()) : null), [readings])
+  // 日均看近几天在「设置 → 参数」里改（2026-11-09），和用电页同一个数
+  const avgDays = numPref(useStore((s) => s.prefs), 'power.avgDays')
+  const power = useMemo(() => (readings.length ? summarize(readings, new Date(), avgDays) : null), [readings, avgDays])
   // 余额直接是那本账加出来的：外页面下就是修饰过的数；白条两边一样，所以下面算欠款照样用它
   const bal = useMemo(() => balances(otxs, accounts), [otxs, accounts])
   // 外页面的流水列表不带校准行（真实的和外页面的都不带）；只有下面那个「最近流水」用它
