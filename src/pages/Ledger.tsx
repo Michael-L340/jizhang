@@ -9,7 +9,7 @@ import { TxSwipe } from '../components/TxSwipe'
 import { groupByDay, inMonth, monthSummary, monthTotals, splitAccounts } from '../lib/compute'
 import type { Category } from '../types'
 import { searchSummary, searchTx, type SearchNames } from '../lib/search'
-import { fmtDateRel, fmtDateZh, fmtMonthZh } from '../lib/date'
+import { fmtDateRel, fmtDateZh, fmtMonthZh, today } from '../lib/date'
 import { ALL_MONTHS, daysToShow, monthSections, PAGE_DAYS, ymFromQuery } from '../lib/ledger'
 import { ledgerPosition } from '../lib/ledgerPosition'
 import { useAccountMap, useCategoryMap, useRecentState, useTabReset } from '../lib/hooks'
@@ -61,10 +61,12 @@ export function Ledger() {
     const qYm = params.get('ym')
     const qDate = params.get('date')
     const qCat = params.get('cat')
+    // 助手跳过来带日期范围（from / to）：月份切到「全部」，范围交给筛选
+    const qRange = params.get('from') || params.get('to')
     // 没带参数就什么都不做：清空参数会让本 effect 再跑一次，
     // 那次不能把刚设好的状态冲掉
-    if (!qYm && !qDate && !qCat) return
-    const jumpYm = ymFromQuery(qYm, qDate)
+    if (!qYm && !qDate && !qCat && !qRange) return
+    const jumpYm = ymFromQuery(qYm, qDate) ?? (qRange ? ALL_MONTHS : null)
     if (jumpYm) {
       setYm(jumpYm)
       setTarget(qDate)
@@ -104,6 +106,7 @@ export function Ledger() {
   const setParentId = (parentId: string) => setFilter({ ...filter, parentId, childId: 'all' })
   const setChildId = (childId: string) => setFilter({ ...filter, childId })
   const amountBad = filter.minCents != null && filter.maxCents != null && filter.minCents > filter.maxCents
+  const dateBad = Boolean(filter.fromDate && filter.toDate && filter.fromDate > filter.toDate)
   const [open, setOpen] = useState(false)
 
   // 搜索结果里点某一天的标题：退出搜索、清掉筛选，回到全部流水并定位到那一天（用户 2026-10-09 要的）
@@ -247,7 +250,7 @@ export function Ledger() {
   const hits = useMemo(() => searchSummary(list), [list])
   const filtered = isFiltered(eff)
   // 「已筛选」后面把条件写出来，不然开着「只看藏起来的」看到 0 笔会以为记录丢了
-  const filterText = useMemo(() => describeFilter(eff, names).join(' · '), [eff, names])
+  const filterText = useMemo(() => describeFilter(eff, names, today().slice(0, 4)).join(' · '), [eff, names])
 
   return (
     <div className="pb-6">
@@ -508,6 +511,14 @@ export function Ledger() {
           <AmountBox value={filter.maxCents} placeholder="最高" onChange={(maxCents) => setFilter({ ...filter, maxCents })} />
         </div>
         {amountBad ? <div className="text-xs text-expense mb-4">最低比最高还大</div> : null}
+        <div className="text-xs text-muted mb-2">日期</div>
+        {/* 两头都含，空着 = 不限；和顶上的月份一起生效（助手「最近两个月」跳过来时月份已经切到「全部」） */}
+        <div className={`flex items-center gap-2 ${dateBad ? 'mb-1.5' : 'mb-4'}`}>
+          <DateBox value={filter.fromDate} label="开始日期" onChange={(fromDate) => setFilter({ ...filter, fromDate })} />
+          <span className="text-muted">–</span>
+          <DateBox value={filter.toDate} label="结束日期" onChange={(toDate) => setFilter({ ...filter, toDate })} />
+        </div>
+        {dateBad ? <div className="text-xs text-expense mb-4">开始比结束还晚</div> : null}
         {mode === 'inner' ? (
           <>
             {/* 只在里页面出现。外页面的筛选弹层里没有这一项，那边不能有任何暗示「有东西被藏了」的字 */}
@@ -544,6 +555,16 @@ export function Ledger() {
  * 金额筛选的一个框。框里留着用户敲的原文（敲到「12.」时不能被回填成「12」），
  * 外面的值变了（点「清除」、再点底部「流水」）才跟着改。负数、敲不成金额的当没填。
  */
+/** 筛选里的日期框：空着 = 不限。iOS 的日期框没有占位字，空的时候用一层灰字「不限」垫着 */
+function DateBox({ value, label, onChange }: { value: string | undefined; label: string; onChange: (ymd: string | undefined) => void }) {
+  return (
+    <label className="chip flex-1 min-w-0 relative text-center" style={{ padding: '7px 12px', fontSize: 16 }}>
+      {value ? null : <span className="absolute inset-0 flex items-center justify-center text-muted pointer-events-none">不限</span>}
+      <input type="date" aria-label={label} className={`w-full text-center bg-transparent outline-none ${value ? '' : 'opacity-0'}`} value={value ?? ''} max={today()} onChange={(e) => onChange(e.target.value || undefined)} />
+    </label>
+  )
+}
+
 function AmountBox({ value, placeholder, onChange }: { value: number | undefined; placeholder: string; onChange: (cents: number | undefined) => void }) {
   const [text, setText] = useState(value == null ? '' : yuanPlain(value))
   const toCents = (t: string) => {

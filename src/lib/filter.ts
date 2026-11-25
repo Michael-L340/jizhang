@@ -30,6 +30,12 @@ export interface LedgerFilter {
    */
   minCents?: number
   maxCents?: number
+  /**
+   * 日期范围（北京时间 YYYY-MM-DD，两头都含；2026-11-25 加的，给助手「最近两个月」这类跳转用）。
+   * 没有 = 不限；旧版本存下的条件没有这两个字段。和顶上的月份一起生效：跳过来时月份切到「全部」
+   */
+  fromDate?: string
+  toDate?: string
 }
 
 export const NO_FILTER: LedgerFilter = { type: 'all', accountId: 'all', parentId: 'all', childId: 'all', hiddenOnly: false }
@@ -53,6 +59,17 @@ export function amountLabel(min: number | undefined, max: number | undefined): s
   return ''
 }
 
+const isYmd = (s: string | null | undefined): s is string => typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s)
+
+/** 「9/25–11/25」「9/25 以后」「11/25 以前」；不在 thisYear 那一年的带上年份（2025/9/25）。没设就是空串 */
+export function dateRangeLabel(from: string | undefined, to: string | undefined, thisYear: string): string {
+  const short = (d: string) => `${d.slice(0, 4) === thisYear ? '' : `${d.slice(0, 4)}/`}${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`
+  if (from && to) return `${short(from)}–${short(to)}`
+  if (from) return `${short(from)} 以后`
+  if (to) return `${short(to)} 以前`
+  return ''
+}
+
 const TYPE_LABEL: Record<string, string> = { expense: '支出', income: '收入', transfer: '转账', adjust: '校准' }
 
 /**
@@ -61,7 +78,7 @@ const TYPE_LABEL: Record<string, string> = { expense: '支出', income: '收入'
  * 用户 2026-09-18 在里页面开着「只看藏起来的」忘了，看到「已筛选 · 0 笔」以为记录丢了。
  * 传进来的要是 effectiveFilter 之后的条件——外页面那边「藏起来的」被当没开，这里自然也不会写出来。
  */
-export function describeFilter(f: LedgerFilter, names: SearchNames): string[] {
+export function describeFilter(f: LedgerFilter, names: SearchNames, thisYear = ''): string[] {
   const out: string[] = []
   if (f.type !== 'all') out.push(TYPE_LABEL[f.type] ?? f.type)
   if (f.accountId === 'none') out.push('未指定账户')
@@ -73,6 +90,8 @@ export function describeFilter(f: LedgerFilter, names: SearchNames): string[] {
     if (f.childId && f.childId !== 'all') out.push(f.childId === CHILD_NONE ? `${parent} 未细分` : names.category(f.childId) || parent)
     else out.push(parent)
   }
+  const range = dateRangeLabel(f.fromDate, f.toDate, thisYear)
+  if (range) out.push(range)
   const amount = amountLabel(f.minCents, f.maxCents)
   if (amount) out.push(amount)
   if (f.hiddenOnly) out.push('藏起来的')
@@ -87,15 +106,22 @@ export function describeFilter(f: LedgerFilter, names: SearchNames): string[] {
  * cat=all 就是「不筛分类」——图表跳转用它清掉上一次留下的条件：先在瀑布图上点过「日常餐饮」，
  * 再点「收入」，要是只带月份，流水页还筛着日常餐饮，一笔收入都看不到（2026-09-29 审出来的）。
  * acc 是账户（CREDIT_ALL = 四家白条一起）。
+ * from / to 是日期范围（助手跳过来用，2026-11-25）：带了它们也整个换掉，没带 cat 就是「不筛分类」；格式不对的那头当没带。
  */
 export function filterFromQuery(q: { get(key: string): string | null }): LedgerFilter | null {
   const cat = q.get('cat')
-  if (!cat) return null
-  return { type: q.get('type') || 'all', accountId: q.get('acc') || 'all', parentId: cat, childId: q.get('sub') || 'all', hiddenOnly: false }
+  const from = q.get('from')
+  const to = q.get('to')
+  const hasRange = isYmd(from) || isYmd(to)
+  if (!cat && !hasRange) return null
+  const f: LedgerFilter = { type: q.get('type') || 'all', accountId: q.get('acc') || 'all', parentId: cat || 'all', childId: q.get('sub') || 'all', hiddenOnly: false }
+  if (isYmd(from)) f.fromDate = from
+  if (isYmd(to)) f.toDate = to
+  return f
 }
 
 export function isFiltered(f: LedgerFilter): boolean {
-  return f.type !== 'all' || f.accountId !== 'all' || f.parentId !== 'all' || Boolean(f.hiddenOnly) || f.minCents != null || f.maxCents != null
+  return f.type !== 'all' || f.accountId !== 'all' || f.parentId !== 'all' || Boolean(f.hiddenOnly) || f.minCents != null || f.maxCents != null || Boolean(f.fromDate) || Boolean(f.toDate)
 }
 
 /**
@@ -104,6 +130,8 @@ export function isFiltered(f: LedgerFilter): boolean {
  */
 export function matchesFilter(t: Transaction, f: LedgerFilter, rootOf: (catId: string) => string | undefined, creditIds: ReadonlySet<string> = new Set()): boolean {
   if (f.type !== 'all' && t.type !== f.type) return false
+  if (f.fromDate && t.date < f.fromDate) return false
+  if (f.toDate && t.date > f.toDate) return false
   if (f.hiddenOnly && !t.hidden) return false
   if (f.minCents != null && Math.abs(t.amount) < f.minCents) return false
   if (f.maxCents != null && Math.abs(t.amount) > f.maxCents) return false

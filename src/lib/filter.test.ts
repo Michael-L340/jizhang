@@ -189,7 +189,7 @@ describe('「已筛选」后面把条件写出来', () => {
   it('流水页必须拿 eff 去描述，不能拿原 filter', () => {
     // 变异：describeFilter(eff → describeFilter(filter → 红（外页面会把「藏起来的」写出来）
     const src = readFileSync(new URL('../pages/Ledger.tsx', import.meta.url), 'utf8')
-    expect(src).toMatch(/describeFilter\(eff, names\)/)
+    expect(src).toMatch(/describeFilter\(eff, names[,)]/)
     expect(src).not.toMatch(/describeFilter\(filter/)
   })
 })
@@ -228,5 +228,41 @@ describe('filterFromQuery：从别的页带参数跳到流水页，筛选换成�
     const src = readFileSync(new URL('../pages/Ledger.tsx', import.meta.url), 'utf8')
     expect(src).toMatch(/const jumped = filterFromQuery\(params\)/)
     expect(src).not.toMatch(/accountId: 'all', parentId: qCat/)
+  })
+})
+
+describe('日期范围（2026-11-25，助手「最近两个月」跳流水用）', () => {
+  const q = (s: string) => filterFromQuery(new URLSearchParams(s))
+
+  it('两头都含；只设一头就只限那一头；没设不限', () => {
+    // 变异：matchesFilter 不看 fromDate / toDate → 红；写成 <= / >=（不含两头）→ 红
+    const r = f({ fromDate: '2026-09-25', toDate: '2026-11-25' })
+    expect(matchesFilter(tx({ date: '2026-09-25' }), r, rootOf)).toBe(true)
+    expect(matchesFilter(tx({ date: '2026-11-25' }), r, rootOf)).toBe(true)
+    expect(matchesFilter(tx({ date: '2026-09-24' }), r, rootOf)).toBe(false)
+    expect(matchesFilter(tx({ date: '2026-11-26' }), r, rootOf)).toBe(false)
+    expect(matchesFilter(tx({ date: '2020-01-01' }), f({ toDate: '2026-01-01' }), rootOf)).toBe(true)
+    expect(matchesFilter(tx({ date: '2020-01-01' }), f({ fromDate: '2026-01-01' }), rootOf)).toBe(false)
+  })
+
+  it('算「已筛选」，标签写成 9/25–11/25；不是今年的带年份', () => {
+    expect(isFiltered(f({ fromDate: '2026-09-25' }))).toBe(true)
+    const names = { account: () => '', category: () => '' }
+    expect(describeFilter(f({ fromDate: '2026-09-25', toDate: '2026-11-25' }), names, '2026')).toEqual(['9/25–11/25'])
+    expect(describeFilter(f({ fromDate: '2025-12-01' }), names, '2026')).toEqual(['2025/12/1 以后'])
+    expect(describeFilter(f({ toDate: '2026-03-08' }), names, '2026')).toEqual(['3/8 以前'])
+  })
+
+  it('跳转带 from / to：没带 cat 也整个换掉（旧筛选不留）；格式不对的那头当没带', () => {
+    // 变异：filterFromQuery 只认 cat（改前的写法）→ 第一条红（返回 null，用户以前的筛选还在，范围也没进来）
+    expect(q('from=2026-09-25&to=2026-11-25')).toEqual({ ...NO_FILTER, fromDate: '2026-09-25', toDate: '2026-11-25' })
+    expect(q('from=2026-09-25&to=2026-11-25&type=expense&cat=p1&sub=c1')).toEqual({ type: 'expense', accountId: 'all', parentId: 'p1', childId: 'c1', hiddenOnly: false, fromDate: '2026-09-25', toDate: '2026-11-25' })
+    expect(q('from=9-25&to=2026-11-25')).toEqual({ ...NO_FILTER, toDate: '2026-11-25' })
+    expect(q('from=bad')).toBeNull()
+  })
+
+  it('流水页：带了日期范围就把月份切到「全部」', () => {
+    const src = readFileSync(new URL('../pages/Ledger.tsx', import.meta.url), 'utf8')
+    expect(src).toMatch(/ymFromQuery\(qYm, qDate\) \?\? \(qRange \? ALL_MONTHS : null\)/)
   })
 })
