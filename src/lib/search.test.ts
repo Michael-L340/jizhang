@@ -62,6 +62,11 @@ describe('searchTx', () => {
   it('搜金额', () => {
     expect(searchTx(rows, '25.40', NAMES).map((t) => t.note)).toEqual(['晚餐'])
   })
+  it('上千的金额不带逗号也搜得到，带逗号照样行', () => {
+    const big = [tx({ note: '工资', amount: 481200, type: 'income' }), ...rows]
+    expect(searchTx(big, '4812', NAMES).map((t) => t.note)).toEqual(['工资'])
+    expect(searchTx(big, '4,812', NAMES).map((t) => t.note)).toEqual(['工资'])
+  })
   it('金额可以只输前几位', () => {
     expect(searchTx(rows, '500', NAMES)).toHaveLength(2)
   })

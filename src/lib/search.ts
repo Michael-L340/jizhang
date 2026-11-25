@@ -1,6 +1,6 @@
 // 流水搜索。纯函数，不依赖 store / api / DOM。
 import type { Transaction } from '../types'
-import { fmtYuan } from './money'
+import { centsToDb, fmtYuan } from './money'
 import { netFlow } from './compute'
 
 /** 把一笔流水身上所有「能被搜到」的文字拼成一条。名字由调用方提供，这里不认识 store。 */
@@ -24,6 +24,8 @@ export function haystack(t: Transaction, names: SearchNames): string {
     names.account(t.account_id),
     names.account(t.to_account_id),
     fmtYuan(t.amount),
+    // 显示的金额带千分位（4,812.00），只放它的话搜「4812」搜不到；不带逗号的再放一份
+    centsToDb(t.amount),
   ]
     .filter(Boolean)
     .join(' ')
