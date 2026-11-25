@@ -25,3 +25,6 @@ dist-ssr
 *.sln
 *.sw?
 素材/
+
+# supabase CLI 自己生成的缓存（项目编号、CLI 版本），不进仓库
+supabase/.temp/
