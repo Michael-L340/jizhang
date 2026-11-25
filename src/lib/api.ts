@@ -545,6 +545,58 @@ export async function fetchBackupStatus(onFail?: (e: unknown) => void): Promise<
   }
 }
 
+export interface AssistantMsg {
+  role: 'system' | 'user' | 'assistant'
+  content: string
+}
+
+/** 助手的服务端回了什么：content 是模型的原话（要求是 JSON，调用方自己校验）；finish 是 stop / length / … */
+export interface AssistantReply {
+  content: string
+  finish: string
+}
+
+/** 助手连不上的几种情况，界面上说的话不一样 */
+export class AssistantError extends Error {
+  kind: 'timeout' | 'network' | 'auth' | 'busy' | 'upstream'
+  constructor(kind: AssistantError['kind'], message: string) {
+    super(message)
+    this.kind = kind
+  }
+}
+
+/**
+ * 记账助手（2026-11-25）：调 Supabase Edge Function「assistant」，它校验登录、带上 DeepSeek 的密钥转发。
+ * 密钥只在服务端（Edge Function secret），这里看不到。stage 让服务端选固定的参数（第一步短、分析长一点）。
+ * 整个请求最多等 timeoutMs，过了就当网慢（调用方给「去记一笔」）。
+ */
+export async function callAssistant(stage: 'intent' | 'analysis', messages: AssistantMsg[], signal?: AbortSignal, timeoutMs = 20000): Promise<AssistantReply> {
+  await assertSession()
+  const ctl = new AbortController()
+  const onAbort = () => ctl.abort()
+  signal?.addEventListener('abort', onAbort)
+  const timer = setTimeout(() => ctl.abort(), timeoutMs)
+  try {
+    const { data, error } = await supabase.functions.invoke('assistant', { body: { stage, messages }, signal: ctl.signal })
+    if (error) {
+      const status = (error as { context?: { status?: number } }).context?.status
+      if (status === 401 || status === 403) throw new AssistantError('auth', '登录过期了')
+      if (status === 429 || status === 402) throw new AssistantError('busy', '助手暂时用不了')
+      if (error.name === 'FunctionsFetchError') throw new AssistantError('network', '连不上')
+      throw new AssistantError('upstream', '助手出错了')
+    }
+    const d = data as { content?: unknown; finish?: unknown } | null
+    return { content: typeof d?.content === 'string' ? d.content : '', finish: typeof d?.finish === 'string' ? d.finish : '' }
+  } catch (e) {
+    if (e instanceof AssistantError) throw e
+    if (ctl.signal.aborted) throw new AssistantError(signal?.aborted ? 'network' : 'timeout', signal?.aborted ? '已取消' : '网太慢')
+    throw new AssistantError('network', '连不上')
+  } finally {
+    clearTimeout(timer)
+    signal?.removeEventListener('abort', onAbort)
+  }
+}
+
 /** 本机存没存着会话钥匙（不联网、不等换 token）。断网冷启动先靠它决定要不要先把缓存的账本亮出来 */
 export function hasStoredSession(): boolean {
   try {

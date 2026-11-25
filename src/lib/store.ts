@@ -3,6 +3,8 @@ import { useMemo } from 'react'
 import { create } from 'zustand'
 import type { Account, CatKind, Category, FacadeAdjust, MeterNote, MeterReading, Pref, Snapshot, Transaction } from '../types'
 import * as api from './api'
+// 助手弹层要用的类型和错误（页面、组件不许直接碰 api.ts，从这里拿）
+export { AssistantError, type AssistantMsg, type AssistantReply } from './api'
 import { CACHE_LIMIT_BYTES, cacheBytes, IDB_LIMIT_BYTES, type BackupStatus } from './backup'
 import { dropLegacy, LEDGER_KEY, MN_OUTBOX_KEY, MR_OUTBOX_KEY, PF_OUTBOX_KEY, readLedger, readOutboxDump, removeLedger, removeOutboxDump, storageQuota, writeLedger, writeOutboxDump, type Backend } from './cache'
 import { nowIso } from './date'
@@ -194,6 +196,8 @@ export interface State extends Snapshot {
   noteVisible: () => void
 
   showToast: (msg: string, undo?: () => void | Promise<void>) => void
+  /** 记账助手（2026-11-25）：明确断网直接报 network，不发请求、不等 */
+  askAssistant: (stage: 'intent' | 'analysis', messages: api.AssistantMsg[], signal?: AbortSignal) => Promise<api.AssistantReply>
   hideToast: () => void
 }
 
@@ -1371,6 +1375,10 @@ export const useStore = create<State>((set, get) => ({
     hiddenAt = null
   },
 
+  askAssistant(stage, messages, signal) {
+    if (offlineNow()) return Promise.reject(new api.AssistantError('network', '没网'))
+    return api.callAssistant(stage, messages, signal)
+  },
   showToast(msg, undo) {
     if (toastTimer) clearTimeout(toastTimer)
     const id = ++toastSeq

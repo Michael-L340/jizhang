@@ -40,6 +40,31 @@ export function fmtYuanWhole(cents: number): string {
   return cents < 0 && yuan > 0 ? `-${body}` : body
 }
 
+/** 分 → 元的数字（12.3），给助手的工具结果用：AI 读的是元。只在这里换算 */
+export function yuanNumber(cents: number): number {
+  return Number(centsToDb(cents))
+}
+
+/**
+ * 助手给的金额（元）→ 分。严格：只认正数、最多两位小数、不超过 1 亿元；
+ * 数字带浮点尾巴（22.799999999）只在离两位小数不到 1e-6 时认；字符串只认「12」「12.5」「1,234.56」（可带 ¥ / 元）。
+ * 空串、0、负数、科学计数法、0x10 这类一律 null——宁可让用户在卡片上自己填，也不悄悄记成 0
+ */
+export function parseAiYuan(v: unknown): number | null {
+  let s: string
+  if (typeof v === 'number') {
+    if (!Number.isFinite(v) || v <= 0) return null
+    const r = Math.round(v * 100) / 100
+    if (Math.abs(r - v) > 1e-6) return null
+    s = r.toFixed(2)
+  } else if (typeof v === 'string') {
+    s = v.trim().replace(/^¥/, '').replace(/元$/, '').replace(/,/g, '')
+    if (!/^\d{1,9}(\.\d{1,2})?$/.test(s)) return null
+  } else return null
+  const c = parseYuan(s)
+  return c !== null && c > 0 && c <= 10_000_000_000 ? c : null
+}
+
 /**
  * 分 → 日历格子里那种短写：不带 ¥、不带千分位、整数元，上万写「1.2万」（「2万」不写成「2.0万」）。
  * 不到 1 元的保留小数（0.5 元写「0.5」，别四舍五入成「1」或「0」）。只看大小，正负号由调用方加
