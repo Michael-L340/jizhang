@@ -40,6 +40,17 @@ export function fmtYuanWhole(cents: number): string {
   return cents < 0 && yuan > 0 ? `-${body}` : body
 }
 
+/**
+ * 分 → 日历格子里那种短写：不带 ¥、不带千分位、整数元，上万写「1.2万」（「2万」不写成「2.0万」）。
+ * 不到 1 元的保留小数（0.5 元写「0.5」，别四舍五入成「1」或「0」）。只看大小，正负号由调用方加
+ */
+export function fmtShortYuan(cents: number): string {
+  const abs = Math.abs(cents)
+  if (abs >= 1000000) return `${(abs / 1000000).toFixed(1).replace(/\.0$/, '')}万`
+  if (abs < 100) return yuanPlain(abs)
+  return String(Math.round(abs / 100))
+}
+
 /** 分 → 不带千分位、去掉末尾零的元，如 1250 → 「12.5」、10000 → 「100」。给输入框回填和筛选标签用 */
 export function yuanPlain(cents: number): string {
   const s = centsToDb(cents)

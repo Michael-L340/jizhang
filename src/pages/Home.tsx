@@ -1,12 +1,11 @@
 import { lazy, Suspense, useMemo } from 'react'
-import { Link, useNavigate } from 'react-router-dom'
+import { Link } from 'react-router-dom'
 import { AccountIcon, accountTint } from '../components/AccountIcon'
-import { TxRow } from '../components/TxRow'
-import { TxSwipe } from '../components/TxSwipe'
-import { balances, byCategory, debtOf, positiveAgg, dueNow, monthSummary, sortTxs, splitAccounts } from '../lib/compute'
+import { CalendarCard } from '../components/CalendarCard'
+import { balances, byCategory, debtOf, positiveAgg, dueNow, monthSummary, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
-import { outerBook, outerList } from '../lib/facade'
-import { useAccountMap, useCategoryMap, useTabReset } from '../lib/hooks'
+import { outerBook } from '../lib/facade'
+import { useTabReset } from '../lib/hooks'
 import { fmtKwh, summarize } from '../lib/meter'
 import { numPref } from '../lib/prefs'
 import { fmtYuan } from '../lib/money'
@@ -32,9 +31,6 @@ export function Home() {
   // 这一页所有算钱的地方只准吃它（白条那几处除外，白条不参与里外，两本账里它的数一样）
   const otxs = useMemo(() => outerBook(txs, accounts, fadj, mode), [txs, accounts, fadj, mode])
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
-  const accMap = useAccountMap()
-  const catMap = useCategoryMap()
-  const nav = useNavigate()
   // 首页没有任何会记住的状态，再点一次「首页」就是滚回顶部
   useTabReset()
 
@@ -46,8 +42,6 @@ export function Home() {
   const power = useMemo(() => (readings.length ? summarize(readings, new Date(), avgDays) : null), [readings, avgDays])
   // 余额直接是那本账加出来的：外页面下就是修饰过的数；白条两边一样，所以下面算欠款照样用它
   const bal = useMemo(() => balances(otxs, accounts), [otxs, accounts])
-  // 外页面的流水列表不带校准行（真实的和外页面的都不带）；只有下面那个「最近流水」用它
-  const vtxs = useMemo(() => outerList(txs, accounts, mode), [txs, accounts, mode])
   // 白条：bal 里白条是负数，大数字要加回 debt 才是资产账户之和；欠款单独一行「待还 / 接下来要还」
   const debt = debtOf(bal, credits)
   const assetTotal = useMemo(() => assets.reduce((s, a) => s + (bal[a.id] ?? 0), 0), [assets, bal])
@@ -60,7 +54,6 @@ export function Home() {
   // 以前这里是一串写死的颜色按名次发，同一个分类在两页颜色不一样，对着看会错乱；
   // 而且那串还是 09-05 换暖色主题之前的冷色。
   const pieColors = useMemo(() => agg.map((a, i) => categoryColor(a.name, i)), [agg])
-  const recent = useMemo(() => sortTxs(vtxs).slice(0, 5), [vtxs])
 
   const td = today()
   const dayStat = useMemo(() => {
@@ -266,25 +259,8 @@ export function Home() {
         )}
       </div>
 
-      <div className="card mb-3">
-        <div className="flex justify-between items-baseline px-4 pt-4 pb-1">
-          <span className="text-sm text-muted">最近流水</span>
-          <Link to="/ledger" className="text-xs text-brand-ink">
-            全部 ›
-          </Link>
-        </div>
-        {recent.length === 0 ? (
-          <div className="text-sm text-muted py-6 text-center">还没有记录，点下方 ＋ 记一笔</div>
-        ) : (
-          <div className="divide-y divide-line">
-            {recent.map((t) => (
-              <TxSwipe key={t.id} tx={t}>
-                <TxRow tx={t} accounts={accMap} categories={catMap} showDate={t.date.slice(5).replace('-', '/')} onClick={() => nav(`/add?id=${t.id}`)} />
-              </TxSwipe>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* 日历（2026-11-25 代替「最近流水」，用户看效果图定的）：日 / 月 / 年三档，吃 otxs，里外页面各算各的 */}
+      <CalendarCard txs={otxs} todayYmd={td} />
     </div>
   )
 }
