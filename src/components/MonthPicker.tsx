@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Sheet } from './Sheet'
 import { fmtMonthZh, monthOf, today, yearGridStart, YEAR_GRID } from '../lib/date'
 import { ALL_MONTHS } from '../lib/ledger'
-import { fmtYuan } from '../lib/money'
+import { fmtShortYuan, fmtYuan } from '../lib/money'
 
 interface Props {
   /** YYYY-MM；开了 allowAll 时还可以是 ALL_MONTHS（全部月份） */
@@ -14,15 +14,23 @@ interface Props {
   totals?: Map<string, { expense: number; income: number }>
 }
 
-function shortAmount(cents: number): string {
-  if (cents === 0) return ''
-  const yuan = cents / 100
-  if (yuan >= 10000) return `${(yuan / 10000).toFixed(1)}万`
-  if (yuan >= 1000) return `${Math.round(yuan)}`
-  return fmtYuan(cents).replace(/\.00$/, '')
+/**
+ * 格子的样子和首页日历卡一样（用户 2026-11-25「这种日历也更新一下」）：一律浅底不分深浅，
+ * 收入（+、绿）在上、支出（-、红）在下，和名字一起上下居中；选中的那格描一圈品牌色，本月名字用品牌色。
+ */
+function Amounts({ v }: { v: { income: number; expense: number } }) {
+  return (
+    <>
+      {v.income > 0 ? <span className="num text-[11px] leading-tight text-income">+{fmtShortYuan(v.income)}</span> : null}
+      {v.expense > 0 ? <span className="num text-[11px] leading-tight text-expense">-{fmtShortYuan(v.expense)}</span> : null}
+    </>
+  )
 }
 
-/** 顶部月份切换：左右箭头 + 点标题展开年月选择（格子里带当月支出） */
+const cellCls = (on: boolean, future: boolean) =>
+  `flex flex-col items-center justify-center gap-px h-[62px] rounded-2xl ${future ? 'text-line' : `bg-bg text-ink ${on ? 'ring-2 ring-brand' : ''}`}`
+
+/** 顶部月份切换：左右箭头 + 点标题展开年月选择（格子里带当月收支） */
 export function MonthPicker({ value, onChange, totals, allowAll }: Props) {
   const nowYm = monthOf(today())
   const all = value === ALL_MONTHS
@@ -42,7 +50,17 @@ export function MonthPicker({ value, onChange, totals, allowAll }: Props) {
     onChange(`${Math.floor(t / 12)}-${String((t % 12) + 1).padStart(2, '0')}`)
   }
 
-  const totalOfYear = (y: number) => Array.from({ length: 12 }).reduce<number>((s, _, i) => s + (totals?.get(`${y}-${String(i + 1).padStart(2, '0')}`)?.expense ?? 0), 0)
+  const totalOfYear = (y: number) => {
+    const r = { income: 0, expense: 0 }
+    for (let i = 1; i <= 12; i++) {
+      const t = totals?.get(`${y}-${String(i).padStart(2, '0')}`)
+      if (t) {
+        r.income += t.income
+        r.expense += t.expense
+      }
+    }
+    return r
+  }
   const yearTotal = totalOfYear(year)
   const inYear = level === 'month'
 
@@ -114,7 +132,7 @@ export function MonthPicker({ value, onChange, totals, allowAll }: Props) {
             <Chevron dir="right" />
           </button>
         </div>
-        <div className="text-center text-xs text-muted mb-3 h-4">{inYear ? (yearTotal > 0 ? `全年支出 ${fmtYuan(yearTotal, { symbol: true })}` : '') : '点某一年，回到那一年的月份'}</div>
+        <div className="text-center text-xs text-muted mb-3 h-4">{inYear ? [yearTotal.income > 0 ? `全年收入 ${fmtYuan(yearTotal.income, { symbol: true })}` : '', yearTotal.expense > 0 ? `支出 ${fmtYuan(yearTotal.expense, { symbol: true })}` : ''].filter(Boolean).join(' · ') : '点某一年，回到那一年的月份'}</div>
 
         {!inYear ? (
           <div className="grid grid-cols-3 gap-2">
@@ -128,16 +146,14 @@ export function MonthPicker({ value, onChange, totals, allowAll }: Props) {
                   key={y}
                   type="button"
                   disabled={future}
-                  className={`flex flex-col items-center justify-center gap-0.5 h-[58px] rounded-2xl transition-colors ${
-                    on ? 'bg-brand text-on-brand' : future ? 'text-line' : amt > 0 ? 'bg-brand-soft text-ink' : 'bg-bg text-ink'
-                  }`}
+                  className={cellCls(on, future)}
                   onClick={() => {
                     setYear(y)
                     setLevel('month')
                   }}
                 >
-                  <span className={`num text-[15px] ${on || amt > 0 ? 'font-semibold' : ''}`}>{y}</span>
-                  <span className={`num text-[11px] leading-none ${on ? 'text-on-brand/70' : 'text-muted'}`}>{amt > 0 ? shortAmount(amt) : future ? '' : '·'}</span>
+                  <span className={`num text-[15px] leading-tight ${y === curYear ? 'font-bold text-brand-ink' : 'font-semibold'}`}>{y}</span>
+                  {future ? null : <Amounts v={amt} />}
                 </button>
               )
             })}
@@ -148,22 +164,20 @@ export function MonthPicker({ value, onChange, totals, allowAll }: Props) {
             const ym = `${year}-${String(i + 1).padStart(2, '0')}`
             const future = ym > nowYm
             const on = ym === value
-            const amt = totals?.get(ym)?.expense ?? 0
+            const amt = totals?.get(ym)
             return (
               <button
                 key={ym}
                 type="button"
                 disabled={future}
-                className={`flex flex-col items-center justify-center gap-0.5 h-[58px] rounded-2xl transition-colors ${
-                  on ? 'bg-brand text-on-brand' : future ? 'text-line' : amt > 0 ? 'bg-brand-soft text-ink' : 'bg-bg text-ink'
-                }`}
+                className={cellCls(on, future)}
                 onClick={() => {
                   onChange(ym)
                   setOpen(false)
                 }}
               >
-                <span className={`text-[15px] ${on || amt > 0 ? 'font-semibold' : ''}`}>{i + 1} 月</span>
-                <span className={`num text-[11px] leading-none ${on ? 'text-on-brand/70' : 'text-muted'}`}>{amt > 0 ? shortAmount(amt) : future ? '' : '·'}</span>
+                <span className={`text-[15px] leading-tight ${ym === nowYm ? 'font-bold text-brand-ink' : 'font-semibold'}`}>{i + 1} 月</span>
+                {future || !amt ? null : <Amounts v={amt} />}
               </button>
             )
           })}
