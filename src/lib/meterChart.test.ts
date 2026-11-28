@@ -7,7 +7,7 @@ import { DataZoomInsideComponent, DataZoomSliderComponent, GridComponent, Toolti
 import { SVGRenderer } from 'echarts/renderers'
 import { describe, expect, it, vi } from 'vitest'
 import type { MeterReading } from '../types'
-import { bucketAverage, dailyUsage, hourProfile, parseReading, peakHours, rateSteps, summarize, usageBuckets, weekdayProfile } from './meter'
+import { bucketAverage, dailyUsage, hourProfile, parseReading, peakHours, preview, previewDoubt, rateSteps, summarize, usageBuckets, weekdayProfile } from './meter'
 import { bucketOption, dailyOption, fmtStepSpan, hourOption, rateMarks, rateOption, rateYAxis, weekdayOption } from './meterChart'
 import { CHART } from './palette'
 
@@ -258,7 +258,11 @@ describe('什么时候最费电：放大、拖动之后，跨在可见范围边�
     // 变异：onClose 不看 busy → 红；去掉 dup 那句提醒 → 红
     const src = readFileSync(new URL('../pages/Power.tsx', import.meta.url), 'utf8')
     expect(src).toContain('<Sheet open onClose={busy ? () => {} : onClose} title="记一次电表读数">')
-    expect(src).toContain('刚记过一样的数，是不是存了两次？')
+    // 那几句提醒 2026-11-28 搬进 meter.previewDoubt（助手的电表卡片也用）：页面要用它，它要说 dup 那句
+    expect(src).toContain('previewDoubt(p)')
+    const t = Date.parse('2026-10-25T17:54:00+08:00')
+    const p = preview([{ id: 'a', read_at: new Date(t).toISOString(), centi_kwh: 100, created_at: '' }], 100, new Date(t + 15_000))!
+    expect(previewDoubt(p)).toContain('刚记过一样的数，是不是存了两次？')
   })
 
   it('拖动、两指缩放时页面把纵轴也换掉（onRateZoom 带上 rateYAxis）', () => {

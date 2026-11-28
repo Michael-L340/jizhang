@@ -5,6 +5,7 @@
 // 卡片、查账结果都是在这里登记的「数据」，金额等到渲染时再用当前那本账现算（记了新账，数字跟着变）。
 import { create } from 'zustand'
 import type { Draft } from './drafts'
+import type { MeterDraft } from './meterDraft'
 import type { Query } from './facts'
 import type { ChatMsg } from './prompt'
 import { useStore } from '../store'
@@ -40,12 +41,14 @@ interface SessionState {
   lastActive: number
   bubbles: Bubble[]
   drafts: Draft[]
+  /** 电表读数卡片（2026-11-28），和记账卡片分开放，代号共用一个计数（d1、m2、d3…） */
+  meters: MeterDraft[]
   turns: ChatMsg[]
   nextId: number
   nextDraft: number
 }
 
-const fresh = (mode: Mode, gen: number): SessionState => ({ mode, gen, lastActive: Date.now(), bubbles: [], drafts: [], turns: [], nextId: 1, nextDraft: 1 })
+const fresh = (mode: Mode, gen: number): SessionState => ({ mode, gen, lastActive: Date.now(), bubbles: [], drafts: [], meters: [], turns: [], nextId: 1, nextDraft: 1 })
 
 export const useAssistant = create<SessionState>(() => fresh('outer', 0))
 
@@ -85,6 +88,20 @@ export function putDraft(d: Draft): void {
 
 export function getDraft(key: string): Draft | undefined {
   return useAssistant.getState().drafts.find((d) => d.key === key)
+}
+
+export function newMeterKey(): string {
+  const n = useAssistant.getState().nextDraft
+  useAssistant.setState({ nextDraft: n + 1 })
+  return `m${n}`
+}
+
+export function putMeter(m: MeterDraft): void {
+  useAssistant.setState((s) => (s.meters.some((x) => x.key === m.key) ? { meters: s.meters.map((x) => (x.key === m.key ? m : x)) } : { meters: [...s.meters, m] }))
+}
+
+export function getMeter(key: string): MeterDraft | undefined {
+  return useAssistant.getState().meters.find((m) => m.key === key)
 }
 
 export function pushTurns(...t: ChatMsg[]): void {

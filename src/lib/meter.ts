@@ -5,7 +5,7 @@
 // 按时间平均摊到这段时间里的每一刻：读数不用在零点记，一段跨了午夜就按钟点切开分给两天。
 // 后一次比前一次还小（输错了、换了表）的那一段不算用电：宁可少算一段，也不能算出负的或一下子几千度。
 import type { MeterReading } from '../types'
-import { addDays, fmtIsoTimeZh } from './date'
+import { addDays, fmtIsoTimeZh, fmtIsoZh } from './date'
 
 const HOUR_MS = 3600_000
 const DAY_MS = 24 * HOUR_MS
@@ -245,6 +245,23 @@ export function preview(rs: MeterReading[], centi: number, at: Date): Preview | 
     dup: used === 0 && t !== Date.parse(prev.read_at) && t - Date.parse(prev.read_at) < MIN_STEP_MS ? prev : null,
   }
 }
+
+/**
+ * 记一次读数时八成有问题的四种情况（和后一条对不上、比上次多得离谱、这一分钟已有一条、10 分钟内刚记过一样的数），
+ * 有就给一句话、没有就是空串。照样能存，但按钮改名提醒。用电页的弹层和助手的电表卡片共用这一句。
+ * 「比上次还小」单独由 p.lower 管（那句话要带怎么处理），不在这里。
+ */
+export function previewDoubt(p: Preview): string {
+  if (p.aboveNext) return `比后面那条（${fmtReading(p.aboveNext.centi_kwh)}，${fmtIsoZh(p.aboveNext.read_at)}）还大，八成输错了。`
+  if (p.tooMuch) return '一小时十几度不太可能，是不是漏了小数点？'
+  if (p.sameTime) return '这个时间已经有一条读数了，存了会顶掉它。'
+  if (p.dup) return `${fmtIsoZh(p.dup.read_at)} 刚记过一样的数，是不是存了两次？`
+  return ''
+}
+
+/** 时间 ↔ datetime-local 输入框的值（北京时间「2026-11-28T08:30」）。解析不了是 NaN */
+export const toBjInput = (ms: number): string => new Date(ms + BJ_OFFSET_MS).toISOString().slice(0, 16)
+export const fromBjInput = (v: string): number => Date.parse(`${v}:00+08:00`)
 
 /** 「过了 3 小时 35 分」 */
 export function fmtDuration(hours: number): string {

@@ -22,6 +22,9 @@ import {
   intervals,
   parseReading,
   preview,
+  previewDoubt,
+  fromBjInput,
+  toBjInput,
   rateSteps,
   readingIssues,
   sortReadings,
@@ -51,9 +54,6 @@ const LIST_FIRST = 8
 /** 列表里没连上的读数那一行写什么（lib/meter.ts 的 readingIssues） */
 const ISSUE_TEXT = { first: '第一次记录', same_time: '同一时刻有两条，按后记的算', outlier: '和前后读数对不上，没算', backward: '比上一次还小，没算' } as const
 
-/** 北京时间的 datetime-local 值（2026-10-03T21:40）↔ 时间戳 */
-const toLocalInput = (ms: number) => new Date(ms + 8 * 3600_000).toISOString().slice(0, 16)
-const fromLocalInput = (v: string) => Date.parse(`${v}:00+08:00`)
 
 /**
  * 设置 → 用电记录（2026-10-03）：看一眼电表、输入累计读数，一天几次都行；
@@ -419,18 +419,8 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
   const p = centi === null ? null : preview(readings, centi, new Date(at))
   const future = at > Date.now() + 60_000
   const ok = centi !== null && !future && !busy
-  // 八成有问题的四种情况：和后一条对不上、比上次多得离谱、这一分钟已有一条、10 分钟内刚记过一样的数（存了两次）。照样能存，但按钮改名提醒
-  const doubt = !p
-    ? ''
-    : p.aboveNext
-      ? `比后面那条（${fmtReading(p.aboveNext.centi_kwh)}，${fmtIsoZh(p.aboveNext.read_at)}）还大，八成输错了。`
-      : p.tooMuch
-        ? '一小时十几度不太可能，是不是漏了小数点？'
-        : p.sameTime
-          ? '这个时间已经有一条读数了，存了会顶掉它。'
-          : p.dup
-            ? `${fmtIsoZh(p.dup.read_at)} 刚记过一样的数，是不是存了两次？`
-            : ''
+  // 八成有问题的几种情况（meter.previewDoubt）：照样能存，但按钮改名提醒
+  const doubt = p ? previewDoubt(p) : ''
 
   return (
     // 保存中点外面不关：网慢时关掉再开一个新弹层、再记一遍，就成了两条（2026-10-25）。最多等 WRITE_WAIT_MS 就有结果
@@ -451,11 +441,11 @@ function EntrySheet({ readings, onClose, onSave }: { readings: MeterReading[]; o
           <input
             type="datetime-local"
             className="bg-bg rounded-lg px-2 py-1 text-ink"
-            value={toLocalInput(at)}
-            max={toLocalInput(Date.now())}
+            value={toBjInput(at)}
+            max={toBjInput(Date.now())}
             onChange={(e) => {
               // 桌面浏览器能敲出五六位的年份，解析出 NaN 再去格式化会整页报错
-              const v = e.target.value ? fromLocalInput(e.target.value) : NaN
+              const v = e.target.value ? fromBjInput(e.target.value) : NaN
               if (Number.isFinite(v)) setAt(v)
             }}
           />

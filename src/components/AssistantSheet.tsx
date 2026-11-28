@@ -6,17 +6,19 @@ import { catMapOf, catPathOf, childrenOf, findCat, lastAccountByParent } from '.
 import { catSideOf, draftProblem, draftToTx, makeDraft, type Draft, type DraftCtx } from '../lib/assistant/drafts'
 import { dailySeries, factsOf, ledgerLinkOf, type Query } from '../lib/assistant/facts'
 import { safeReply } from '../lib/assistant/guard'
+import { makeMeterDraft, meterAt, meterProblem, type MeterDraft } from '../lib/assistant/meterDraft'
 import { normNote, oneoffSpends } from '../lib/assistant/oneoff'
 import { analysisPrompt, intentSystem, type ChatMsg } from '../lib/assistant/prompt'
 import { parseAnalysis, parseIntent, type QueryInput } from '../lib/assistant/protocol'
-import { addBubble, ensureFresh, getDraft, newDraftKey, patchBubble, pushTurns, putDraft, resetSession, touch, useAssistant, type Block } from '../lib/assistant/session'
-import { fmtDateRel, fmtDateZh, nowIso, today } from '../lib/date'
+import { addBubble, ensureFresh, getDraft, getMeter, newDraftKey, newMeterKey, patchBubble, pushTurns, putDraft, putMeter, resetSession, touch, useAssistant, type Block } from '../lib/assistant/session'
+import { fmtDateRel, fmtDateZh, fmtIsoZh, nowIso, today } from '../lib/date'
 import { outerBook } from '../lib/facade'
 import { guessIcon } from '../lib/icons'
 import { newId } from '../lib/id'
+import { fmtDuration, fmtKwh, fmtReading, fromBjInput, parseReading, preview, previewDoubt, toBjInput } from '../lib/meter'
 import { fmtYuan, parseYuan, yuanPlain } from '../lib/money'
 import { AssistantError, useActiveAccounts, useStore } from '../lib/store'
-import type { Account, Category, Transaction } from '../types'
+import type { Account, Category, MeterReading, Transaction } from '../types'
 
 const STARTERS = ['中午吃饭25，饮料3块', '这个月钱都花哪了', '最近两个月有哪些一次性开支']
 
@@ -36,6 +38,9 @@ export function AssistantSheet({ open, onClose }: { open: boolean; onClose: () =
   const otxs = useMemo(() => outerBook(txs, accounts, fadj, mode), [txs, accounts, fadj, mode])
   const bubbles = useAssistant((s) => s.bubbles)
   const drafts = useAssistant((s) => s.drafts)
+  const meters = useAssistant((s) => s.meters)
+  // 电表读数不分里外（用电页两边一样），直接用原始那份
+  const readings = useStore((s) => s.meter_readings)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const ctlRef = useRef<AbortController | null>(null)
@@ -89,7 +94,7 @@ export function AssistantSheet({ open, onClose }: { open: boolean; onClose: () =
     setBusy(true)
     const alive = () => useAssistant.getState().gen === gen && !ctl.signal.aborted
     try {
-      const sys: ChatMsg = { role: 'system', content: intentSystem({ cats, accounts: allAccounts, drafts: useAssistant.getState().drafts, todayYmd: td }) }
+      const sys: ChatMsg = { role: 'system', content: intentSystem({ cats, accounts: allAccounts, drafts: useAssistant.getState().drafts, meters: useAssistant.getState().meters, todayYmd: td }) }
       const user: ChatMsg = { role: 'user', content: msg }
       const r = await useStore.getState().askAssistant('intent', [sys, ...useAssistant.getState().turns, user], ctl.signal)
       if (!alive()) return
@@ -112,6 +117,14 @@ export function AssistantSheet({ open, onClose }: { open: boolean; onClose: () =
           const d = makeDraft(a.draft, ctx, newDraftKey(), newId())
           putDraft(d)
           cardKeys.push(d.key)
+        } else if (a.op === 'meter') {
+          if (a.m.id) {
+            const old = getMeter(a.m.id)
+            if (old && old.status === 'pending') putMeter({ ...old, status: 'void' })
+          }
+          const m = makeMeterDraft(a.m, newMeterKey(), newId(), Date.now())
+          putMeter(m)
+          cardKeys.push(m.key)
         } else if (a.op === 'query') blocks.push({ kind: 'query', q: toQuery(a.q), chart: a.q.chart })
         else if (a.op === 'oneoff') blocks.push({ kind: 'oneoff', from: a.from, to: a.to })
         else if (a.op === 'ask') blocks.push({ kind: 'ask', options: a.options })
@@ -157,6 +170,19 @@ export function AssistantSheet({ open, onClose }: { open: boolean; onClose: () =
     const ok = await useStore.getState().addTx(draftToTx(d, allAccounts, nowIso()))
     const cur = getDraft(key)
     if (cur) putDraft({ ...cur, status: ok ? 'saved' : 'pending' })
+    touch()
+  }
+
+  // 电表读数：同样先锁成「保存中」；读数 id 建卡时就定了，再点一次是同一条
+  async function saveMeter(key: string) {
+    const m = getMeter(key)
+    const now = Date.now()
+    if (!m || m.status !== 'pending' || m.centi === null || meterProblem(m, now)) return
+    putMeter({ ...m, status: 'saving' })
+    const ok = await useStore.getState().addMeterReading({ id: m.id, read_at: new Date(meterAt(m, now)).toISOString(), centi_kwh: m.centi, created_at: nowIso() })
+    const cur = getMeter(key)
+    // 没说时间的卡片存好后把时间定下来，卡片上不再写「现在」
+    if (cur) putMeter({ ...cur, status: ok ? 'saved' : 'pending', at: ok ? meterAt(m, now) : cur.at })
     touch()
   }
 
@@ -213,7 +239,7 @@ export function AssistantSheet({ open, onClose }: { open: boolean; onClose: () =
                   </div>
                 ) : null}
                 {b.blocks.map((blk, i) => (
-                  <BlockView key={i} blk={blk} drafts={drafts} ctx={ctx} otxs={otxs} cats={cats} accounts={allAccounts} todayYmd={td} onSave={save} onSay={(s) => void send(s)} go={(to) => { onClose(); nav(to) }} />
+                  <BlockView key={i} blk={blk} drafts={drafts} meters={meters} readings={readings} ctx={ctx} otxs={otxs} cats={cats} accounts={allAccounts} todayYmd={td} onSave={(k) => void (k.startsWith('m') ? saveMeter(k) : save(k))} onSay={(s) => void send(s)} go={(to) => { onClose(); nav(to) }} />
                 ))}
               </div>
             ),
@@ -262,6 +288,8 @@ export function AssistantSheet({ open, onClose }: { open: boolean; onClose: () =
 interface BlockProps {
   blk: Block
   drafts: Draft[]
+  meters: MeterDraft[]
+  readings: MeterReading[]
   ctx: DraftCtx
   otxs: Transaction[]
   cats: Category[]
@@ -293,15 +321,22 @@ function BlockView(p: BlockProps) {
   if (blk.kind === 'refs') return <TxLinks txs={blk.txIds.map((id) => p.otxs.find((t) => t.id === id)).filter((t): t is Transaction => Boolean(t))} cats={p.cats} go={p.go} />
   if (blk.kind === 'oneoff') return <OneoffCard {...p} from={blk.from} to={blk.to} />
   if (blk.kind === 'query') return <QueryCard {...p} q={blk.q} chart={blk.chart} />
-  const list = blk.keys.map((k) => p.drafts.find((d) => d.key === k)).filter((d): d is Draft => Boolean(d))
-  const savable = list.filter((d) => d.status === 'pending' && !draftProblem(d, p.ctx))
+  // 记账卡片（d几）和电表卡片（m几）按 AI 出的顺序排在一起
+  const now = Date.now()
+  const list = blk.keys.flatMap((k): ({ kind: 'tx'; d: Draft } | { kind: 'meter'; m: MeterDraft })[] => {
+    if (k.startsWith('m')) {
+      const m = p.meters.find((x) => x.key === k)
+      return m ? [{ kind: 'meter', m }] : []
+    }
+    const d = p.drafts.find((x) => x.key === k)
+    return d ? [{ kind: 'tx', d }] : []
+  })
+  const savable = list.flatMap((x) => (x.kind === 'tx' ? (x.d.status === 'pending' && !draftProblem(x.d, p.ctx) ? [x.d.key] : []) : x.m.status === 'pending' && !meterProblem(x.m, now) && !meterCheck(x.m, p.readings, now).doubt ? [x.m.key] : []))
   return (
     <div className="flex flex-col gap-2 mt-2">
-      {list.map((d) => (
-        <DraftCard key={d.key} d={d} ctx={p.ctx} onSave={() => p.onSave(d.key)} />
-      ))}
+      {list.map((x) => (x.kind === 'tx' ? <DraftCard key={x.d.key} d={x.d} ctx={p.ctx} onSave={() => p.onSave(x.d.key)} /> : <MeterCard key={x.m.key} m={x.m} readings={p.readings} onSave={() => p.onSave(x.m.key)} />))}
       {savable.length > 1 ? (
-        <button type="button" className="w-full py-2 rounded-xl bg-ink text-white text-sm" onClick={() => savable.forEach((d) => p.onSave(d.key))}>
+        <button type="button" className="w-full py-2 rounded-xl bg-ink text-white text-sm" onClick={() => savable.forEach((k) => p.onSave(k))}>
           这几笔都记上
         </button>
       ) : null}
@@ -537,6 +572,108 @@ function DraftEditor({ d, ctx, set }: { d: Draft; ctx: DraftCtx; set: (p: Partia
       )}
       {row('日期', <input type="date" className="rounded-lg border border-line px-2 py-1" value={d.date} max={ctx.todayYmd} onChange={(e) => e.target.value && set({ date: e.target.value })} />)}
       {row('备注', <input className="w-40 rounded-lg border border-line px-2 py-1" maxLength={40} value={d.note} placeholder="可不填" onChange={(e) => set({ note: e.target.value })} />)}
+    </div>
+  )
+}
+
+/** 这张电表卡片和已有读数比一比：比上次多几度、有没有可疑的地方（有的话「这几笔都记上」不带它，要单独点「照样记上」） */
+function meterCheck(m: MeterDraft, readings: readonly MeterReading[], now: number) {
+  const p = m.centi === null ? null : preview(readings.filter((r) => r.id !== m.id), m.centi, new Date(meterAt(m, now)))
+  const doubt = p && m.status === 'pending' ? (p.lower ? `比上次（${fmtReading(p.prev.centi_kwh)}，${fmtIsoZh(p.prev.read_at)}）还小 ${fmtKwh(-p.used)} 度。是输错了，还是换了电表？` : previewDoubt(p)) : ''
+  return { p, doubt }
+}
+
+/**
+ * 电表读数卡片：读数、时间、比上次多几度。用电页记读数时会提醒的几种情况这里一样标红，按钮改成「照样记上」。
+ * 比较时把这张卡自己的 id 排除掉：存好之后读数列表里已经有它了，不排除就成了「这个时间已经有一条」。
+ */
+function MeterCard({ m, readings, onSave }: { m: MeterDraft; readings: MeterReading[]; onSave: () => void }) {
+  const [openEdit, setOpenEdit] = useState(false)
+  const [text, setText] = useState(m.centi === null ? '' : fmtReading(m.centi))
+  const now = Date.now()
+  const at = meterAt(m, now)
+  const { p, doubt } = meterCheck(m, readings, now)
+  const problem = meterProblem(m, now)
+  const set = (patch: Partial<MeterDraft>) => putMeter({ ...m, ...patch })
+  const when = m.at === null ? `现在 ${fmtIsoZh(new Date(now).toISOString())}` : fmtIsoZh(new Date(m.at).toISOString())
+  const title = m.centi === null ? '—' : `${fmtReading(m.centi)} 度`
+  if (m.status === 'void')
+    return (
+      <div className="rounded-xl border border-dashed border-line px-3 py-2 flex items-center gap-2 opacity-60 text-[13px]">
+        <span className="flex-1 truncate line-through">电表读数 · {when}</span>
+        <span className="num line-through">{title}</span>
+        <span className="text-[11px] text-muted shrink-0">已作废</span>
+      </div>
+    )
+  return (
+    <div className={`rounded-xl border bg-card overflow-hidden ${openEdit ? 'border-2 border-brand' : 'border-line'} ${m.status === 'saved' ? 'opacity-75' : ''}`}>
+      <button type="button" className="w-full flex items-center gap-3 px-3 py-2.5 text-left" onClick={() => m.status === 'pending' && setOpenEdit(!openEdit)}>
+        <span className="w-9 h-9 rounded-full bg-brand-soft flex items-center justify-center text-[20px] leading-none shrink-0">⚡</span>
+        <span className="flex-1 min-w-0">
+          <span className="block truncate text-[15px]">电表读数</span>
+          <span className="block truncate text-xs text-muted num">
+            {when}
+            {p && !p.lower ? ` · 隔了${fmtDuration(p.hours)}` : ''}
+          </span>
+        </span>
+        <span className="text-right shrink-0">
+          <span className="block num text-[16px] font-medium">{title}</span>
+          {p ? (
+            <span className="block num text-[11.5px]" style={{ color: p.lower ? 'var(--color-expense)' : 'var(--color-balance)' }}>
+              {p.lower ? '-' : '+'}
+              {fmtKwh(Math.abs(p.used))} 度
+            </span>
+          ) : null}
+        </span>
+      </button>
+      {doubt ? <div className="px-3 pb-1 text-[12px] leading-snug text-expense">{doubt}</div> : null}
+      {openEdit && m.status === 'pending' ? (
+        <div className="px-3 pb-1">
+          <label className="flex items-center justify-between gap-3 py-2 border-t border-line text-sm">
+            <span className="text-muted shrink-0">读数</span>
+            <input
+              inputMode="decimal"
+              className="num w-32 text-right rounded-lg border border-line px-2 py-1"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              onBlur={() => set({ centi: parseReading(text) })}
+            />
+          </label>
+          <label className="flex items-center justify-between gap-3 py-2 border-t border-line text-sm">
+            <span className="text-muted shrink-0">时间</span>
+            <input
+              type="datetime-local"
+              className="rounded-lg border border-line px-2 py-1"
+              value={toBjInput(at)}
+              max={toBjInput(now)}
+              onChange={(e) => {
+                // 桌面浏览器能敲出五六位的年份，解析出 NaN 就不改
+                const v = e.target.value ? fromBjInput(e.target.value) : NaN
+                if (Number.isFinite(v)) set({ at: v })
+              }}
+            />
+          </label>
+        </div>
+      ) : null}
+      <div className={`flex items-center justify-between gap-2 px-3 pb-2.5 ${openEdit ? 'pt-2.5 border-t border-line' : ''}`}>
+        {m.status === 'saved' ? (
+          <span className="text-xs text-income">已记上 ✓</span>
+        ) : (
+          <>
+            <span className={`text-[11px] ${problem ? 'text-expense' : 'text-muted'}`}>{problem ?? (p?.lower ? '换表的话照样记，这一段不算用电' : openEdit ? '' : '点卡片可以改读数、时间')}</span>
+            <span className="flex gap-2 shrink-0">
+              {openEdit ? (
+                <button type="button" className="rounded-full border border-line text-xs px-3 py-1" onClick={() => setOpenEdit(false)}>
+                  收起
+                </button>
+              ) : null}
+              <button type="button" disabled={Boolean(problem) || m.status !== 'pending'} className={`rounded-full text-xs font-medium px-3.5 py-1 ${problem || m.status !== 'pending' ? 'bg-line text-muted' : 'bg-brand text-on-brand'}`} onClick={onSave}>
+                {m.status === 'saving' ? '记录中…' : doubt ? '照样记上' : '记上'}
+              </button>
+            </span>
+          </>
+        )}
+      </div>
     </div>
   )
 }

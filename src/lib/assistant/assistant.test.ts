@@ -4,6 +4,7 @@ import { findAccount, findCat, lastAccountByParent } from './book'
 import { draftProblem, draftToTx, makeDraft, type DraftCtx } from './drafts'
 import { factsOf, ledgerLinkOf, prevRange, type Query } from './facts'
 import { OUTER_FORBIDDEN, safeReply } from './guard'
+import { makeMeterDraft, meterProblem } from './meterDraft'
 import { normNote, oneoffSpends } from './oneoff'
 import { analysisPrompt, intentSystem } from './prompt'
 import { parseAnalysis, parseIntent, parseJsonObject, type DraftInput } from './protocol'
@@ -122,6 +123,41 @@ describe('AI 回复当不可信输入：只留白名单里的动作', () => {
   })
   it('分析的回复：refs 只认 r1–r99、最多 3 个', () => {
     expect(parseAnalysis(JSON.stringify({ reply: '一段话', refs: ['r1', 't9', 'r2', 'r3', 'r4'], ask: ['a', 'b', 'c'] }))).toEqual({ reply: '一段话', refs: ['r1', 'r2', 'r3'], ask: ['a', 'b'] })
+  })
+})
+
+describe('电表读数（用户 2026-11-28：「如果还可以记录用电」）', () => {
+  const T = '2026-11-28'
+  // 北京时间 2026-11-28 10:32
+  const NOW = Date.parse('2026-11-28T10:32:00+08:00')
+  const meterOf = (o: Record<string, unknown>) => {
+    const a = parseIntent(JSON.stringify({ reply: '好', actions: [{ op: 'meter', ...o }] }), T)!.actions[0]
+    return a && a.op === 'meter' ? a.m : null
+  }
+  it('AI 给的读数：数字、带逗号、带「度」都收；空的丢掉；钟点补零、不合法的当没说；代号只认 m几', () => {
+    expect(meterOf({ reading: 12345.6 })).toEqual({ id: '', reading: '12345.6', date: '', time: '' })
+    expect(meterOf({ reading: '12,345.6度', time: '8:30', id: 'm3' })).toEqual({ id: 'm3', reading: '12345.6', date: '', time: '08:30' })
+    expect(meterOf({ reading: '12345.6', date: '2026-11-27', time: '25:00', id: 'd3' })).toEqual({ id: '', reading: '12345.6', date: '2026-11-27', time: '' })
+    expect(meterOf({ reading: '' })).toBeNull()
+  })
+  it('卡片：没说时间 = 点「记上」那一刻；只说钟点 = 今天那个钟点；日期 + 钟点按北京时间', () => {
+    expect(makeMeterDraft({ id: '', reading: '12345.6', date: '', time: '' }, 'm1', 'x', NOW)).toEqual({ key: 'm1', id: 'x', centi: 1234560, at: null, status: 'pending' })
+    expect(makeMeterDraft({ id: '', reading: '12345.6', date: '', time: '08:00' }, 'm1', 'x', NOW).at).toBe(Date.parse('2026-11-28T08:00:00+08:00'))
+    expect(makeMeterDraft({ id: '', reading: '12345.6', date: '2026-11-27', time: '22:00' }, 'm1', 'x', NOW).at).toBe(Date.parse('2026-11-27T22:00:00+08:00'))
+    // 只说日期：那天的此刻
+    expect(makeMeterDraft({ id: '', reading: '1', date: '2026-11-27', time: '' }, 'm1', 'x', NOW).at).toBe(Date.parse('2026-11-27T10:32:00+08:00'))
+  })
+  it('读数不对、时间在以后 → 不能存（一分钟以内的钟差不拦）', () => {
+    expect(meterProblem(makeMeterDraft({ id: '', reading: '12345.678', date: '', time: '' }, 'm1', 'x', NOW), NOW)).toBe('读数不对，点开改一下')
+    expect(meterProblem({ centi: 100, at: NOW + 3600_000 }, NOW)).toBe('时间不能晚于现在')
+    expect(meterProblem({ centi: 100, at: NOW + 30_000 }, NOW)).toBeNull()
+    expect(meterProblem({ centi: 100, at: null }, NOW)).toBeNull()
+  })
+  it('还没确认的电表卡片带给 AI，改读数时对得上号', () => {
+    const m = makeMeterDraft({ id: '', reading: '12345.6', date: '', time: '' }, 'm2', 'x', NOW)
+    const sys = intentSystem({ cats: CATS, accounts: ACCS, drafts: [], meters: [m, { ...m, key: 'm3', status: 'saved' }], todayYmd: T })
+    expect(sys).toContain('{"id":"m2","kind":"meter","reading":"12345.6","time":"现在"}')
+    expect(sys).not.toContain('"m3"')
   })
 })
 

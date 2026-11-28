@@ -16,6 +16,8 @@ export interface DraftInput {
   note: string
 }
 
+import type { MeterInput } from './meterDraft'
+
 export interface QueryInput {
   kind: 'expense' | 'income'
   parent: string
@@ -33,6 +35,7 @@ export type Action =
   | { op: 'analyze'; q: QueryInput }
   | { op: 'oneoff'; from: string; to: string }
   | { op: 'ask'; options: string[] }
+  | { op: 'meter'; m: MeterInput }
 
 export interface Intent {
   reply: string
@@ -91,6 +94,18 @@ function draftInput(o: Record<string, unknown>): DraftInput | null {
   }
 }
 
+/** 电表读数：读数只留数字和小数点（AI 可能写成 12345.6、"12,345.6"、"12345.6度"），真正的校验在 meter.parseReading */
+function meterInput(o: Record<string, unknown>): MeterInput | null {
+  const raw = typeof o.reading === 'number' && Number.isFinite(o.reading) ? String(o.reading) : str(o.reading, 20)
+  const reading = raw.replace(/[,，\s]/g, '').replace(/度$/, '')
+  if (!reading) return null
+  const date = str(o.date, 10)
+  const tm = /^(\d{1,2}):(\d{2})$/.exec(str(o.time, 5))
+  const time = tm && Number(tm[1]) < 24 && Number(tm[2]) < 60 ? `${tm[1].padStart(2, '0')}:${tm[2]}` : ''
+  const id = str(o.id, 4)
+  return { id: /^m\d{1,3}$/.test(id) ? id : '', reading, date: isYmd(date) ? date : '', time }
+}
+
 function queryInput(o: Record<string, unknown>, todayYmd: string): QueryInput | null {
   let from = str(o.from, 10)
   let to = str(o.to, 10)
@@ -122,6 +137,9 @@ export function parseIntent(text: string, todayYmd: string): Intent | null {
     } else if (a.op === 'oneoff') {
       const q = queryInput({ ...a, kind: 'expense' }, todayYmd)
       if (q) actions.push({ op: 'oneoff', from: q.from, to: q.to })
+    } else if (a.op === 'meter') {
+      const m = meterInput(a)
+      if (m) actions.push({ op: 'meter', m })
     } else if (a.op === 'ask' && Array.isArray(a.options)) {
       const options = a.options.map((x) => str(x, 30)).filter(Boolean).slice(0, 4)
       if (options.length) actions.push({ op: 'ask', options })

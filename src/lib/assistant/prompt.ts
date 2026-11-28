@@ -3,8 +3,10 @@
 import { aliasesOf, catMapOf, catPathOf, childrenOf } from './book'
 import type { Draft } from './drafts'
 import type { Facts } from './facts'
+import type { MeterDraft } from './meterDraft'
 import { normNote } from './oneoff'
-import { fmtDateZh } from '../date'
+import { fmtDateZh, fmtIsoZh } from '../date'
+import { fmtReading } from '../meter'
 import { yuanNumber } from '../money'
 import type { Account, Category, Transaction } from '../../types'
 
@@ -31,16 +33,21 @@ function pendingOf(drafts: readonly Draft[], cats: readonly Category[], accounts
     })
 }
 
-export function intentSystem(ctx: { cats: readonly Category[]; accounts: readonly Account[]; drafts: readonly Draft[]; todayYmd: string }): string {
+/** 还没确认的电表卡片（AI 改读数、改时间时对号用） */
+function pendingMeters(meters: readonly MeterDraft[]) {
+  return meters.filter((m) => m.status === 'pending').map((m) => ({ id: m.key, kind: 'meter', reading: m.centi === null ? null : fmtReading(m.centi), time: m.at === null ? '现在' : fmtIsoZh(new Date(m.at).toISOString()) }))
+}
+
+export function intentSystem(ctx: { cats: readonly Category[]; accounts: readonly Account[]; drafts: readonly Draft[]; meters?: readonly MeterDraft[]; todayYmd: string }): string {
   const accs = ctx.accounts.filter((a) => !a.is_archived)
-  return `你是个人记账App里的「记账助手」。用户用中文口语说话，你只做两件事：把话变成待确认的记账卡片，或者查账、分析。今天是 ${ctx.todayYmd}（${fmtDateZh(ctx.todayYmd).split(' ')[1]}）。
+  return `你是个人记账App里的「记账助手」。用户用中文口语说话，你只做三件事：把话变成待确认的记账卡片、记电表读数，或者查账、分析。今天是 ${ctx.todayYmd}（${fmtDateZh(ctx.todayYmd).split(' ')[1]}）。
 
 支出分类（一级: [二级]）：${JSON.stringify(catTree(ctx.cats, 'expense'))}
 收入分类：${JSON.stringify(catTree(ctx.cats, 'income'))}
 账户：${JSON.stringify(accs.filter((a) => a.kind !== 'credit').map((a) => a.name))}
 白条（先消费后还款）：${JSON.stringify(accs.filter((a) => a.kind === 'credit').map((a) => a.name))}
 账户缩写（用户常这么说）：${aliasesOf(accs).join('、') || '无'}
-还没确认的卡片：${JSON.stringify(pendingOf(ctx.drafts, ctx.cats, ctx.accounts))}
+还没确认的卡片：${JSON.stringify([...pendingOf(ctx.drafts, ctx.cats, ctx.accounts), ...pendingMeters(ctx.meters ?? [])])}
 
 只回复一个 json 对象，不要别的文字：
 {"reply": "一两句中文，口语、简短", "actions": [ ... ]}
@@ -51,6 +58,7 @@ actions 里每一项是下面之一：
 4. 分析 {"op":"analyze","kind":"expense|income","parent":"一级或空串","child":"","keyword":"","from":"YYYY-MM-DD","to":"YYYY-MM-DD"}（App 算好数再请你写一段话）
 5. 一次性开支清单 {"op":"oneoff","from":"YYYY-MM-DD","to":"YYYY-MM-DD"}
 6. 可点的选项 {"op":"ask","options":["10月整月","最近30天"]}（点了等于用户说了这句话）
+7. 电表读数 {"op":"meter","id":"改还没确认的电表卡片时填它的 m几，新的填空串","reading":"12345.6","date":"YYYY-MM-DD或空串","time":"HH:MM或空串"}
 
 规矩：
 - 一句话里有几样东西就出几张卡片（「吃饭12，饮料2块」= 两张）。用户说「一起算」「合成一笔」才合成一张，金额相加，note 写组成的东西（「吃饭、饮料」）。
@@ -67,7 +75,8 @@ actions 里每一项是下面之一：
 - 时间范围按用户说的：「最近两个月」= 往前推两个月到今天，「这个月」= 本月1号到今天，「上个月」= 上个月整月。没说时间又推不出来，先用 ask 问（「最近30天」「这个月」「上个月」）。
 - 查账、分析时 reply 只说你在查什么，不写任何金额、合计、百分比：数字由App算好显示。
 - 问「哪些一次性开支」「不常买的东西」用 oneoff；要「分析」「怎么省钱」「钱花哪了」「为什么花得多」用 analyze。
-- 跟记账、查账无关的话，actions 给空数组，reply 简短回应。`
+- 「电表12345.6」「抄表 12345.6」「电表走到12345.6了」= 电表读数，用 meter，不是记账。reading 原样抄电表上的数。没说时间 date、time 都填空串（App 按现在算）；「早上8点抄的」只填 time；「昨晚10点」date、time 都填。改读数、改时间：再出一个 meter，id 填那张电表卡片的 m几。和记账一起说就各出各的。电费是钱，照常出支出卡片。
+- 跟记账、查账、电表无关的话，actions 给空数组，reply 简短回应。`
 }
 
 /** 分析那一步：把算好的数交给 AI。关键几笔用 r1… 代号，不发真实 id；备注截短 */
