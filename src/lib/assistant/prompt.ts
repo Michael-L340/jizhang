@@ -1,6 +1,6 @@
 // 发给 AI 的话。只放这一次需要的东西：分类表和账户的名字、还没确认的卡片、算好的数。
 // 账本本身永远不整本发；备注只在分析时、关键几笔里带一点（截短）。纯函数。
-import { catMapOf, catPathOf, childrenOf } from './book'
+import { aliasesOf, catMapOf, catPathOf, childrenOf } from './book'
 import type { Draft } from './drafts'
 import type { Facts } from './facts'
 import { normNote } from './oneoff'
@@ -39,6 +39,7 @@ export function intentSystem(ctx: { cats: readonly Category[]; accounts: readonl
 收入分类：${JSON.stringify(catTree(ctx.cats, 'income'))}
 账户：${JSON.stringify(accs.filter((a) => a.kind !== 'credit').map((a) => a.name))}
 白条（先消费后还款）：${JSON.stringify(accs.filter((a) => a.kind === 'credit').map((a) => a.name))}
+账户缩写（用户常这么说）：${aliasesOf(accs).join('、') || '无'}
 还没确认的卡片：${JSON.stringify(pendingOf(ctx.drafts, ctx.cats, ctx.accounts))}
 
 只回复一个 json 对象，不要别的文字：
@@ -55,7 +56,7 @@ actions 里每一项是下面之一：
 - 一句话里有几样东西就出几张卡片（「吃饭12，饮料2块」= 两张）。用户说「一起算」「合成一笔」才合成一张，金额相加，note 写组成的东西（「吃饭、饮料」）。
 - note 只写文字：店名、买了什么、和谁（「手机壳」「入职体检」）。不写算式、不写数字；有优惠、AA 就直接用算好的金额。
 - parent、child 必须从分类表里原样照抄。能确定二级就填；用户只说了一级、或者猜不准二级，child 填空串，App 会让用户挑，不要硬猜。
-- 账户、白条名字原样照抄；用户没说账户就填空串（App 用这一类上次用的账户）。
+- 账户、白条名字原样照抄（用户说缩写就换成对应的名字）；用户没说账户就填空串（App 用这一类上次用的账户）。
 - 转账（账户之间挪钱、还白条、充值、提现）：kind=transfer，account 转出、to_account 转入；还白条没说从哪还就填空串。转账手续费另出一张支出卡片，记在「意外开支·手续费利息」，账户是转出的那个。
 - 用白条买东西 = 普通支出，account 填那个白条；说了分几期就填 installments。
 - 退款、返现：直接出卡片不要问。kind=income、offset=true，parent/child 用它原来那一类【支出】分类。

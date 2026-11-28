@@ -67,6 +67,28 @@ export function childrenOf(cats: readonly Category[], parentId: string): Categor
 }
 
 /**
+ * 用户口头说的账户缩写（2026-11-28 用户给的）→ 账户全称里的关键词，按顺序试。招商银行不要缩写。
+ * 键一律小写，比的时候不分大小写（「VX」「Vx」一样）。
+ */
+export const ACCOUNT_ALIASES: Readonly<Record<string, readonly string[]>> = {
+  vx: ['微信'],
+  v: ['微信'],
+  zfb: ['支付宝'],
+  zh: ['中国银行', '中行'],
+  pdd: ['拼多多'],
+  jd: ['京东'],
+  tb: ['淘宝'],
+}
+
+/** 发给 AI 的缩写对照：只列在这本账里对得上账户的（「vx=微信」），对不上的不列 */
+export function aliasesOf(accounts: readonly Account[]): string[] {
+  return Object.keys(ACCOUNT_ALIASES).flatMap((k) => {
+    const a = findAccount(accounts, k)
+    return a ? [`${k}=${a.name}`] : []
+  })
+}
+
+/**
  * AI 说的账户名 → 账户。先整名对上；再按「/」拆开的别名对（「花呗」→「花呗/淘宝」）；
  * 最后才是包含关系，而且只认唯一的那一个（「银行」两个都包含，不猜）。
  */
@@ -76,6 +98,14 @@ export function findAccount(accounts: readonly Account[], name: unknown): Accoun
   const live = accounts.filter((a) => !a.is_archived)
   const exact = live.find((a) => a.name === n)
   if (exact) return exact
+  const keys = ACCOUNT_ALIASES[n.toLowerCase()]
+  if (keys) {
+    for (const k of keys) {
+      const hit = findAccount(accounts, k)
+      if (hit) return hit
+    }
+    return null
+  }
   const alias = live.filter((a) => a.name.split('/').some((p) => p.trim() === n))
   if (alias.length === 1) return alias[0]
   const loose = live.filter((a) => a.name.includes(n) || n.includes(a.name))

@@ -76,6 +76,25 @@ describe('分类、账户按名字找回来', () => {
     expect(findAccount(ACCS, '银行')).toBeNull()
     expect(findAccount(ACCS, '')).toBeNull()
   })
+  it('缩写（用户 2026-11-28 给的）：vx、v 微信、zfb 支付宝、zh 中国银行、pdd 拼多多、jd 京东、tb 淘宝，不分大小写', () => {
+    const accs = [...ACCS, acc('pdd', '拼多多', 'credit')]
+    expect(findAccount(accs, 'vx')?.id).toBe('wx')
+    expect(findAccount(accs, 'V')?.id).toBe('wx')
+    expect(findAccount(accs, 'ZFB')?.id).toBe('zfb')
+    expect(findAccount(accs, 'zh')?.id).toBe('boc')
+    expect(findAccount(accs, 'pdd')?.id).toBe('pdd')
+    expect(findAccount(accs, 'jd')?.id).toBe('jd')
+    expect(findAccount(accs, 'tb')?.id).toBe('hb')
+    // 中国银行的账户名叫「中行」也认
+    expect(findAccount([acc('boc', '中行', 'bank')], 'zh')?.id).toBe('boc')
+    // 招商银行不要缩写；这本账里没有拼多多就是没有，不乱指
+    expect(findAccount(accs, 'zs')).toBeNull()
+    expect(findAccount(ACCS, 'pdd')).toBeNull()
+    // 发给 AI 的对照只列对得上的
+    const sys = intentSystem({ cats: CATS, accounts: ACCS, drafts: [], todayYmd: '2026-11-28' })
+    expect(sys).toContain('vx=微信、v=微信、zfb=支付宝、zh=中国银行、jd=京东白条、tb=花呗/淘宝')
+    expect(sys).not.toContain('pdd=')
+  })
   it('默认账户 = 这个一级最近一次用的', () => {
     const m = lastAccountByParent([tx('2026-11-01', 'expense', 100, 'lunch', { account_id: 'cmb' }), tx('2026-11-03', 'expense', 100, 'lunch', { account_id: 'zfb' })], CATS)
     expect(m.get('daily')).toBe('zfb')
