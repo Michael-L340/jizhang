@@ -5,6 +5,7 @@
 import { lazy, Suspense, useEffect, useLayoutEffect, useMemo, useState } from 'react'
 import { useLocation, useNavigate } from 'react-router-dom'
 import { accountColor } from '../components/AccountIcon'
+import { AssistantRow } from '../components/AssistantButton'
 import type { ChartOption } from '../components/Chart'
 import { MonthPicker } from '../components/MonthPicker'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
@@ -120,6 +121,8 @@ export function StatsMore() {
       </div>
 
       <MonthPicker value={ym} onChange={setYm} totals={totalsByMonth} />
+      {/* 和统计页一样：助手在月份栏下面一行 */}
+      <AssistantRow className="-mt-1 mb-2" />
 
       {/* 时间段按钮只管一部分图（registry 的 scope）：写明是哪几张，其余跟着上面的月份。
           打开的图没有一张跟它走时整行不显示——换了也没图会变，留着只会让人以为按钮坏了 */}

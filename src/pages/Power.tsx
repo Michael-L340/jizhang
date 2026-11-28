@@ -1,5 +1,6 @@
 import { lazy, Suspense, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { AssistantButton } from '../components/AssistantButton'
 import { HelpTip } from '../components/HelpTip'
 import { usePersistedState } from '../lib/hooks'
 import { Sheet } from '../components/Sheet'
@@ -145,11 +146,13 @@ export function Power() {
   return (
     <div className="px-4 pb-8">
       <div className="flex items-center justify-between pt-4 pb-1">
-        <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1 w-16 text-left" onClick={() => nav(-1)}>
+        {/* 两边一样宽，标题才居中；右边是助手图标 + 「记一次」 */}
+        <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1 w-28 text-left" onClick={() => nav(-1)}>
           ‹ 设置
         </button>
         <span className="text-lg font-bold">用电记录</span>
-        <span className="w-16 flex justify-end">
+        <span className="w-28 flex justify-end gap-1.5">
+          <AssistantButton iconOnly />
           <button type="button" className="chip on" style={{ padding: '6px 12px', fontSize: 13 }} onClick={() => setEntryOpen(true)}>
             记一次
           </button>

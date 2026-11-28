@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
+import { AssistantRow } from '../components/AssistantButton'
 import { Sheet } from '../components/Sheet'
 import { changePassword, friendlyError } from '../lib/api'
 import { backupHealth, backupLine, CACHE_WARN_RATIO } from '../lib/backup'
@@ -264,12 +265,14 @@ export function Settings() {
 
   return (
     <div className="px-4 pb-8">
-      <div className="flex items-center justify-between pt-4 pb-3">
+      <div className="flex items-center justify-between pt-4 pb-1">
         <span className="text-2xl font-bold">设置</span>
         <button type="button" className="text-sm text-brand-ink px-2 py-1" onClick={() => nav(-1)}>
           返回
         </button>
       </div>
+      {/* 「返回」留在第一行，助手第二行（用户 2026-11-28 定的） */}
+      <AssistantRow className="mb-3" />
 
       {/* 状态卡：同步 / 备份 / 缓存 三格并排，一眼看健康度。细节只在出问题时才展开成一句话。 */}
       <div className="card p-3 mb-3">

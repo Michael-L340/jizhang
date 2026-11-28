@@ -1,6 +1,7 @@
 // 分类管理。从设置页进入，默认全部折叠，点一级分类展开它的二级。
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { AssistantRow } from '../components/AssistantButton'
 import { CatIcon } from '../components/CatIcon'
 import { IconPicker } from '../components/IconPicker'
 import { HelpTip } from '../components/HelpTip'
@@ -102,7 +103,7 @@ export function Categories() {
 
   return (
     <div className="px-4 pb-8">
-      <div className="flex items-center justify-between pt-4 pb-3">
+      <div className="flex items-center justify-between pt-4 pb-1">
         <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1" onClick={() => nav(-1)}>
           ‹ 设置
         </button>
@@ -111,6 +112,7 @@ export function Categories() {
           {showArchived ? '隐藏归档' : '显示归档'}
         </button>
       </div>
+      <AssistantRow className="mb-3" />
 
       <div className="flex justify-center mb-3">
         <div className="inline-flex rounded-full bg-card border border-line p-0.5">

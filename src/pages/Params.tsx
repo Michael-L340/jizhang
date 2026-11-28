@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react'
 import { flushSync } from 'react-dom'
 import { useNavigate } from 'react-router-dom'
+import { AssistantButton } from '../components/AssistantButton'
 import { nowIso } from '../lib/date'
 import { numHint, numRowView, numToSave, PRICE_HINT, priceHint, priceText, priceToSave } from '../lib/paramsView'
 import { effectivePrice } from '../lib/powerPrice'
@@ -35,11 +36,13 @@ export function Params() {
   return (
     <div className="px-4 pb-8">
       <div className="flex items-center justify-between pt-4 pb-3">
-        <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1 w-16 text-left" onClick={() => nav(-1)}>
+        <button type="button" className="text-brand-ink text-sm -ml-1 px-1 py-1 w-20 text-left" onClick={() => nav(-1)}>
           ‹ 设置
         </button>
         <span className="text-lg font-bold">参数</span>
-        <span className="w-16" />
+        <span className="w-20 flex justify-end">
+          <AssistantButton />
+        </span>
       </div>
 
       <div className="mb-3">

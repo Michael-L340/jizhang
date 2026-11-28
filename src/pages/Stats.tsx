@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom'
 import { accountColor } from '../components/AccountIcon'
 import { CatIcon } from '../components/CatIcon'
 import { MonthPicker } from '../components/MonthPicker'
+import { AssistantRow } from '../components/AssistantButton'
 import { RANGE_LABEL, RangeSheet, type RangeValue } from '../components/RangeSheet'
 import { Sheet } from '../components/Sheet'
 import { Switch } from '../components/Switch'
@@ -490,6 +491,8 @@ export function Stats() {
         }}
         totals={totalsByMonth}
       />
+      {/* 助手放在月份栏下面一行（用户 2026-11-28 定的） */}
+      <AssistantRow className="-mt-1 mb-2" />
 
       {/* 分类占比 */}
       <div className="card p-4 mb-3">

@@ -3,6 +3,7 @@ import { Link } from 'react-router-dom'
 import { AccountIcon, accountColor } from '../components/AccountIcon'
 import { CatIcon } from '../components/CatIcon'
 import { ChipGroup } from '../components/ChipGroup'
+import { AssistantRow } from '../components/AssistantButton'
 import { HelpTip } from '../components/HelpTip'
 import { Sheet } from '../components/Sheet'
 import { balances, balanceShares, creditBill, currentDueDate, debtOf, dueNow, groupByDue, monthByAccount, previewRepay, splitAccounts } from '../lib/compute'
@@ -436,12 +437,14 @@ export function Accounts() {
 
   return (
     <div className="px-4 pb-6">
-      <div className="flex items-center justify-between pt-4 pb-3">
+      <div className="flex items-center justify-between pt-4 pb-1">
         <span className="text-2xl font-bold">账户</span>
         <Link to="/settings" className="text-sm text-brand-ink px-2 py-1">
           设置
         </Link>
       </div>
+      {/* 「设置」留在第一行，助手第二行（用户 2026-11-28 定的） */}
+      <AssistantRow className="mb-3" />
 
       <div className="card p-4 mb-3">
         {/* 大数字和首页保持同一个口径：资产账户之和，不含白条。

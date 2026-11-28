@@ -1,6 +1,7 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { useLocation, useNavigate, useNavigationType, useSearchParams } from 'react-router-dom'
 import { AccountIcon } from '../components/AccountIcon'
+import { AssistantButton } from '../components/AssistantButton'
 import { ChipGroup } from '../components/ChipGroup'
 import { MonthPicker } from '../components/MonthPicker'
 import { Sheet } from '../components/Sheet'
@@ -365,6 +366,7 @@ export function Ledger() {
             <button type="button" className={`chip ${filtered ? 'on' : ''}`} style={{ padding: '5px 10px' }} onClick={() => setOpen(true)}>
               筛选{filtered ? ' ·' : ''}
             </button>
+            <AssistantButton />
           </span>
         </div>
       </div>

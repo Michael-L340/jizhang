@@ -1,7 +1,7 @@
-import { lazy, Suspense, useCallback, useMemo, useState } from 'react'
+import { lazy, Suspense, useMemo } from 'react'
 import { Link } from 'react-router-dom'
 import { AccountIcon, accountTint } from '../components/AccountIcon'
-import { AssistantSheet } from '../components/AssistantSheet'
+import { AssistantButton } from '../components/AssistantButton'
 import { CalendarCard } from '../components/CalendarCard'
 import { balances, byCategory, debtOf, positiveAgg, dueNow, monthSummary, splitAccounts } from '../lib/compute'
 import { fmtDateZh, fmtMonthZh, monthOf, today } from '../lib/date'
@@ -34,9 +34,6 @@ export function Home() {
   const { assets, credits } = useMemo(() => splitAccounts(accounts), [accounts])
   // 首页没有任何会记住的状态，再点一次「首页」就是滚回顶部
   useTabReset()
-  // 记账助手（2026-11-25）：标题右边一个小按钮，点开从底下弹出
-  const [askOpen, setAskOpen] = useState(false)
-  const closeAsk = useCallback(() => setAskOpen(false), [])
 
   const ym = monthOf(today())
   const sum = useMemo(() => monthSummary(otxs, ym), [otxs, ym])
@@ -104,13 +101,7 @@ export function Home() {
         </Link>
         <span className="flex items-center gap-2">
           <span className="text-xs text-muted">{syncing ? '同步中…' : ''}</span>
-          <button type="button" className="chip flex items-center gap-1" style={{ padding: '5px 10px', fontSize: 13 }} onClick={() => setAskOpen(true)}>
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-brand-ink">
-              <path d="M4 5h16v11H9l-5 4z" />
-              <path d="M8.5 10.5h.01M12 10.5h.01M15.5 10.5h.01" />
-            </svg>
-            助手
-          </button>
+          <AssistantButton />
         </span>
       </div>
 
@@ -274,7 +265,6 @@ export function Home() {
 
       {/* 日历（2026-11-25 代替「最近流水」，用户看效果图定的）：日 / 月 / 年三档，吃 otxs，里外页面各算各的 */}
       <CalendarCard txs={otxs} todayYmd={td} />
-      <AssistantSheet open={askOpen} onClose={closeAsk} />
     </div>
   )
 }
